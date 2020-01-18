@@ -16,6 +16,52 @@ class Device extends Model
     ];
 
     /**
+     * {@inheritDoc}
+     */
+    public static function boot()
+    {
+        parent::boot();
+
+        static::creating(function ($model) {
+            $min = 12;
+            do {
+                $mac = substr($model->identifier, 0, $min);
+                $vendor = Vendor::whereHas('macs', function ($query) use ($mac) {
+                    $query->whereMac($mac);
+                })->first();
+                if ($vendor) {
+                    break;
+                }
+                $min--;
+            } while ($min >= 8);
+            if ($vendor) {
+                $model->vendor()->associate($vendor);
+            }
+        });
+    }
+
+    /**
+     * Set the identifier.
+     *
+     * @param  string  $value
+     * @return void
+     */
+    public function setIdentifierAttribute($value)
+    {
+        $this->attributes['identifier'] = strtoupper($value);
+    }
+
+    /**
+     * Vendor relation.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
+     */
+    public function vendor()
+    {
+        return $this->belongsTo('App\Models\Vendor');
+    }
+
+    /**
      * Device Type relation.
      *
      * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
@@ -26,13 +72,13 @@ class Device extends Model
     }
 
     /**
-     * Entity relation.
+     * Identity relation.
      *
      * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
      */
-    public function entity()
+    public function identity()
     {
-        return $this->belongsTo('App\Models\Entity');
+        return $this->belongsTo('App\Models\Identity');
     }
 
     /**
@@ -43,6 +89,16 @@ class Device extends Model
     public function sessions()
     {
         return $this->hasMany('App\Models\Session');
+    }
+
+    /**
+     * Probes relation.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\hasMany
+     */
+    public function probes()
+    {
+        return $this->hasMany('App\Models\Probe');
     }
 
     /**

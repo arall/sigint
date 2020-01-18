@@ -17,8 +17,10 @@ class CreateDevicesTable extends Migration
             $table->bigIncrements('id');
             $table->unsignedBigInteger('type_id')->nullable();
             $table->foreign('type_id')->references('id')->on('device_types');
-            $table->unsignedBigInteger('entity_id')->nullable();
-            $table->foreign('entity_id')->references('id')->on('entities')->onDelete('SET NULL');
+            $table->unsignedBigInteger('vendor_id')->nullable();
+            $table->foreign('vendor_id')->references('id')->on('vendors');
+            $table->unsignedBigInteger('identity_id')->nullable();
+            $table->foreign('identity_id')->references('id')->on('identities')->onDelete('SET NULL');
             $table->string('identifier')->unique();
             $table->timestamps();
         });

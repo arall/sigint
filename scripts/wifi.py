@@ -8,7 +8,7 @@ import time
 monitor_dev = "wlan1mon"
 
 while True:
-    proc = subprocess.Popen(['tcpdump', '-l', '-I', '-i', monitor_dev, '-e', '-s', '256', 'type', 'mgt', 'subtype', 'probe-req'],stdout=subprocess.PIPE)
+    proc = subprocess.Popen(['tcpdump', '-l', '-I', '-i', monitor_dev, '-e', '-s', '256', 'type', 'mgt', 'subtype', 'probe-req'], stdout=subprocess.PIPE)
     patt = '(-\d+)dBm signal antenna 0.+SA:([0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+) .+(Probe Request) \((.+)\)'
     while True:
         line = proc.stdout.readline()
