@@ -45,7 +45,7 @@ class Wifi extends Command
         $type = DeviceType::whereName('WiFi')->first();
 
         foreach (preg_split("/((\r?\n)|(\r\n?))/", $output) as $line) {
-            if ($line[0] != "{") {
+            if (!isset($line[0]) || $line[0] != "{") {
                 continue;
             }
 
@@ -53,6 +53,10 @@ class Wifi extends Command
             $line = json_decode($line);
 
             print_r($line);
+
+            if (!isset($line->mac)) {
+                continue;
+            }
 
             $device = $type->devices()->firstOrCreate(['identifier' => $line->mac]);
 

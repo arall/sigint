@@ -50,6 +50,10 @@ class Bluetooth extends Command
 
             print_r($line);
 
+            if (!isset($line->mac)) {
+                continue;
+            }
+
             $device = $type->devices()->firstOrCreate(['identifier' => $line->mac]);
 
             $log = $device->logs()->firstOrCreate([
