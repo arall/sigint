@@ -39,8 +39,8 @@ class Bluetooth extends Command
      */
     public function handle()
     {
-        // $output = shell_exec('command');
-        $output = file_get_contents('scripts/outputs/bluetooth.log');
+        $output = shell_exec('python scripts/bluetooth.py');
+        // $output = file_get_contents('scripts/outputs/bluetooth.log');
 
         $type = DeviceType::whereName('Bluetooth')->first();
 
