@@ -1,6 +1,7 @@
 import subprocess
 import re
 
+import time
 devices = []
 
 subprocess.Popen('btmgmt le on', stdout=subprocess.PIPE, shell=True)
@@ -21,8 +22,9 @@ for line in str(output).split('\\n')[:-1]:
         m = re.search('AD flags (.*)', line)
         device['flags'] = m.group(1).rstrip()
     elif 'name ' in line:
-        m = re.search('name (.*)', line)
-        device['name'] = m.group(1).rstrip()
+        m = re.search('^name (.*)', line)
+        if m:
+            device['name'] = m.group(1).rstrip()
 
 for device in devices:
     print device

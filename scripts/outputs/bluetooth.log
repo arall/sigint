@@ -1,0 +1,5 @@
+{'rssi': '-97', 'mac': '7C:D1:C3:1D:F0:B5', 'type': 'LE Public', 'flags': '0x1a', 'time': 1575791496}
+{'name': 'Flare RT', 'mac': 'F7:07:50:B7:B8:9D', 'flags': '0x06', 'time': 1575791496, 'rssi': '-100', 'type': 'LE Random'}
+{'rssi': '-90', 'mac': '94:65:2D:7B:4F:87', 'type': 'BR/EDR', 'time': 1575791496}
+{'rssi': '-89', 'mac': '68:3E:34:84:3D:F5', 'type': 'BR/EDR', 'time': 1575791496}
+{'rssi': '-89', 'mac': '68:3E:34:84:3D:F5', 'type': 'BR/EDR', 'name': 'MEIZU PRO 6', 'time': 1575791496}
