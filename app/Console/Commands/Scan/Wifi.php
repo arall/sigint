@@ -39,7 +39,7 @@ class Wifi extends Command
      */
     public function handle()
     {
-        $output = shell_exec('timeout 60s python scripts/wifi.py');
+        $output = shell_exec('timeout 120s python scripts/wifi.py');
         // $output = file_get_contents('scripts/outputs/wifi.log');
 
         $type = DeviceType::whereName('WiFi')->first();
