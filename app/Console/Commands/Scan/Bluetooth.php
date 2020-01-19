@@ -56,7 +56,7 @@ class Bluetooth extends Command
 
             $device = $type->devices()->firstOrCreate(['identifier' => $line->mac]);
 
-            if ($line->name) {
+            if (isset($line->name)) {
                 $device->name = $line->name;
                 $device->save();
             }
