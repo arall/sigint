@@ -22,6 +22,7 @@ class CreateDevicesTable extends Migration
             $table->unsignedBigInteger('identity_id')->nullable();
             $table->foreign('identity_id')->references('id')->on('identities')->onDelete('SET NULL');
             $table->string('identifier')->unique();
+            $table->string('name')->nullable();
             $table->timestamps();
         });
     }

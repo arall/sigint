@@ -31,7 +31,7 @@ class Device extends Resource
      * @var array
      */
     public static $search = [
-        'id', 'identifier',
+        'id', 'name', 'identifier',
     ];
 
     /**
@@ -47,6 +47,7 @@ class Device extends Resource
             BelongsTo::make('Vendor'),
             BelongsTo::make('Identity'),
             Text::make('Identifier')->sortable(),
+            Text::make('Name')->sortable(),
             HasMany::make('Probes'),
             HasMany::make('Logs'),
             DateTime::make('Created At')->sortable()->exceptOnForms(),

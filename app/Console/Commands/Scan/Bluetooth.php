@@ -56,6 +56,11 @@ class Bluetooth extends Command
 
             $device = $type->devices()->firstOrCreate(['identifier' => $line->mac]);
 
+            if ($line->name) {
+                $device->name = $line->name;
+                $device->save();
+            }
+
             $log = $device->logs()->firstOrCreate([
                 'timestamp' => new Carbon($line->time),
             ]);
