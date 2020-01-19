@@ -4,7 +4,9 @@ import re
 import time
 devices = []
 
+subprocess.Popen('hciconfig hci0 up', stdout=subprocess.PIPE, shell=True)
 subprocess.Popen('btmgmt le on', stdout=subprocess.PIPE, shell=True)
+
 proc = subprocess.Popen('sudo btmgmt find', stdout=subprocess.PIPE, shell=True)
 output = proc.communicate()
 for line in str(output).split('\\n')[:-1]:
