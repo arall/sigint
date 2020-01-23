@@ -44,6 +44,7 @@ class Device extends Resource
     {
         return [
             ID::make()->sortable(),
+            BelongsTo::make('DeviceType', 'Type'),
             BelongsTo::make('Vendor'),
             BelongsTo::make('Identity'),
             Text::make('Identifier')->sortable(),
@@ -52,6 +53,19 @@ class Device extends Resource
             HasMany::make('Logs'),
             DateTime::make('Created At')->sortable()->exceptOnForms(),
             DateTime::make('Updated At')->sortable()->exceptOnForms(),
+        ];
+    }
+
+    /**
+     * Get the lenses available for the resource.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return array
+     */
+    public function lenses(Request $request)
+    {
+        return [
+            new Lenses\Devices\Top,
         ];
     }
 }
