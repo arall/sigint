@@ -1,0 +1,63 @@
+{
+    "name": "laravel/nova",
+    "description": "A wonderful administration interface for Laravel.",
+    "keywords": [
+        "laravel",
+        "admin"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Taylor Otwell",
+            "email": "taylor@laravel.com"
+        }
+    ],
+    "require": {
+        "php": "^7.2.5",
+        "brick/money": "^0.4.2",
+        "cakephp/chronos": "^1.0|^2.0",
+        "doctrine/dbal": "^2.9",
+        "illuminate/support": "^7.0",
+        "laravel/ui": "^2.0",
+        "moontoast/math": "^1.1",
+        "spatie/once": "^1.1 | ^2.0",
+        "symfony/console": "^5.0",
+        "symfony/finder": "^5.0",
+        "symfony/intl": "^5.0",
+        "symfony/process": "^5.0"
+    },
+    "require-dev": {
+        "mockery/mockery": "^1.0",
+        "orchestra/testbench": "^5.0",
+        "phpunit/phpunit": "^8.4",
+        "predis/predis": "^1.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Laravel\\Nova\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Laravel\\Nova\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-master": "3.x-dev"
+        },
+        "laravel": {
+            "providers": [
+                "Laravel\\Nova\\NovaCoreServiceProvider"
+            ],
+            "aliases": {
+                "Nova": "Laravel\\Nova\\Nova"
+            }
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

@@ -23,6 +23,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Nova Domain Name
+    |--------------------------------------------------------------------------
+    |
+    | This value is the "domain name" associated with your application. This
+    | can be used to prevent Nova's internal routes from being registered
+    | on subdomains which do not need access to your admin application.
+    |
+    */
+
+    'domain' => env('NOVA_DOMAIN_NAME', null),
+
+    /*
+    |--------------------------------------------------------------------------
     | Nova App URL
     |--------------------------------------------------------------------------
     |
@@ -97,9 +110,9 @@ return [
     | Nova Pagination Type
     |--------------------------------------------------------------------------
     |
-    | This option defines the visual style used in Nova's resource pagination.
-    | You may choose between 3 types: "simple", "load-more" and "links".
-    | Feel free to set this option to the visual style you like.
+    | This option defines the visual style used in Nova's resource pagination
+    | views. You may select between "simple", "load-more", and "links" for
+    | your applications. Feel free to adjust this option to your choice.
     |
     */
 
@@ -111,13 +124,26 @@ return [
     |--------------------------------------------------------------------------
     |
     | This configuration option allows you to specify a custom resource class
-    | to use instead of the one that ships with Nova. You may use this to
-    | define any extra form fields or other custom behavior you need.
+    | to use instead of the type that ships with Nova. You may use this to
+    | define any extra form fields or other custom behavior as required.
     |
     */
 
     'actions' => [
         'resource' => ActionResource::class,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Nova Currency
+    |--------------------------------------------------------------------------
+    |
+    | This configuration option allows you to define the default currency
+    | used by the Currency field within Nova. You may change this to a
+    | valid ISO 4217 currency code to suit your application's needs.
+    |
+    */
+
+    'currency' => 'USD',
 
 ];

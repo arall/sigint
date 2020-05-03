@@ -24,10 +24,7 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
-        $schedule->command('scan:bluetooth')
-            ->everyFiveMinutes();
-        $schedule->command('scan:wifi')
-            ->everyFiveMinutes();
+        // $schedule->command('inspire')->hourly();
     }
 
     /**

@@ -1,0 +1,14 @@
+/vendor
+/laravel
+/node_modules
+package-lock.json
+composer.phar
+composer.lock
+.DS_Store
+Thumbs.db
+phpunit.xml
+/coverage
+yarn-error.log
+/webpack.mix.js
+.phpunit.result.cache
+.idea

@@ -1,0 +1,3 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`UpdateAttached it loads all the available resources if its not searchable 1`] = `<div class="card overflow-hidden"></div>`;
