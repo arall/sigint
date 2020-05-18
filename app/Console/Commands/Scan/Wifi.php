@@ -43,6 +43,7 @@ class Wifi extends Command
         $interface = $this->argument('interface');
 
         $process = new Process(['timeout', '120s', 'python', 'scripts/wifi.py', $interface]);
+        $process->setTimeout(0);
         $process->run();
         $output = $process->getOutput();
 
