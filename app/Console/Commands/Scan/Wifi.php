@@ -5,6 +5,7 @@ namespace App\Console\Commands\Scan;
 use Illuminate\Console\Command;
 use App\Models\DeviceType;
 use Carbon\Carbon;
+use Symfony\Component\Process\Process;
 
 class Wifi extends Command
 {
@@ -13,7 +14,7 @@ class Wifi extends Command
      *
      * @var string
      */
-    protected $signature = 'scan:wifi';
+    protected $signature = 'scan:wifi {interface?}';
 
     /**
      * The console command description.
@@ -39,7 +40,12 @@ class Wifi extends Command
      */
     public function handle()
     {
-        $output = shell_exec('timeout 120s python scripts/wifi.py');
+        $interface = $this->argument('interface');
+
+        $process = new Process(['timeout', '120s', 'python', 'scripts/wifi.py', $interface]);
+        $process->run();
+        $output = $process->getOutput();
+
         // $output = file_get_contents('scripts/outputs/wifi.log');
 
         $type = DeviceType::whereName('WiFi')->first();

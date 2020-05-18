@@ -11,7 +11,7 @@ class Daemon extends Command
      *
      * @var string
      */
-    protected $signature = 'daemon';
+    protected $signature = 'daemon {wifi_interface?}';
 
     /**
      * The console command description.
@@ -37,8 +37,10 @@ class Daemon extends Command
      */
     public function handle()
     {
+        $interface = $this->argument('wifi_interface');
+
         do {
-            \Artisan::call('scan:wifi');
+            \Artisan::call('scan:wifi ' . $interface);
             \Artisan::call('scan:bluetooth');
             sleep(60 * 15);
         } while (true);

@@ -5,6 +5,7 @@ namespace App\Console\Commands\Scan;
 use Illuminate\Console\Command;
 use App\Models\DeviceType;
 use Carbon\Carbon;
+use Symfony\Component\Process\Process;
 
 class Bluetooth extends Command
 {
@@ -39,7 +40,10 @@ class Bluetooth extends Command
      */
     public function handle()
     {
-        $output = shell_exec('python scripts/bluetooth.py');
+        $process = new Process(['python', 'scripts/bluetooth.py']);
+        $process->run();
+        $output = $process->getOutput();
+
         // $output = file_get_contents('scripts/outputs/bluetooth.log');
 
         $type = DeviceType::whereName('Bluetooth')->first();
