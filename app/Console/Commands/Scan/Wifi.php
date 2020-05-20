@@ -42,12 +42,13 @@ class Wifi extends Command
     {
         $interface = $this->argument('interface');
 
-        $process = new Process(['timeout', '120s', 'python', 'scripts/wifi.py', $interface]);
+        /*$process = new Process(['timeout', '120s', 'python', 'scripts/wifi.py', $interface]);
         $process->setTimeout(0);
         $process->run();
-        $output = $process->getOutput();
+        $output = $process->getOutput();*/
+        $output = shell_exec('timeout 120s scripts/wifi.py ' . $interface);
 
-        // $output = file_get_contents('scripts/outputs/wifi.log');
+        //$output = file_get_contents('scripts/outputs/wifi.log');
 
         $type = DeviceType::whereName('WiFi')->first();
 
