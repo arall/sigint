@@ -40,10 +40,11 @@ class Bluetooth extends Command
      */
     public function handle()
     {
-        $process = new Process(['python', 'scripts/bluetooth.py']);
+        /*$process = new Process(['python', 'scripts/bluetooth.py']);
         $process->setTimeout(0);
         $process->run();
-        $output = $process->getOutput();
+        $output = $process->getOutput();*/
+        $output = shell_exec('python scripts/bluetooth.py');
 
         // $output = file_get_contents('scripts/outputs/bluetooth.log');
 
