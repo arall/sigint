@@ -1,7 +1,14 @@
 import subprocess
 import re
-
 import time
+from dotenv import load_dotenv
+import os
+import requests
+
+load_dotenv()
+
+headers = {"Authorization": "Bearer " + os.getenv('API_KEY')}
+
 devices = []
 
 subprocess.Popen('hciconfig hci0 up', stdout=subprocess.PIPE, shell=True)
@@ -16,9 +23,10 @@ for line in str(output).split('\\n')[:-1]:
             devices.append(device);
         device = {}
         m = re.search('dev_found: (([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})) type (.*?) rssi (-\d+) flags', line)
-        device['mac'] = m.group(1)
+        device['type_id'] = 1
+        device['identifier'] = m.group(1)
         device['type'] = m.group(4)
-        device['rssi'] = m.group(5)
+        device['signal'] = m.group(5)
         device['time'] = int(time.time())
     elif 'AD flags ' in line:
         m = re.search('AD flags (.*)', line)
@@ -29,4 +37,4 @@ for line in str(output).split('\\n')[:-1]:
             device['name'] = m.group(1).rstrip()
 
 for device in devices:
-    print device
+    requests.post(os.getenv('API_URL') + 'logs', data=device, headers=headers)
