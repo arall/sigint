@@ -46,7 +46,7 @@ class Wifi extends Command
         $process->setTimeout(0);
         $process->run();
         $output = $process->getOutput();*/
-        $output = shell_exec('timeout 120s scripts/wifi_hop.py ' . $interface);
+        $output = shell_exec('timeout 120s python scripts/wifi_hop.py ' . $interface);
 
         //$output = file_get_contents('scripts/outputs/wifi.log');
 
