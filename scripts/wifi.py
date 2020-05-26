@@ -9,7 +9,12 @@ import os
 import signal
 import random
 from multiprocessing import Process
+import os
+import requests
 
+load_dotenv()
+
+headers = {"Authorization": "Bearer " + os.getenv('API_KEY')}
 
 def channel_hopper():
     while True:
@@ -31,12 +36,14 @@ def tpcdump():
                 m = re.search(patt, line)
                 if m is not None and len(m.groups()) == 4:
                     probe = {
+                        'type_id': 2,
                         'signal': m.group(1).rstrip(),
-                        'mac': m.group(2).rstrip(),
+                        'identifier': m.group(2).rstrip(),
                         'ssid': m.group(4).rstrip(),
                         'time': int(time.time()),
                     }
                     print probe
+                    requests.post(os.getenv('API_URL') + 'logs', data=device, headers=headers)
             else:
                 break
 
