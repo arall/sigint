@@ -44,7 +44,7 @@ def tpcdump():
                         'time': int(time.time()),
                     }
                     print probe
-                    requests.post(os.getenv('API_URL') + 'logs', data=device, headers=headers)
+                    requests.post(os.getenv('API_URL') + 'logs', data=probe, headers=headers)
             else:
                 break
 
