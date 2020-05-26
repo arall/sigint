@@ -9,6 +9,7 @@ import os
 import signal
 import random
 from multiprocessing import Process
+from dotenv import load_dotenv
 import os
 import requests
 
