@@ -37,4 +37,5 @@ for line in str(output).split('\\n')[:-1]:
             device['name'] = m.group(1).rstrip()
 
 for device in devices:
+    print device
     requests.post(os.getenv('API_URL') + 'logs', data=device, headers=headers)
