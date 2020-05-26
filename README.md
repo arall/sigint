@@ -21,3 +21,8 @@ Power: 5V/1.2A
 Consumption: 150mA
 WiFi: 802.11 b/g/n wireless LAN
 BT: Bluetooth 4.1, BLE
+
+
+The randomized MAC addresses being used are locally administered MAC addresses.  
+You can recognize a locally administered address by inspecting the 2nd least significant bit of the 2nd byte of the MAC address.
+http://www.dfrc.com.sg/mac-randomization-crowd-analytics/

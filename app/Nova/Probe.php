@@ -22,7 +22,7 @@ class Probe extends Resource
      *
      * @var string
      */
-    public static $title = 'name';
+    public static $title = 'ssid';
 
     /**
      * The columns that should be searched.
@@ -30,7 +30,7 @@ class Probe extends Resource
      * @var array
      */
     public static $search = [
-        'id', 'name',
+        'id', 'ssid',
     ];
 
     /**
