@@ -42,7 +42,7 @@ class Daemon extends Command
         do {
             \Artisan::call('scan:wifi ' . $interface);
             \Artisan::call('scan:bluetooth');
-            sleep(60 * 15);
+            # sleep(60 * 15);
         } while (true);
     }
 }
