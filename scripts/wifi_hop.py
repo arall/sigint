@@ -13,13 +13,12 @@ from multiprocessing import Process
 
 def channel_hopper():
     while True:
-        try:
-            channel = random.randrange(1,15) # 2.5 GHz
-            subprocess.Popen("sudo iwconfig %s channel %d" % (interface, channel), shell=True).wait()
-            #os.system("sudo iwconfig %s channel %d" % (interface, channel))
-            time.sleep(1)
-        except KeyboardInterrupt:
-            break
+        for channel in range(1, 15): # 2.5 GHz (1-14)
+            try:
+                subprocess.Popen("sudo iwconfig %s channel %d" % (interface, channel), shell=True).wait()
+                time.sleep(5)
+            except KeyboardInterrupt:
+                break
 
 
 def tpcdump():
