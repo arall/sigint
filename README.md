@@ -50,6 +50,8 @@ Start monitor mode on your WiFi device: `airmon-ng start wlan1`
 Run those two scripts in a background session (or as a daemons):
 ```
 cd scripts; python bluetooth.py
+```
+```
 cd scripts; python wifi.py wlan1mon
 ```
 
@@ -57,6 +59,7 @@ cd scripts; python wifi.py wlan1mon
 
 https://www.raspberrypi.org/documentation/faqs/
 
+```
 Raspberry Pi 4 B
 Power: 5V/3A
 Consumption: 600mA
@@ -74,6 +77,7 @@ Power: 5V/1.2A
 Consumption: 150mA
 WiFi: 802.11 b/g/n wireless LAN
 BT: Bluetooth 4.1, BLE
+```
 
 ## Limitations
 The randomized MAC addresses being used are locally administered MAC addresses.  
