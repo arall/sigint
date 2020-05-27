@@ -14,7 +14,7 @@
         "guzzlehttp/guzzle": "^6.3",
         "laravel/framework": "^7.0",
         "laravel/tinker": "^2.0",
-        "laravel/nova": "*"
+        "laravel/nova": "^3"
     },
     "require-dev": {
         "facade/ignition": "^2.0",
@@ -35,8 +35,8 @@
     },
     "repositories": [
         {
-            "type": "path",
-            "url": "./nova"
+            "type": "composer",
+            "url": "https://nova.laravel.com"
         }
     ],
     "autoload": {

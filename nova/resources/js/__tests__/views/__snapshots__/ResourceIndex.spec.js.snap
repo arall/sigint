@@ -1,3 +1,0 @@
-// Jest Snapshot v1, https://goo.gl/fbAQLP
-
-exports[`Index.vue renders 1`] = `<loading-view-stub></loading-view-stub>`;
