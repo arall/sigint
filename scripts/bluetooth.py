@@ -38,4 +38,7 @@ while True:
 
     for device in devices:
         print device
-        requests.post(os.getenv('API_URL') + 'logs', data=device, headers=headers)
+        try:
+            requests.post(os.getenv('API_URL') + 'logs', data=device, headers=headers)
+        except:
+            print("Error reaching the API")

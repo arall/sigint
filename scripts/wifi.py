@@ -44,7 +44,10 @@ def tpcdump():
                         'time': int(time.time()),
                     }
                     print probe
-                    requests.post(os.getenv('API_URL') + 'logs', data=probe, headers=headers)
+                    try:
+                        requests.post(os.getenv('API_URL') + 'logs', data=probe, headers=headers)
+                    except:
+                        print("Error reaching the API")
             else:
                 break
 
