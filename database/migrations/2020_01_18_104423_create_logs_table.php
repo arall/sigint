@@ -15,6 +15,8 @@ class CreateLogsTable extends Migration
     {
         Schema::create('logs', function (Blueprint $table) {
             $table->bigIncrements('id');
+            $table->unsignedBigInteger('station_id');
+            $table->foreign('station_id')->references('id')->on('stations');
             $table->unsignedBigInteger('device_id');
             $table->foreign('device_id')->references('id')->on('devices');
             $table->unsignedBigInteger('session_id')->nullable();

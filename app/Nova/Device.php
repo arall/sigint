@@ -49,7 +49,7 @@ class Device extends Resource
             BelongsTo::make('Identity'),
             Text::make('Identifier')->sortable(),
             Text::make('Name')->sortable(),
-            HasMany::make('Probes'),
+            HasMany::make('Ssids'),
             HasMany::make('Logs'),
             DateTime::make('Created At')->sortable()->exceptOnForms(),
             DateTime::make('Updated At')->sortable()->exceptOnForms(),

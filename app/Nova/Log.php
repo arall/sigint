@@ -27,6 +27,7 @@ class Log extends Resource
     {
         return [
             ID::make()->sortable(),
+            BelongsTo::make('Station'),
             BelongsTo::make('Device'),
             Text::make('Signal')->sortable(),
             DateTime::make('Timestamp')->sortable(),

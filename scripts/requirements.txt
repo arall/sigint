@@ -1,3 +1,2 @@
 python-dotenv
 requests
-btmgmt

@@ -92,13 +92,13 @@ class Device extends Model
     }
 
     /**
-     * Probes relation.
+     * SSIDs relation.
      *
-     * @return \Illuminate\Database\Eloquent\Relations\hasMany
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsToMany
      */
-    public function probes()
+    public function ssids()
     {
-        return $this->hasMany('App\Models\Probe');
+        return $this->belongsToMany('App\Models\Ssid', 'probes')->withTimestamps();
     }
 
     /**

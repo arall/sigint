@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\DeviceType;
+use App\Models\Station;
 use Carbon\Carbon;
 
 class LogsController extends Controller
@@ -24,6 +25,8 @@ class LogsController extends Controller
             'signal' => 'required',
         ]);
 
+        $station = Station::where('token', $request->bearerToken())->firstOrFail();
+
         $type = DeviceType::findOrFail($request->type_id);
         $device = $type->devices()->firstOrCreate(['identifier' => $request->identifier]);
 
@@ -34,11 +37,12 @@ class LogsController extends Controller
         }
 
         // WiFi probe SSID
-        if(isset($request->ssid)){
-            $device->probes()->firstOrCreate(['ssid' => $request->ssid]);
+        if (isset($request->ssid)) {
+            $device->ssids()->firstOrCreate(['name' => $request->ssid]);
         }
 
-        $log = $device->logs()->create([
+        $log = $station->logs()->create([
+            'device_id' => $device->id,
             'timestamp' => Carbon::createFromTimestamp($request->time),
             'signal' => isset($request->signal) ? $request->signal : null,
         ]);

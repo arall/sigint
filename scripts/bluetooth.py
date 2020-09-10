@@ -4,20 +4,27 @@ import time
 from dotenv import load_dotenv
 import os
 import requests
+import sys
 
 load_dotenv()
 
-headers = {"Authorization": "Bearer " + os.getenv('API_KEY')}
+headers = {"Authorization": "Bearer " + os.getenv('STATION_TOKEN')}
 
-subprocess.Popen('hciconfig hci0 up', stdout=subprocess.PIPE, shell=True)
-subprocess.Popen('btmgmt le on', stdout=subprocess.PIPE, shell=True)
+if len(sys.argv) != 2:
+    print "Usage %s monitor_interface" % sys.argv[0]
+    sys.exit(1)
+
+interface = sys.argv[1]
+
+subprocess.Popen(['sudo hciconfig', interface, 'up'], stdout=subprocess.PIPE, shell=True)
+subprocess.Popen('sudo btmgmt le on', stdout=subprocess.PIPE, shell=True)
 
 while True:
     devices = []
     proc = subprocess.Popen('sudo btmgmt find', stdout=subprocess.PIPE, shell=True)
     output = proc.communicate()
     for line in str(output).split('\\n')[:-1]:
-        if 'hci0 dev_found' in line:
+        if ' dev_found' in line:
             # Store the previous
             if 'device' in locals():
                 devices.append(device);

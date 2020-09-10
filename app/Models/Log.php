@@ -12,7 +12,7 @@ class Log extends Model
      * @var array
      */
     protected $fillable = [
-        'timestamp', 'signal',
+        'device_id', 'timestamp', 'signal',
     ];
 
     /**
@@ -49,5 +49,15 @@ class Log extends Model
     public function session()
     {
         return $this->belongsTo('App\Models\Session');
+    }
+
+    /**
+     * Station relation.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
+     */
+    public function station()
+    {
+        return $this->belongsTo('App\Models\Station');
     }
 }

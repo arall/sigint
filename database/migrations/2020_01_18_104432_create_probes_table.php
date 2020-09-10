@@ -17,7 +17,8 @@ class CreateProbesTable extends Migration
             $table->bigIncrements('id');
             $table->unsignedBigInteger('device_id');
             $table->foreign('device_id')->references('id')->on('devices');
-            $table->string('ssid');
+            $table->unsignedBigInteger('ssid_id');
+            $table->foreign('ssid_id')->references('id')->on('ssids');
             $table->timestamps();
         });
     }

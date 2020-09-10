@@ -5,24 +5,23 @@ namespace App\Nova;
 use Illuminate\Http\Request;
 use Laravel\Nova\Fields\ID;
 use Laravel\Nova\Fields\Text;
-use Laravel\Nova\Fields\BelongsTo;
-use Laravel\Nova\Fields\DateTime;
+use Laravel\Nova\Fields\BelongsToMany;
 
-class Probe extends Resource
+class Ssid extends Resource
 {
     /**
      * The model the resource corresponds to.
      *
      * @var string
      */
-    public static $model = 'App\\Models\\Probe';
+    public static $model = 'App\\Models\\Ssid';
 
     /**
      * The single value that should be used to represent the resource when being displayed.
      *
      * @var string
      */
-    public static $title = 'ssid';
+    public static $title = 'name';
 
     /**
      * The columns that should be searched.
@@ -30,7 +29,7 @@ class Probe extends Resource
      * @var array
      */
     public static $search = [
-        'id', 'ssid',
+        'id', 'name',
     ];
 
     /**
@@ -43,10 +42,8 @@ class Probe extends Resource
     {
         return [
             ID::make()->sortable(),
-            BelongsTo::make('Device'),
-            Text::make('SSID')->sortable(),
-            DateTime::make('Created At')->sortable(),
-            DateTime::make('Updated At')->sortable(),
+            Text::make('name')->sortable(),
+            BelongsToMany::make('Devices'),
         ];
     }
 }

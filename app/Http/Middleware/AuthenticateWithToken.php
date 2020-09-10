@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use Closure;
+use App\Models\Station;
 
 class AuthenticateWithToken
 {
@@ -16,7 +17,7 @@ class AuthenticateWithToken
     public function handle($request, Closure $next)
     {
         $token = $request->bearerToken();
-        if ($token !== env('API_KEY')) {
+        if (!Station::where('token', $token)->exists()) {
             return response()->json('Unauthorized', 401);
         }
 

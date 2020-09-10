@@ -15,7 +15,7 @@ import requests
 
 load_dotenv()
 
-headers = {"Authorization": "Bearer " + os.getenv('API_KEY')}
+headers = {"Authorization": "Bearer " + os.getenv('STATION_TOKEN')}
 
 def channel_hopper():
     while True:
