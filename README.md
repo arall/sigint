@@ -59,8 +59,21 @@ USB [DVB-T key (RTL2832U)](https://osmocom.org/projects/rtl-sdr/wiki/Rtl-sdr) wi
 
 ### Server
 
+Copy the `.env.example` into `.env` and set the variables to connect to the database, as well as your Nova License and Docker settings (in case you want to use those).
+
 ### Docker
-*To-do*
+
+Build and start the container:
+```sh
+docker compose up -d
+```
+
+Prompt a bash into the docker container:
+```sh
+docker exec -it sigint-app-1 bash
+```
+
+Then follow the non-docker setup.
 
 ### Non-Docker
 For the server, install using [Composer](https://getcomposer.org/):
@@ -68,25 +81,48 @@ For the server, install using [Composer](https://getcomposer.org/):
 composer install
 ```
 
-Set the `.env` variables to connect to the database.
+Generate a Laravel application key:
+```sh
+php artisan key:generate
+```
 
+And then run the database migrations and seeders:
+```sh
+php artisan migrate --seed
+```
+
+If you're using Laravel Nova, you can create a web user with:
+```sh
+php artisan nova:user
+```
+
+Then you will be able to login using the web panel at `http://127.0.0.1/nova`.
 
 ### Stations
-Set the C&C `API_URL` and the `API_KEY` in `scripts/.env`
 
-### Running
+First create your station in the DB. If using Nova, you can do that using the web panel.
+Otherwise you can manually create that directly from the DB.
+Each station have a token that will be used as authentication for the API calls.
+
+Set the server `API_URL` (for example `http://127.0.0.1/api/`) and the `API_KEY` generated in `scripts/.env`.
+
+#### Running
 Start monitor mode on your WiFi device: `sudo airmon-ng start wlan1` (requires aircrack-ng) or `sudo iw phy phy0 interface add mon0 type monitor; sudo ifconfig mon0 up`.
-Make sure BT servive is enabled: `sudo systemctl status bluetooth.service`. If not, enable it with `sudo systemctl enable bluetooth.service` and `sudo systemctl start bluetooth.service`.
-List the BT devics with `bt-adapter -i` (requires bluez-tools).
+
+Make sure the Bluetooth service is enabled: `sudo systemctl status bluetooth.service`. 
+If not, enable it with `sudo systemctl enable bluetooth.service` and `sudo systemctl start bluetooth.service`.
+List the Bluetooth interfaces with `bt-adapter -i` (requires `bluez-tools`).
 
 Run those two scripts in a background session (or as a daemons), change the interface if needed:
 
 ```sh
-cd scripts; python bluetooth.py hci0
+cd scripts; 
+python bluetooth.py hci0
 ```
 
 ```sh
-cd scripts; python wifi.py wlan1mon
+cd scripts; 
+python wifi.py wlan1mon
 ```
 
 ## Devices specs
