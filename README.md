@@ -1,36 +1,48 @@
 # Sigint
-The idea is to build a small device (Raspberry Pi 3 in my case) that will scan WiFi probes, Bluetooth devices and IMSI numbers nearby, and log those in a remote C&C.
+The idea is to build a small device (Raspberry Pi 3 in my case) that will scan **WiFi probes**, **Bluetooth devices** and **IMSI numbers** (still work in progress) nearby, and log those into a server.
 
-This have different purposes. My original idea is to use it as an (potential) intruder "alarm" system for offgrid properties.
+This have different purposes. My original idea is to use it as an (potential) intruder monitoring system for off-grid properties.
+
+## How it works
+
+Server & Stations.
+
 
 ## Requirements
 
-### Software
-This was tested on a Raspberry Pi 3 B+, using Kali linux 2020.
+This project was tested on:
+* Raspberry Pi 3 B+ with Kali linux 2020
+* Raspberry Pi 4 B with Raspberry Pi OS
 
-#### Packages
+### Software
+
+#### Linux Packages
 `sudo apt-get install -y bluez wireless-tools tcpdump`
 
-Built with Python 2.7, Python 3 is untested.
+#### Python dependencies
 `cd scripts; pip install -r requirements.txt`
 
 #### IMSI Catcher
 https://github.com/Oros42/IMSI-catcher
 
-For installing it under RPi3 follow this script / guide: https://gist.github.com/arall/370b5fe5277506026c078a7cf5cb97e3
+For installing it under Raspberry Pi follow this script / guide: https://gist.github.com/arall/370b5fe5277506026c078a7cf5cb97e3
 
 Get your device info with: `*#*#4636#*#*`
 
 #### Laravel Nova License
-The admin panel works with [Laravel Nova](https://nova.laravel.com/) and requires a comercial license.
-You can still use the project without an admin GUI by querying the MySQL DB or implementing any other Laravel Admin panel.
+The admin panel works with [Laravel Nova](https://nova.laravel.com/) and requires a commercial license.
+You can still use the project without an admin GUI by querying the MySQL DB or by implementing any other Laravel Admin panel.
+
+If you want to remove Laravel Nova, remove it from `composer.json` before the setup.
 
 ### Hardware
 
 #### WiFi device with monitor mode
-Any Alfa would work. Build in Raspberry Pi will work when using Re4son:
 
-```
+Any WiFi card that supports monitor mode *should* work. I've tested it with Alfa `AWUSO36NH` and `AWUS036NHA`.
+
+Raspberry Pi 3  embed WiFi card will work when using Re4son kernel:
+```sh
 wget -O re4son-kernel_current.tar.xz https://re4son-kernel.com/download/re4son-kernel-current/
 tar -xJf re4son-kernel_current.tar.xz
 cd re4son-kernel_4*
@@ -44,25 +56,36 @@ Built in Raspberry Pi bluetooth works out of the box.
 USB [DVB-T key (RTL2832U)](https://osmocom.org/projects/rtl-sdr/wiki/Rtl-sdr) with antenna (less than 15$) or a [OsmocomBB phone](https://osmocom.org/projects/baseband/wiki/Phones) or [HackRF](https://greatscottgadgets.com/hackrf/).
 
 ## Setup
-For the C&C, install using [Composer](https://getcomposer.org/):
-```
+
+### Server
+
+### Docker
+*To-do*
+
+### Non-Docker
+For the server, install using [Composer](https://getcomposer.org/):
+```sh
 composer install
 ```
 
-Set the `.env` variables. Make sure to generate a random `API_KEY`.
+Set the `.env` variables to connect to the database.
 
+
+### Stations
 Set the C&C `API_URL` and the `API_KEY` in `scripts/.env`
 
-## Running
+### Running
 Start monitor mode on your WiFi device: `sudo airmon-ng start wlan1` (requires aircrack-ng) or `sudo iw phy phy0 interface add mon0 type monitor; sudo ifconfig mon0 up`.
 Make sure BT servive is enabled: `sudo systemctl status bluetooth.service`. If not, enable it with `sudo systemctl enable bluetooth.service` and `sudo systemctl start bluetooth.service`.
 List the BT devics with `bt-adapter -i` (requires bluez-tools).
 
 Run those two scripts in a background session (or as a daemons), change the interface if needed:
-```
+
+```sh
 cd scripts; python bluetooth.py hci0
 ```
-```
+
+```sh
 cd scripts; python wifi.py wlan1mon
 ```
 

@@ -2,9 +2,9 @@
 
 namespace App\Nova\Lenses\Devices;
 
-use Illuminate\Http\Request;
 use Laravel\Nova\Fields\Text;
 use Laravel\Nova\Http\Requests\LensRequest;
+use Laravel\Nova\Http\Requests\NovaRequest;
 use Laravel\Nova\Lenses\Lens;
 use Illuminate\Support\Facades\DB;
 
@@ -21,13 +21,13 @@ class Top extends Lens
     {
         return $request->withOrdering($request->withFilters(
             $query->select([
-                    DB::raw('device_types.name as type'),
-                    'devices.id',
-                    DB::raw('vendors.name as vendor'),
-                    DB::raw('identities.name as identity'),
-                    'identifier',
-                    'devices.name'
-                ])
+                DB::raw('device_types.name as type'),
+                'devices.id',
+                DB::raw('vendors.name as vendor'),
+                DB::raw('identities.name as identity'),
+                'identifier',
+                'devices.name'
+            ])
                 ->leftJoin('device_types', 'device_types.id', '=', 'devices.type_id')
                 ->leftJoin('vendors', 'vendors.id', '=', 'devices.vendor_id')
                 ->leftJoin('identities', 'identities.id', '=', 'devices.identity_id')
@@ -45,10 +45,10 @@ class Top extends Lens
     /**
      * Get the fields available to the lens.
      *
-     * @param  \Illuminate\Http\Request  $request
+     * @param  \Laravel\Nova\Http\Requests\NovaRequest  $request
      * @return array
      */
-    public function fields(Request $request)
+    public function fields(NovaRequest $request)
     {
         return [
             Text::make('ID', 'id'),

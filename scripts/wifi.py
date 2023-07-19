@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python
 # Based on :https://gist.github.com/LoranKloeze/6b713022619c2b32b32c6400a55a8433
 
 import subprocess
@@ -7,7 +7,6 @@ import time
 import sys
 import os
 import signal
-import random
 from multiprocessing import Process
 from dotenv import load_dotenv
 import os
@@ -17,11 +16,13 @@ load_dotenv()
 
 headers = {"Authorization": "Bearer " + os.getenv('STATION_TOKEN')}
 
+
 def channel_hopper():
     while True:
-        for channel in range(1, 15): # 2.5 GHz (1-14)
+        for channel in range(1, 15):  # 2.5 GHz (1-14)
             try:
-                subprocess.Popen("sudo iwconfig %s channel %d" % (interface, channel), shell=True).wait()
+                subprocess.Popen("sudo iwconfig %s channel %d" %
+                                 (interface, channel), shell=True).wait()
                 time.sleep(5)
             except KeyboardInterrupt:
                 break
@@ -29,7 +30,8 @@ def channel_hopper():
 
 def tpcdump():
     while True:
-        proc = subprocess.Popen(['tcpdump', '-l', '-I', '-i', interface, '-e', '-s', '256', 'type', 'mgt', 'subtype', 'probe-req'], stdout=subprocess.PIPE)
+        proc = subprocess.Popen(['tcpdump', '-l', '-I', '-i', interface, '-e', '-s',
+                                '256', 'type', 'mgt', 'subtype', 'probe-req'], stdout=subprocess.PIPE)
         patt = '(-\d+)dBm signal antenna 0.+SA:([0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+) .+(Probe Request) \((.+)\)'
         while True:
             line = proc.stdout.readline()
@@ -43,9 +45,10 @@ def tpcdump():
                         'ssid': m.group(4).rstrip(),
                         'time': int(time.time()),
                     }
-                    print probe
+                    print(probe)
                     try:
-                        requests.post(os.getenv('API_URL') + 'logs', data=probe, headers=headers)
+                        requests.post(os.getenv('API_URL') +
+                                      'logs', data=probe, headers=headers)
                     except:
                         print("Error reaching the API")
             else:
@@ -64,15 +67,15 @@ def signal_handler(signal, frame):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print "Usage %s monitor_interface" % sys.argv[0]
+        print("Usage %s monitor_interface" % sys.argv[0])
         sys.exit(1)
 
     interface = sys.argv[1]
 
-    p = Process(target = channel_hopper)
+    p = Process(target=channel_hopper)
     p.start()
 
-    p2 = Process(target = tpcdump)
+    p2 = Process(target=tpcdump)
     p2.start()
 
     # Capture CTRL-C

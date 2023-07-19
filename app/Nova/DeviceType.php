@@ -2,7 +2,7 @@
 
 namespace App\Nova;
 
-use Illuminate\Http\Request;
+use Laravel\Nova\Http\Requests\NovaRequest;
 use Laravel\Nova\Fields\ID;
 use Laravel\Nova\Fields\Text;
 
@@ -13,7 +13,7 @@ class DeviceType extends Resource
      *
      * @var string
      */
-    public static $model = 'App\\Models\\DeviceType';
+    public static $model = \App\Models\DeviceType::class;
 
     /**
      * The single value that should be used to represent the resource when being displayed.
@@ -34,10 +34,10 @@ class DeviceType extends Resource
     /**
      * Get the fields displayed by the resource.
      *
-     * @param  \Illuminate\Http\Request  $request
+     * @param  \Laravel\Nova\Http\Requests\NovaRequest  $request
      * @return array
      */
-    public function fields(Request $request)
+    public function fields(NovaRequest $request)
     {
         return [
             ID::make()->sortable(),
