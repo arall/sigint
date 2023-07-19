@@ -1,7 +1,7 @@
 <?php
 
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use App\Http\Middleware\AuthenticateWithToken;
 
 /*
 |--------------------------------------------------------------------------
@@ -14,4 +14,4 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
-Route::post('logs', 'API\LogsController@store')->middleware('auth.token');
+Route::post('logs', 'API\LogsController@store')->middleware(AuthenticateWithToken::class);
