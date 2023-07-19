@@ -104,25 +104,31 @@ First create your station in the DB. If using Nova, you can do that using the we
 Otherwise you can manually create that directly from the DB.
 Each station have a token that will be used as authentication for the API calls.
 
-Set the server `API_URL` (for example `http://127.0.0.1/api/`) and the `API_KEY` generated in `scripts/.env`.
+The monitoring scripts are located in `scripts/` directory.
 
-#### Running
-Start monitor mode on your WiFi device: `sudo airmon-ng start wlan1` (requires aircrack-ng) or `sudo iw phy phy0 interface add mon0 type monitor; sudo ifconfig mon0 up`.
+First, set the server `API_URL` (for example `http://127.0.0.1/api/`) and the `API_KEY` (the station token) in `scripts/.env`.
 
+
+#### WiFi
+Start monitor mode on your WiFi device: `sudo airmon-ng start wlan1` (requires aircrack-ng) or `sudo iw phy phy2 interface add wlan1mon type monitor; sudo ifconfig wlan1mon up`.
+
+Run the script in a background session (or as a daemons), change the interface if needed:
+
+```sh
+cd scripts
+python wifi.py wlan1mon
+```
+
+#### Bluetooth
 Make sure the Bluetooth service is enabled: `sudo systemctl status bluetooth.service`. 
 If not, enable it with `sudo systemctl enable bluetooth.service` and `sudo systemctl start bluetooth.service`.
 List the Bluetooth interfaces with `bt-adapter -i` (requires `bluez-tools`).
 
-Run those two scripts in a background session (or as a daemons), change the interface if needed:
+Run the script in a background session (or as a daemons), change the interface if needed:
 
 ```sh
-cd scripts; 
+cd scripts
 python bluetooth.py hci0
-```
-
-```sh
-cd scripts; 
-python wifi.py wlan1mon
 ```
 
 ## Devices specs

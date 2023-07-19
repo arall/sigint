@@ -21,7 +21,7 @@ def channel_hopper():
     while True:
         for channel in range(1, 15):  # 2.5 GHz (1-14)
             try:
-                subprocess.Popen("sudo iwconfig %s channel %d" %
+                subprocess.Popen("iwconfig %s channel %d" %
                                  (interface, channel), shell=True).wait()
                 time.sleep(5)
             except KeyboardInterrupt:
@@ -30,29 +30,32 @@ def channel_hopper():
 
 def tpcdump():
     while True:
+
         proc = subprocess.Popen(['tcpdump', '-l', '-I', '-i', interface, '-e', '-s',
-                                '256', 'type', 'mgt', 'subtype', 'probe-req'], stdout=subprocess.PIPE)
+                                 '256', 'type', 'mgt', 'subtype', 'probe-req'], stdout=subprocess.PIPE)
+
         patt = '(-\d+)dBm signal antenna 0.+SA:([0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+) .+(Probe Request) \((.+)\)'
         while True:
             line = proc.stdout.readline()
-            if line != '':
-                m = re.search(patt, line)
-                if m is not None and len(m.groups()) == 4:
-                    probe = {
-                        'type_id': 2,
-                        'signal': m.group(1).rstrip(),
-                        'identifier': m.group(2).rstrip(),
-                        'ssid': m.group(4).rstrip(),
-                        'time': int(time.time()),
-                    }
-                    print(probe)
-                    try:
-                        requests.post(os.getenv('API_URL') +
-                                      'logs', data=probe, headers=headers)
-                    except:
-                        print("Error reaching the API")
-            else:
+
+            if line == '':
                 break
+
+            m = re.search(patt, line)
+            if m is not None and len(m.groups()) == 4:
+                probe = {
+                    'type_id': 2,
+                    'signal': m.group(1).rstrip(),
+                    'identifier': m.group(2).rstrip(),
+                    'ssid': m.group(4).rstrip(),
+                    'time': int(time.time()),
+                }
+                print(probe)
+                try:
+                    requests.post(os.getenv('API_URL') +
+                                  'logs', data=probe, headers=headers)
+                except:
+                    print("Error reaching the API")
 
 
 def signal_handler(signal, frame):
