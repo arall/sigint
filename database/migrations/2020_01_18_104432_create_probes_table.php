@@ -12,11 +12,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('probes', function (Blueprint $table) {
-            $table->bigIncrements('id');
-            $table->unsignedBigInteger('device_id');
-            $table->foreign('device_id')->references('id')->on('devices');
-            $table->unsignedBigInteger('ssid_id');
-            $table->foreign('ssid_id')->references('id')->on('ssids');
+            $table->id();
+            $table->foreignId('device_id')->onDelete('cascade');
+            $table->foreignId('ssid_id')->onDelete('cascade');
             $table->timestamps();
         });
     }

@@ -17,7 +17,7 @@ This project was tested on:
 ### Software
 
 #### Linux Packages
-`sudo apt-get install -y bluez wireless-tools tcpdump`
+`sudo apt-get install -y bluez wireless-tools tcpdump tshark`
 
 #### Python dependencies
 `cd scripts; pip install -r requirements.txt`
@@ -39,14 +39,35 @@ If you want to remove Laravel Nova, remove it from `composer.json` before the se
 
 #### WiFi device with monitor mode
 
-Any WiFi card that supports monitor mode *should* work. I've tested it with Alfa `AWUSO36NH` and `AWUS036NHA`.
+Raspberry Pi onboard Wi-Fi adapter doesn't support monitor mode out of the box.
+Any external USB WiFi cards that support monitor mode *should* work with additional drivers. I've tested it with Alfa `AWUSO36NH` and `AWUS036NHA` in a Raspberry Pi 4.
 
-Raspberry Pi 3  embed WiFi card will work when using Re4son kernel:
+Source: https://www.intuitibits.com/2021/02/17/using-a-raspberry-pi-4-as-a-remote-sensor-for-wifi-explorer-pro-and-airtool
+
 ```sh
-wget -O re4son-kernel_current.tar.xz https://re4son-kernel.com/download/re4son-kernel-current/
-tar -xJf re4son-kernel_current.tar.xz
-cd re4son-kernel_4*
-sudo ./install.sh
+sudo apt update
+sudo apt install raspberrypi-kernel-headers
+sudo reboot
+git clone https://github.com/aircrack-ng/rtl8812au
+cd rtl8812au
+```
+
+For RPI 1/2/3/ & 0/Zero:
+
+```sh
+sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile
+sed -i 's/CONFIG_PLATFORM_ARM_RPI = n/CONFIG_PLATFORM_ARM_RPI = y/g' Makefile
+```
+
+For RPI 3B+ & 4B you will need to run those below which builds the ARM64 arch driver:
+```sh
+sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile
+sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' Makefile
+```
+
+```sh
+make
+sudo make install
 ```
 
 #### Bluetooth device
@@ -110,7 +131,9 @@ First, set the server `API_URL` (for example `http://127.0.0.1/api/`) and the `A
 
 
 #### WiFi
-Start monitor mode on your WiFi device: `sudo airmon-ng start wlan1` (requires aircrack-ng) or `sudo iw phy phy2 interface add wlan1mon type monitor; sudo ifconfig wlan1mon up`.
+Start monitor mode on your WiFi device: `sudo airmon-ng start wlan1` (requires `aircrack-ng`) or `sudo iw phy phy2 interface add wlan1mon type monitor; sudo ifconfig wlan1mon up`.
+
+List the wifi interfaces with `sudo iwconfig`.
 
 Run the script in a background session (or as a daemons), change the interface if needed:
 
@@ -130,6 +153,10 @@ Run the script in a background session (or as a daemons), change the interface i
 cd scripts
 python bluetooth.py hci0
 ```
+
+#### IMSI
+
+*To-do*
 
 ## Devices specs
 

@@ -12,9 +12,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('vendor_macs', function (Blueprint $table) {
-            $table->bigIncrements('id');
-            $table->unsignedBigInteger('vendor_id');
-            $table->foreign('vendor_id')->references('id')->on('vendors');
+            $table->id();
+            $table->foreignId('vendor_id')->delete('cascade');
             $table->string('mac')->unique();
         });
     }

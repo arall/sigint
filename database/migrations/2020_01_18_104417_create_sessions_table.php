@@ -12,9 +12,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('sessions', function (Blueprint $table) {
-            $table->bigIncrements('id');
-            $table->unsignedBigInteger('device_id');
-            $table->foreign('device_id')->references('id')->on('devices');
+            $table->id();
+            $table->foreignId('device_id')->delete('CASCADE');
             $table->datetime('started_at')->nullable();
             $table->datetime('finished_at')->nullable();
         });

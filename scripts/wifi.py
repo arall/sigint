@@ -29,19 +29,20 @@ def channel_hopper():
 
 
 def tpcdump():
+    ''' Capture probes with tpcdump'''
     while True:
 
         proc = subprocess.Popen(['tcpdump', '-l', '-I', '-i', interface, '-e', '-s',
                                  '256', 'type', 'mgt', 'subtype', 'probe-req'], stdout=subprocess.PIPE)
 
-        patt = '(-\d+)dBm signal antenna 0.+SA:([0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+) .+(Probe Request) \((.+)\)'
+        regex = '(-\d+)dBm signal antenna 0.+SA:([0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+) .+(Probe Request) \((.+)\)'
         while True:
             line = proc.stdout.readline()
 
             if line == '':
                 break
 
-            m = re.search(patt, line)
+            m = re.search(regex, line)
             if m is not None and len(m.groups()) == 4:
                 probe = {
                     'type_id': 2,
@@ -56,6 +57,40 @@ def tpcdump():
                                   'logs', data=probe, headers=headers)
                 except:
                     print("Error reaching the API")
+
+
+def tshark():
+    ''' Capture probes with tshark'''
+    while True:
+
+        proc = subprocess.Popen(
+            ['tshark', '-i', interface, '-n', '-l', 'subtype', 'probereq'], stdout=subprocess.PIPE)
+
+        regex = '([0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+:[0-9a-f]+)(?:.*?)Probe Request, SN=(\d+), FN=(\d+), Flags=(.*?), SSID=(.*?)$'
+        while True:
+            line = proc.stdout.readline().decode('utf-8')
+
+            if line == '':
+                break
+
+            m = re.search(regex, line)
+            if m is not None and len(m.groups()) == 5:
+                probe = {
+                    'type_id': 2,
+                    'identifier': m.group(1).rstrip(),
+                    'signal': m.group(2).rstrip(),
+                    'ssid': m.group(5).rstrip(),
+                    'time': int(time.time()),
+                }
+
+                if probe['ssid'] == 'Wildcard (Broadcast)':
+                    continue
+
+                print(probe)
+                response = requests.post(os.getenv('API_URL') +
+                                         'logs', data=probe, headers=headers)
+                if response.status_code != 201:
+                    print('API Error:', response.content)
 
 
 def signal_handler(signal, frame):
@@ -78,7 +113,7 @@ if __name__ == "__main__":
     p = Process(target=channel_hopper)
     p.start()
 
-    p2 = Process(target=tpcdump)
+    p2 = Process(target=tshark)
     p2.start()
 
     # Capture CTRL-C
