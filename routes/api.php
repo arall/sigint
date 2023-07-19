@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Middleware\AuthenticateWithToken;
+use App\Http\Controllers\API\LogsController;
 
 /*
 |--------------------------------------------------------------------------
@@ -14,4 +15,4 @@ use App\Http\Middleware\AuthenticateWithToken;
 |
 */
 
-Route::post('logs', 'API\LogsController@store')->middleware(AuthenticateWithToken::class);
+Route::post('logs', [LogsController::class, 'store'])->middleware(AuthenticateWithToken::class);
