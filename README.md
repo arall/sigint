@@ -139,7 +139,7 @@ Run the script in a background session (or as a daemons), change the interface i
 
 ```sh
 cd scripts
-python wifi.py wlan1mon
+sudo python3 wifi.py wlan1mon
 ```
 
 #### Bluetooth
@@ -151,7 +151,7 @@ Run the script in a background session (or as a daemons), change the interface i
 
 ```sh
 cd scripts
-python bluetooth.py hci0
+python3 bluetooth.py hci0
 ```
 
 #### IMSI

@@ -87,10 +87,13 @@ def tshark():
                     continue
 
                 print(probe)
-                response = requests.post(os.getenv('API_URL') +
-                                         'logs', data=probe, headers=headers)
-                if response.status_code != 201:
-                    print('API Error:', response.content)
+                try:
+                    response = requests.post(os.getenv('API_URL') +
+                                             'logs', data=probe, headers=headers)
+                    if response.status_code != 201:
+                        print('API Error:', response.content)
+                except Exception as e:
+                    print('API Error:', str(e))
 
 
 def signal_handler(signal, frame):

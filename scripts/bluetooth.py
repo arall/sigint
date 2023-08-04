@@ -49,7 +49,10 @@ while True:
 
     for device in devices:
         print(device)
-        response = requests.post(
-            os.getenv('API_URL') + 'logs', data=device, headers=headers)
-        if response.status_code != 201:
-            print('API Error:', response.content)
+        try:
+            response = requests.post(
+                os.getenv('API_URL') + 'logs', data=device, headers=headers)
+            if response.status_code != 201:
+                print('API Error:', response.content)
+        except Exception as e:
+            print('API Error:', str(e))
