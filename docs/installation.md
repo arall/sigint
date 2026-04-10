@@ -1,6 +1,6 @@
 # Installation
 
-## Raspberry Pi (Debian/Ubuntu)
+## Raspberry Pi 5 (Debian/Ubuntu)
 
 ```sh
 # System dependencies
@@ -50,6 +50,11 @@ pip install gtts
 After setup, always activate the venv before running:
 ```sh
 source venv/bin/activate
+```
+
+**Note:** `sudo` bypasses the venv and uses the system Python (which won't have the installed packages). For commands that need root (server, BLE, WiFi), use the venv Python directly:
+```sh
+sudo /path/to/sigint/venv/bin/python3 src/sdr.py server configs/server.json
 ```
 
 ## macOS
