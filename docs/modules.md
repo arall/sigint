@@ -34,6 +34,7 @@
 | **Correlate** | `sdr.py correlate` | — | Device co-occurrence analysis across signal types | New |
 | **FM Voice Parser** | via `sdr.py server` | Configurable | Channelizer FM voice demod — PMR, 70cm, Marine, 2m, FRS from HackRF | Tested |
 | **Central Server** | `sdr.py server` | All bands | All captures in parallel from JSON config, channelizer | New |
+| **Web Dashboard** | `sdr.py web` | — | Standalone web UI for viewing detections from output directory. Also embeddable in server via `--web` flag | New |
 
 ## Server Configs
 
@@ -43,6 +44,13 @@ Two server configs are provided:
 - **`configs/server_voice.json`** — Voice-enabled: adds PMR446 and 70cm voice demod via HackRF channelizer, keeps ADS-B on RTL-SDR. PMR transcription enabled.
 
 The FM voice parser runs through the channelizer, so HackRF can simultaneously demodulate voice channels (PMR, 70cm) and detect keyfobs/TPMS from the same 20 MHz capture — no extra RTL-SDR needed. Standalone scanners in server config support `"args"` for extra CLI flags (e.g., `["--transcribe", "--digital"]`).
+
+### Web Dashboard
+
+The web dashboard can run in two modes:
+
+- **Standalone**: `python3 sdr.py web` — reads detection CSVs from the output directory and serves a web UI on port 8080. Use `-p` for a custom port, `-d` for a custom output directory.
+- **Embedded in server**: `sudo python3 sdr.py server --web` or `--web-port 3000` — starts the web UI alongside the server. Also configurable via `"web_port"` in the server JSON config.
 
 ## Test Notes
 

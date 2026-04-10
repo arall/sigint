@@ -62,6 +62,7 @@ python3 sdr.py --help                 # All options
 | Heatmap | `sdr.py heatmap` | — |
 | Correlate | `sdr.py correlate` | — |
 | Central Server | `sdr.py server` | All bands |
+| Web Dashboard | `sdr.py web` | — |
 
 See [docs/modules.md](docs/modules.md) for descriptions, test notes, and known limitations.
 
@@ -95,6 +96,12 @@ python3 sdr.py correlate output/*.csv        # Find co-occurring devices across 
 # Central server (all captures in parallel)
 sudo python3 sdr.py server configs/server.json         # Default config
 sudo python3 sdr.py --tak --gps server configs/server_voice.json  # Voice recording config
+sudo python3 sdr.py server configs/server.json --web   # Server with web dashboard
+
+# Web dashboard (standalone, reads from output directory)
+python3 sdr.py web                                     # Default port 8080
+python3 sdr.py web -p 3000                             # Custom port
+python3 sdr.py web -d /path/to/output                  # Custom output directory
 
 # Stream to ATAK
 python3 sdr.py --tak --gps pmr
