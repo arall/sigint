@@ -11,7 +11,7 @@ Usage:
     python3 sdr.py web -d /path/to/output # custom output directory
 
 Routes:
-    GET /                  — HTML dashboard (tabs: overview, detections, activity)
+    GET /                  — HTML dashboard (tabs: live, log, personas, config, timeline)
     GET /api/state         — JSON dashboard summary
     GET /api/events        — SSE live updates (state JSON every 2s)
     GET /api/detections    — Individual detection list (newest first, filterable)
@@ -881,15 +881,15 @@ tr:last-child td { border-bottom: none; }
 
 <!-- Tabs -->
 <div class="tabs">
-  <button class="tab-btn active" data-tab="overview">Overview</button>
-  <button class="tab-btn" data-tab="detections">Detections</button>
-  <button class="tab-btn" data-tab="devices">Devices</button>
-  <button class="tab-btn" data-tab="captures">Captures</button>
-  <button class="tab-btn" data-tab="activity">Activity</button>
+  <button class="tab-btn active" data-tab="live">Live</button>
+  <button class="tab-btn" data-tab="log">Log</button>
+  <button class="tab-btn" data-tab="personas">Personas</button>
+  <button class="tab-btn" data-tab="config">Config</button>
+  <button class="tab-btn" data-tab="timeline">Timeline</button>
 </div>
 
-<!-- Tab: Overview -->
-<div id="tab-overview" class="tab-content active">
+<!-- Tab: Live -->
+<div id="tab-live" class="tab-content active">
   <div class="section">
     <div class="section-title">Signals</div>
     <table>
@@ -909,8 +909,8 @@ tr:last-child td { border-bottom: none; }
   </div>
 </div>
 
-<!-- Tab: Detections -->
-<div id="tab-detections" class="tab-content">
+<!-- Tab: Log -->
+<div id="tab-log" class="tab-content">
   <div class="section">
     <div class="section-title">
       <span>Detections</span>
@@ -934,8 +934,8 @@ tr:last-child td { border-bottom: none; }
   </div>
 </div>
 
-<!-- Tab: Devices -->
-<div id="tab-devices" class="tab-content">
+<!-- Tab: Personas -->
+<div id="tab-personas" class="tab-content">
   <!-- Summary cards -->
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap" id="dev-stats"></div>
 
@@ -973,16 +973,16 @@ tr:last-child td { border-bottom: none; }
   </div>
 </div>
 
-<!-- Tab: Captures -->
-<div id="tab-captures" class="tab-content">
+<!-- Tab: Config -->
+<div id="tab-config" class="tab-content">
   <div class="section">
     <div class="section-title">Capture Configuration</div>
     <div class="section-body" id="captures"><div class="empty">loading...</div></div>
   </div>
 </div>
 
-<!-- Tab: Activity -->
-<div id="tab-activity" class="tab-content">
+<!-- Tab: Timeline -->
+<div id="tab-timeline" class="tab-content">
   <div class="section">
     <div class="section-title">Activity (last 60 minutes)</div>
     <div class="chart-container" id="activity-chart">
@@ -1089,7 +1089,7 @@ async function loadConfig() {
   }
 }
 
-// --- Overview Tab ---
+// --- Live Tab ---
 function updateOverview(state) {
   document.getElementById('h-time').textContent = state.time || '-';
   document.getElementById('h-uptime').textContent = state.uptime || '-';
@@ -1129,7 +1129,7 @@ function updateOverview(state) {
     diskEl.style.color = sys.disk_pct > 90 ? '#f44336' : sys.disk_pct > 75 ? '#ffeb3b' : '#e0e0e0';
   }
 
-  // (Captures are in their own tab now)
+  // (Config is in its own tab)
 
   // Signals table
   const tbody = document.getElementById('signals');
@@ -1169,7 +1169,7 @@ function updateOverview(state) {
   populateFilter(state.signals);
 }
 
-// --- Detections Tab ---
+// --- Log Tab ---
 let detOffset = 0;
 let detectionsLoaded = false;
 let filterPopulated = false;
@@ -1403,10 +1403,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     panel.classList.add('active');
     panel.style.display = 'block';
     location.hash = btn.dataset.tab;
-    if (btn.dataset.tab === 'detections') loadDetections();
-    if (btn.dataset.tab === 'devices') loadPersonas();
-    if (btn.dataset.tab === 'captures') loadConfig();
-    if (btn.dataset.tab === 'activity') loadActivity();
+    if (btn.dataset.tab === 'log') loadDetections();
+    if (btn.dataset.tab === 'personas') loadPersonas();
+    if (btn.dataset.tab === 'config') loadConfig();
+    if (btn.dataset.tab === 'timeline') loadActivity();
   });
 });
 if (location.hash) {
