@@ -4,6 +4,8 @@ ATAK + SDR for Signal Triangulation
 
 A distributed SIGINT system that detects radio emissions from the field, triangulates emitter positions via RSSI multilateration, and overlays them on ATAK in real time.
 
+![Web Dashboard](docs/images/web-ui.png)
+
 * Central server (pelican case) with wideband SDRs continuously scans all bands
 * Lightweight sensor nodes (~$80/unit) with RTL-SDR + GPS are distributed across the area
 * **Short-burst signals** (keyfobs, TPMS, pagers): nodes scan autonomously, triangulation via post-hoc correlation

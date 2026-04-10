@@ -4,45 +4,23 @@
 
 Nodes default to scanning short-burst frequencies autonomously (since those signals are gone before any central coordination could happen). Central handles wideband monitoring and orchestrates nodes for longer-duration signals.
 
-```
-                 ┌──────────────────────────────┐
-                 │   CENTRAL SERVER (Pelican)   │
-                 │                              │
-                 │  HackRF x2 (wideband scan)   │
-                 │  RTL-SDR x2 (ADS-B + GSM)    │
-                 │                              │
-                 │  Detects long signals →      │
-                 │  Tasks nodes to measure      │
-                 │                              │
-                 │  Correlates short-burst      │
-                 │  detections from nodes       │
-                 └─────────────┬────────────────┘
-                               │ Task / Report
-                               │ (LoRa / Meshtastic)
-                 ┌─────────────┼──────────────┐
-                 ▼             ▼              ▼
-           ┌──────────┐   ┌──────────┐   ┌──────────┐
-           │  NODE A  │   │  NODE B  │   │  NODE C  │
-           │ 1x RTL   │   │ 1x RTL   │   │ 1x RTL   │
-           │ GPS      │   │ GPS      │   │ GPS      │
-           │ LoRa     │   │ LoRa     │   │ LoRa     │
-           │          │   │          │   │          │
-           │ DEFAULT: │   │ DEFAULT: │   │ DEFAULT: │
-           │ Keyfob/  │   │ Keyfob/  │   │ Keyfob/  │
-           │ TPMS/    │   │ TPMS/    │   │ TPMS/    │
-           │ short-   │   │ short-   │   │ short-   │
-           │ burst    │   │ burst    │   │ burst    │
-           │          │   │          │   │          │
-           │ ON CMD:  │   │ ON CMD:  │   │ ON CMD:  │
-           │ Retune → │   │ Retune → │   │ Retune → │
-           │ Measure  │   │ Measure  │   │ Measure  │
-           │ → Return │   │ → Return │   │ → Return │
-           └────┬─────┘   └────┬─────┘   └────┬─────┘
-                │              │              │
-                └──────────────┼──────────────┘
-                               ▼
-                    RSSI + GPS → Triangulate
-                    → CoT → ATAK map
+```mermaid
+flowchart TD
+    Server["<b>CENTRAL SERVER (Pelican)</b><br/>HackRF x2 (wideband scan)<br/>RTL-SDR x2 (ADS-B + GSM)<br/><br/>Detects long signals → tasks nodes<br/>Correlates short-burst reports"]
+
+    NodeA["<b>NODE A</b><br/>1x RTL-SDR · GPS · LoRa<br/><br/><i>On cmd:</i> Retune → Measure → Return"]
+    NodeB["<b>NODE B</b><br/>1x RTL-SDR · GPS · LoRa<br/><br/><i>On cmd:</i> Retune → Measure → Return"]
+    NodeC["<b>NODE C</b><br/>1x RTL-SDR · GPS · LoRa<br/><br/><i>On cmd:</i> Retune → Measure → Return"]
+
+    Tri["RSSI + GPS → Triangulate<br/>→ CoT → ATAK map"]
+
+    Server -- "Task / Report<br/>(LoRa / Meshtastic)" --> NodeA
+    Server -- "Task / Report<br/>(LoRa / Meshtastic)" --> NodeB
+    Server -- "Task / Report<br/>(LoRa / Meshtastic)" --> NodeC
+
+    NodeA --> Tri
+    NodeB --> Tri
+    NodeC --> Tri
 ```
 
 ## Task Protocol
