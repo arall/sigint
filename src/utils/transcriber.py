@@ -10,7 +10,7 @@ Environment variables:
   OPENAI_API_KEY    - OpenAI API key (uses api.openai.com)
   WHISPER_API_URL   - Custom endpoint URL (e.g. http://myserver:8000/v1/audio/transcriptions)
   WHISPER_BACKEND   - Force backend: "api", "local", or "auto" (default: auto)
-  WHISPER_LANGUAGES - Expected languages, comma-separated (e.g. "es,ca,en")
+  WHISPER_LANGUAGES - Expected languages, comma-separated (e.g. "es,en")
                       First language is used as primary hint; improves accuracy
                       for short/noisy audio that Whisper might misdetect.
 """
@@ -164,7 +164,7 @@ def _get_language_hints(language=None):
     if not env_langs:
         return None, None
 
-    # Parse comma-separated language codes (e.g. "es,ca,en")
+    # Parse comma-separated language codes (e.g. "es,en")
     langs = [l.strip().lower() for l in env_langs.split(",") if l.strip()]
     if not langs:
         return None, None

@@ -70,7 +70,7 @@ Tested with HackRF TX (OOK bursts at 433.92 MHz) and ambient ISM signals. OOK de
 
 ### PMR446
 
-Tested with HackRF TX → RTL-SDR RX loopback. FM-modulated voice on CH1, captured via async streaming, FM demodulated, and transcribed with Whisper in English, Spanish, and Catalan.
+Tested with HackRF TX → RTL-SDR RX loopback. FM-modulated voice on CH1, captured via async streaming, FM demodulated, and transcribed with Whisper in English and Spanish.
 
 Quality metrics (synthetic): 0.83 cross-correlation, zero spikes > 0.50, RMS within 3% of original. RF loopback: ~0.25 correlation (limited by consumer SDR phase noise).
 

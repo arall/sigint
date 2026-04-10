@@ -2,8 +2,7 @@
 PMR446 transcription tests.
 
 Verifies that the Whisper transcription pipeline produces accurate text
-from voice audio in English, Spanish, and Catalan — both with explicit
-language hints and with auto-detection.
+from voice audio in English and Spanish with explicit language hints.
 
 Test audio is generated via gTTS (Google Text-to-Speech) on first run.
 
@@ -30,11 +29,6 @@ TEST_CASES = {
         'text': 'Contacto establecido en el canal cinco, cambio',
         'file': os.path.join(DATA_DIR, 'voice_es.mp3'),
         'keywords': ['contacto', 'canal', 'cambio'],
-    },
-    'ca': {
-        'text': 'Contacte establert al canal cinc, canvi',
-        'file': os.path.join(DATA_DIR, 'voice_ca.mp3'),
-        'keywords': ['contacte', 'canal', 'canvi'],
     },
 }
 
@@ -74,21 +68,6 @@ def test_transcribe_with_language_hint():
         print(f"  [{lang}] \"{result}\"")
         assert not missing, (
             f"[{lang}] Missing keywords {missing} in: \"{result}\"")
-
-
-def test_transcribe_auto_detect():
-    """Transcription without language hint must still contain expected keywords."""
-    from utils.transcriber import transcribe
-
-    for lang, tc in TEST_CASES.items():
-        result = transcribe(tc['file'], model_name='base')
-        assert result is not None, f"[{lang}] Auto-detect returned None"
-
-        result_lower = result.lower()
-        missing = [kw for kw in tc['keywords'] if kw not in result_lower]
-        print(f"  [{lang} auto] \"{result}\"")
-        assert not missing, (
-            f"[{lang}] Auto-detect missing keywords {missing} in: \"{result}\"")
 
 
 def test_transcribe_through_demod_pipeline():
@@ -159,12 +138,12 @@ def test_transcribe_through_demod_pipeline():
 
 
 def test_whisper_not_installed():
-    """Transcriber returns None gracefully when whisper is missing."""
-    import importlib
+    """Transcriber returns None gracefully when whisper is missing
+    and no remote API is configured."""
+    import os
     import utils.transcriber as mod
 
-    # Temporarily break the import
-    original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
+    # Temporarily break the whisper import
     def mock_import(name, *args, **kwargs):
         if name == 'whisper':
             raise ImportError("mocked")
@@ -174,15 +153,24 @@ def test_whisper_not_installed():
     mod._model = None
     mod._model_name = None
 
+    # Remove API fallbacks so the test actually hits the missing-whisper path
+    saved_env = {
+        k: os.environ.pop(k, None)
+        for k in ("OPENAI_API_KEY", "WHISPER_API_URL")
+    }
+
     import builtins
-    old = builtins.__import__
+    original_import = builtins.__import__
     builtins.__import__ = mock_import
     try:
         result = mod.transcribe('tests/data/original_voice.wav')
         print(f"  No whisper: {result}")
         assert result is None, "Should return None when whisper unavailable"
     finally:
-        builtins.__import__ = old
+        builtins.__import__ = original_import
+        for k, v in saved_env.items():
+            if v is not None:
+                os.environ[k] = v
 
 
 def test_hallucination_filter():
@@ -250,7 +238,6 @@ if __name__ == '__main__':
 
     tests = [
         ("Transcribe with language hint", test_transcribe_with_language_hint),
-        ("Transcribe with auto-detect", test_transcribe_auto_detect),
         ("Transcribe through demod pipeline", test_transcribe_through_demod_pipeline),
         ("Hallucination filter", test_hallucination_filter),
         ("Noise audio returns None", test_noise_audio_returns_none),

@@ -189,6 +189,11 @@ class CSVTailer:
         self._file_handle = None
         self._file_pos = 0
 
+        # Transcript sidecar — lets detections appear immediately and get
+        # text back-filled later when the async transcriber finishes.
+        self._transcripts = {}      # basename(audio_file) -> transcript text
+        self._transcripts_mtime = 0
+
     def start(self):
         """Start background thread that tails CSV files."""
         t = threading.Thread(target=self._run, daemon=True, name="csv-tailer")
@@ -227,6 +232,8 @@ class CSVTailer:
 
     def _run(self):
         """Background loop: read all CSVs, tail the latest for new rows."""
+        # Preload existing transcripts so the first CSV replay sees them
+        self._poll_transcripts()
         while not self._stop.is_set():
             all_csvs = self._find_all_csvs()
 
@@ -280,7 +287,50 @@ class CSVTailer:
                         pass
                 self._file_pos = self._file_handle.tell()
 
+            # Poll transcripts.json for new/updated entries and back-fill
+            self._poll_transcripts()
+
             self._stop.wait(1.0)
+
+    def _poll_transcripts(self):
+        """Reload transcripts.json if it changed and back-fill detections."""
+        path = os.path.join(self.output_dir, "transcripts.json")
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return
+        if mtime == self._transcripts_mtime:
+            return
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return
+        except (OSError, json.JSONDecodeError):
+            return
+        self._transcripts_mtime = mtime
+
+        # Figure out which keys are new relative to last time
+        new_keys = {k: v for k, v in data.items() if self._transcripts.get(k) != v}
+        self._transcripts = data
+        if not new_keys:
+            return
+
+        # Back-fill already-seen detections whose audio file now has a transcript
+        with self._lock:
+            for d in self._detections:
+                af = d.get("audio_file")
+                if not af:
+                    continue
+                t = new_keys.get(af)
+                if t and d.get("transcript") != t:
+                    d["transcript"] = t
+                    # Refresh detail string for the Log tab
+                    sig = d.get("signal_type", "")
+                    if sig in ("PMR446", "dPMR", "70cm", "MarineVHF",
+                               "2m", "FRS", "FM_voice"):
+                        d["detail"] = f'"{t[:60]}"'
+                        self._type_last_detail[sig] = d["detail"]
 
     def _process_row(self, row):
         """Process a single CSV row into internal state."""
@@ -304,8 +354,14 @@ class CSVTailer:
         ts = row.get("timestamp", "")
         ch = row.get("channel", "")
         audio_file = row.get("audio_file", "") or None
-        detail = _extract_detail(sig, ch, meta)
         transcript = meta.get("transcript")
+        # Overlay any already-known sidecar transcript
+        if audio_file and not transcript:
+            sidecar = self._transcripts.get(audio_file)
+            if sidecar:
+                transcript = sidecar
+                meta["transcript"] = sidecar
+        detail = _extract_detail(sig, ch, meta)
 
         with self._lock:
             self._type_counts[sig] += 1

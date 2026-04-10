@@ -203,7 +203,7 @@ python3 tests/hw/test_pmr_audio.py           # Layered pipeline diagnostic (real
 - WiFi scanner: scapy (`pip install scapy`), WiFi adapter with monitor mode support (e.g., Alfa), iw
 - Optional: openai-whisper (local transcription — requires ffmpeg and ~1GB PyTorch), gTTS (test audio generation)
 - Optional external tools: dump1090 (ADS-B), rtl_ais (AIS), multimon-ng (POCSAG), rtl_433 (ISM)
-- Configuration: `.env` file for `OPENAI_API_KEY` (OpenAI Whisper API, preferred over local), `WHISPER_LANGUAGES` (e.g. "es,ca,en"), `TAK_HOST`/`TAK_PORT` (see `.env.example`)
+- Configuration: `.env` file for `OPENAI_API_KEY` (OpenAI Whisper API, preferred over local), `WHISPER_LANGUAGES` (e.g. "es,en"), `TAK_HOST`/`TAK_PORT` (see `.env.example`)
 
 ## Code Patterns
 

@@ -274,6 +274,14 @@ class PMRScanner:
         )
         self.sdr = None
 
+        # Background transcription worker — lets detections appear on the
+        # dashboard immediately, with transcripts back-filled when ready.
+        self._async_transcriber = None
+        if self.transcribe_audio:
+            from utils.async_transcriber import AsyncTranscriber
+            self._async_transcriber = AsyncTranscriber(output_dir=output_dir)
+            self._async_transcriber.start()
+
         # Track active transmissions per channel (analog)
         self._tx_active = {ch: False for ch in PMR_CHANNELS}
         self._wideband_buffers = {ch: []
@@ -354,7 +362,6 @@ class PMRScanner:
                 self._tx_active[channel] = False
 
                 audio_file = None
-                transcript = None
 
                 # Check signal duration from signal-present samples only
                 # (excludes holdover noise that inflates the count)
@@ -377,25 +384,12 @@ class PMRScanner:
                         print(f"Audio processing error: {e}", file=sys.stderr)
                     self._wideband_buffers[channel] = []
 
-                # Transcribe audio to text
-                if self.transcribe_audio and audio_file:
-                    try:
-                        transcript = transcribe(
-                            audio_file, model_name=self.whisper_model,
-                            language=self.language)
-                        if transcript:
-                            print(f"\n  📝 CH{channel}: \"{transcript}\"\n")
-                    except Exception as e:
-                        print(f"Transcription error: {e}", file=sys.stderr)
-
-                # Build metadata JSON
+                # Log the detection immediately — transcripts are back-filled
+                # by the async transcriber via transcripts.json sidecar.
                 import json
-                meta = {}
-                if transcript:
-                    meta["transcript"] = transcript
-                metadata = json.dumps(meta) if meta else ""
+                meta = {"duration_s": round(signal_duration, 2)}
+                metadata = json.dumps(meta)
 
-                # Log ONE detection for this transmission
                 self.logger.log_signal(
                     signal_type="PMR446",
                     frequency_hz=channel_freq,
@@ -406,6 +400,14 @@ class PMRScanner:
                         audio_file) if audio_file else None,
                     metadata=metadata,
                 )
+
+                # Kick off background transcription (non-blocking)
+                if self._async_transcriber and audio_file:
+                    self._async_transcriber.submit(
+                        audio_file,
+                        model=self.whisper_model,
+                        language=self.language,
+                    )
 
                 # Reset peak tracking
                 self._tx_peak_snr[channel] = 0.0
@@ -538,6 +540,13 @@ class PMRScanner:
                     audio_file=os.path.basename(audio_file) if audio_file else None,
                     metadata=meta,
                 )
+
+                if self._async_transcriber and audio_file:
+                    self._async_transcriber.submit(
+                        audio_file,
+                        model=self.whisper_model,
+                        language=self.language,
+                    )
 
                 self._dpmr_peak_snr[channel] = 0.0
                 self._dpmr_peak_power[channel] = -100.0
@@ -793,9 +802,24 @@ class PMRScanner:
                             audio_file) if audio_file else None,
                     )
 
+                    if self._async_transcriber and audio_file:
+                        self._async_transcriber.submit(
+                            audio_file,
+                            model=self.whisper_model,
+                            language=self.language,
+                        )
+
             if self.sdr:
                 self.sdr.close()
                 print("SDR closed.")
+
+            # Stop the async transcriber worker (fire-and-forget —
+            # remaining jobs are orphaned; they can be re-run later).
+            if self._async_transcriber:
+                try:
+                    self._async_transcriber.stop(timeout=1.0)
+                except Exception:
+                    pass
 
             # Stop logger and report
             total_detections = self.logger.stop()

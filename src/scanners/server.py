@@ -74,6 +74,7 @@ _C = {
 _TYPE_COLOR = {
     "BLE-Adv": "cyan",
     "WiFi-Probe": "blue",
+    "WiFi-AP": "blue",
     "lora": "magenta",
     "keyfob": "yellow",
     "tpms": "yellow",
@@ -114,6 +115,10 @@ def _extract_details(detection):
         if ssid and ssid != "(broadcast)":
             return ssid[:28]
         return meta.get("manufacturer", "")[:28]
+    elif sig == "WiFi-AP":
+        ssid = meta.get("ssid", "") or "(hidden)"
+        crypto = meta.get("crypto", "")
+        return f"{ssid[:20]} {crypto}".strip()
     elif sig == "ADS-B":
         cs = meta.get("callsign", "").strip()
         alt = meta.get("altitude", "")
@@ -222,6 +227,10 @@ def _create_parser(name, logger, channel_cfg=None, capture_cfg=None):
         return ProbeRequestParser(
             logger=logger, persona_db_path=persona_path)
 
+    elif name == "beacon":
+        from parsers.wifi.beacon import BeaconParser
+        return BeaconParser(logger=logger)
+
     elif name == "remoteid_wifi":
         from parsers.wifi.remote_id import WiFiRemoteIDParser
         return WiFiRemoteIDParser(logger=logger)
@@ -328,6 +337,8 @@ class ServerOrchestrator:
             uid = meta.get("persona_id") or detection.channel
         elif sig == "WiFi-Probe":
             uid = meta.get("persona_id") or detection.device_id
+        elif sig == "WiFi-AP":
+            uid = meta.get("bssid") or detection.device_id
         elif sig == "ADS-B":
             uid = meta.get("icao") or detection.channel
         elif sig == "keyfob":

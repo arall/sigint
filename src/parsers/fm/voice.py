@@ -232,6 +232,13 @@ class FMVoiceParser(BaseParser):
         self._audio_dir = os.path.join(output_dir, "audio")
         os.makedirs(self._audio_dir, exist_ok=True)
 
+        # Background transcription worker (non-blocking)
+        self._async_transcriber = None
+        if self.transcribe:
+            from utils.async_transcriber import AsyncTranscriber
+            self._async_transcriber = AsyncTranscriber(output_dir=output_dir)
+            self._async_transcriber.start()
+
     @property
     def detection_count(self):
         return self._detection_count
@@ -345,7 +352,7 @@ class FMVoiceParser(BaseParser):
 
         # FM demodulate
         audio_file = None
-        transcript = None
+        audio_path = None
         try:
             audio, audio_rate = extract_and_demodulate_buffers(
                 coalesced,
@@ -369,33 +376,17 @@ class FMVoiceParser(BaseParser):
                 save_audio(audio, audio_rate, audio_path)
                 audio_file = filename
 
-                # Transcribe
-                if self.transcribe:
-                    try:
-                        from utils.transcriber import transcribe as whisper_transcribe
-                        result = whisper_transcribe(
-                            audio_path,
-                            model_name=self.whisper_model,
-                            language=self.language,
-                        )
-                        if result:
-                            transcript = result.strip() if isinstance(result, str) else result.get("text", "").strip()
-                    except Exception as e:
-                        print(f"  [WARN] Transcription failed: {e}")
-
         except Exception as e:
             print(f"  [WARN] FM demod failed for {ch_label}: {e}")
             return
 
-        # Build metadata
+        # Build metadata (transcripts land later via the sidecar)
         metadata = {
             "duration_s": round(signal_duration, 2),
             "band": self.band_name,
             "modulation": "FM",
             "deviation_hz": self.fm_deviation,
         }
-        if transcript:
-            metadata["transcript"] = transcript
 
         detection = SignalDetection.create(
             signal_type=self.signal_type,
@@ -409,8 +400,22 @@ class FMVoiceParser(BaseParser):
         self.logger.log(detection)
         self._detection_count += 1
 
+        # Enqueue background transcription — detection is already logged,
+        # so the web UI shows it immediately and back-fills the text later.
+        if self._async_transcriber and audio_path:
+            self._async_transcriber.submit(
+                audio_path,
+                model=self.whisper_model,
+                language=self.language,
+            )
+
     def shutdown(self):
         """Finalize any in-progress transmissions."""
         for ch_label in list(self._tx_active):
             if self._tx_active[ch_label] and self._tx_buffers[ch_label]:
                 self._finalize_tx(ch_label, noise_floor=-80.0)
+        if self._async_transcriber:
+            try:
+                self._async_transcriber.stop(timeout=1.0)
+            except Exception:
+                pass
