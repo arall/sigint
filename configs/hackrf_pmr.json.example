@@ -1,0 +1,16 @@
+{
+  "captures": [
+    {
+      "name": "pmr",
+      "type": "hackrf",
+      "serial": "YOUR_HACKRF_SERIAL",
+      "ppm": 0,
+      "center_freq_mhz": 446.05,
+      "sample_rate_mhz": 4,
+      "lna_gain": 32,
+      "vga_gain": 40,
+      "transcribe": false,
+      "channels": []
+    }
+  ]
+}
