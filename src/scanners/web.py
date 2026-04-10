@@ -1013,48 +1013,75 @@ function esc(s) {
 }
 
 // --- Config / Captures ---
-let configLoaded = false;
-
 async function loadConfig() {
-  if (configLoaded) return;
   const capEl = document.getElementById('captures');
   try {
     const r = await fetch('/api/config');
     const cfg = await r.json();
     if (!cfg.captures || !cfg.captures.length) {
       capEl.innerHTML = '<div class="empty">no server_info.json found (server not running?)</div>';
-      configLoaded = true;
       return;
     }
+    const STATUS_COLORS = {
+      running: '#4caf50',
+      pending: '#888',
+      degraded: '#ff9800',
+      failed: '#f44336',
+    };
     let html = '';
     cfg.captures.forEach(cap => {
       const t = cap.type;
-      let line = '<div style="margin-bottom:8px">';
+      const status = cap.status || 'pending';
+      const statusColor = STATUS_COLORS[status] || '#888';
+      let line = '<div style="margin-bottom:8px;border-left:3px solid ' + statusColor + ';padding-left:8px">';
       line += '<div><span style="color:#4fc3f7;font-weight:600">' + esc(cap.name) + '</span>';
+      line += ' <span style="background:' + statusColor + ';color:#000;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-left:6px">' + esc(status.toUpperCase()) + '</span>';
       line += ' <span style="color:#888">' + esc(cap.device || '') + '</span></div>';
+      if (cap.status_message) {
+        line += '<div style="font-size:11px;color:' + statusColor + ';margin-left:12px">\u26a0 ' + esc(cap.status_message) + '</div>';
+      }
+
+      // Coverage line: frequency range + hopping/continuous/passive mode
+      const modeIcon = {
+        continuous: '\u25cf',   // filled dot — continuous
+        hopping:    '\u{1F500}', // shuffle — hopping
+        passive:    '\u{1F442}', // ear — passive listen
+      };
+      if (cap.coverage || cap.mode) {
+        const icon = modeIcon[cap.mode] || '';
+        line += '<div style="font-size:11px;color:#9ecbff;margin-left:12px;margin-top:2px">'
+             + (icon ? icon + ' ' : '')
+             + esc(cap.coverage || '')
+             + (cap.mode ? ' <span style="color:#666">\u00b7 ' + esc(cap.mode) + '</span>' : '')
+             + '</div>';
+      }
 
       const tags = [];
       if (t === 'hackrf') {
-        tags.push(cap.center_freq_mhz + ' MHz');
-        tags.push(cap.sample_rate_mhz + ' MS/s');
+        tags.push(cap.center_freq_mhz + ' MHz center');
+        tags.push(cap.sample_rate_mhz + ' MS/s BW');
         if (cap.lna_gain != null) tags.push('LNA ' + cap.lna_gain);
         if (cap.vga_gain != null) tags.push('VGA ' + cap.vga_gain);
         if (cap.transcribe) tags.push('\u2705 transcribe');
         if (cap.whisper_model && cap.whisper_model !== 'base') tags.push('whisper: ' + cap.whisper_model);
         if (cap.language) tags.push('lang: ' + cap.language);
       } else if (t === 'rtlsdr') {
-        tags.push(cap.center_freq_mhz + ' MHz');
+        tags.push(cap.center_freq_mhz + ' MHz center');
+        if (cap.sample_rate_mhz) tags.push(cap.sample_rate_mhz + ' MS/s BW');
         if (cap.parsers) tags.push(cap.parsers.join(', '));
       } else if (t === 'rtlsdr_sweep') {
-        tags.push(cap.band_start_mhz + '-' + cap.band_end_mhz + ' MHz');
-        tags.push('\u{1F500} hopping');
         if (cap.parsers) tags.push(cap.parsers.join(', '));
       } else if (t === 'ble') {
         tags.push('Bluetooth LE');
         if (cap.parsers) tags.push(cap.parsers.join(', '));
       } else if (t === 'wifi') {
         tags.push('WiFi monitor');
-        if (cap.channels && cap.channels.length) tags.push('ch ' + cap.channels.join(','));
+        if (cap.band) tags.push('band: ' + cap.band);
+        if (cap.channels && cap.channels.length) {
+          const ch = cap.channels;
+          const chStr = ch.length > 8 ? ch.slice(0, 6).join(',') + '\u2026(+' + (ch.length - 6) + ')' : ch.join(',');
+          tags.push('ch ' + chStr);
+        }
         if (cap.parsers) tags.push(cap.parsers.join(', '));
       } else if (t === 'standalone') {
         tags.push(esc(cap.scanner_type || ''));
@@ -1083,7 +1110,6 @@ async function loadConfig() {
       html += '<div style="font-size:11px;color:#555;margin-top:4px">Started: ' + esc(cfg.started.replace('T', ' ').split('.')[0]) + '</div>';
     }
     capEl.innerHTML = html;
-    configLoaded = true;
   } catch(e) {
     capEl.innerHTML = '<div class="empty">could not load config</div>';
   }
@@ -1409,6 +1435,12 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (btn.dataset.tab === 'timeline') loadActivity();
   });
 });
+
+// Auto-refresh Config tab every 3s so status badges stay live
+setInterval(() => {
+  const cfgTab = document.getElementById('tab-config');
+  if (cfgTab && cfgTab.classList.contains('active')) loadConfig();
+}, 3000);
 if (location.hash) {
   const btn = document.querySelector('.tab-btn[data-tab="'+location.hash.slice(1)+'"]');
   if (btn) btn.click();

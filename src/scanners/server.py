@@ -30,6 +30,24 @@ TASKABLE_SIGNALS = {
     "lora", "ISM", "pocsag", "DroneCtrl",
 }
 
+# Coverage description for known standalone scanner types.
+# Maps scanner_type -> (human-readable range, mode).
+_STANDALONE_COVERAGE = {
+    "pmr":        ("446.00625\u2013446.09375 MHz (PMR446 ch 1\u20138)", "continuous"),
+    "fm":         ("depends on --band profile",                        "hopping"),
+    "adsb":       ("1090 MHz (Mode S)",                                 "continuous"),
+    "ais":        ("161.975 / 162.025 MHz (marine ch 87B/88B)",         "continuous"),
+    "pocsag":     ("153\u2013170 MHz (POCSAG paging)",                  "continuous"),
+    "ism":        ("433.92 / 868 / 915 MHz ISM",                        "continuous"),
+    "lora":       ("868.1\u2013869.525 MHz (EU) or 902\u2013928 MHz (US)", "continuous"),
+    "keyfob":     ("433.92 MHz (or 315 MHz)",                           "continuous"),
+    "tpms":       ("433.92 MHz (or 315 MHz)",                           "continuous"),
+    "gsm":        ("876\u2013915 MHz (GSM900 uplink)",                  "hopping"),
+    "lte":        ("LTE uplink bands",                                  "hopping"),
+    "drone-video":("2.4 / 5.8 GHz ISM (HackRF)",                        "continuous"),
+    "scan":       ("wideband energy scan",                              "hopping"),
+}
+
 # LoRa channel definitions (used when creating LoRa parsers)
 LORA_CHANNELS_EU = {
     "868.1": 868.1e6, "868.3": 868.3e6,
@@ -235,6 +253,11 @@ class ServerOrchestrator:
         self._start_time = None
         self._web_port = web_port
 
+        # Per-capture health: name -> {"status": str, "message": str, "updated": iso}
+        # Status values: "pending", "running", "degraded", "failed"
+        self._capture_status = {}
+        self._status_lock = threading.Lock()
+
         # Global flags to pass to standalone subprocesses
         self._output_dir = output_dir
         self._use_gps = use_gps
@@ -367,6 +390,7 @@ class ServerOrchestrator:
             cap_type = entry["type"]
             cap_name = entry.get("name", cap_type)
 
+            self._set_status(cap_name, "pending", "setting up")
             try:
                 if cap_type == "hackrf":
                     self._setup_hackrf(entry, cap_name)
@@ -382,9 +406,11 @@ class ServerOrchestrator:
                     self._setup_standalone(entry, cap_name)
                 else:
                     print(f"  [WARN] Unknown capture type: {cap_type}")
+                    self._set_status(cap_name, "failed", f"unknown capture type: {cap_type}")
             except Exception as e:
                 print(f"  [ERROR] Failed to setup '{cap_name}': {e}")
                 print(f"          Skipping this capture, others will continue.")
+                self._set_status(cap_name, "failed", f"setup error: {e}")
 
         print(f"\n[SERVER] {len(self._captures)} capture sources, "
               f"{len(self._parsers)} parsers configured")
@@ -461,6 +487,38 @@ class ServerOrchestrator:
         # Write structured capture info for the web UI
         self._write_server_info()
 
+    def _set_status(self, name, status, message=""):
+        """Update per-capture health status and surface it to terminal + web."""
+        prev = None
+        with self._status_lock:
+            prev = self._capture_status.get(name, {}).get("status")
+            self._capture_status[name] = {
+                "status": status,
+                "message": message,
+                "updated": datetime.now().isoformat(),
+            }
+        # Only print on transitions so the terminal isn't spammed
+        if prev != status:
+            color = {
+                "running": "green",
+                "pending": "dim",
+                "degraded": "yellow",
+                "failed": "red",
+            }.get(status, "white")
+            badge = _col(color, f"[{status.upper()}]")
+            line = f"  {badge} {name}"
+            if message:
+                line += f": {message}"
+            try:
+                print(line)
+            except Exception:
+                pass
+        # Re-publish server_info.json so the web UI picks up the change
+        try:
+            self._write_server_info()
+        except Exception:
+            pass
+
     def _write_server_info(self):
         """Write server_info.json to output dir for the standalone web UI."""
         captures = []
@@ -473,13 +531,17 @@ class ServerOrchestrator:
             if cap_type == "hackrf":
                 serial = entry.get("serial", "")
                 cap["device"] = f"HackRF {serial[-8:]}" if serial else "HackRF"
-                cap["center_freq_mhz"] = entry.get("center_freq_mhz", 0)
-                cap["sample_rate_mhz"] = entry.get("sample_rate_mhz", 20)
+                center = entry.get("center_freq_mhz", 0)
+                sr = entry.get("sample_rate_mhz", 20)
+                cap["center_freq_mhz"] = center
+                cap["sample_rate_mhz"] = sr
                 cap["lna_gain"] = entry.get("lna_gain")
                 cap["vga_gain"] = entry.get("vga_gain")
                 cap["transcribe"] = entry.get("transcribe", False)
                 cap["whisper_model"] = entry.get("whisper_model", "base")
                 cap["language"] = entry.get("language")
+                cap["coverage"] = f"{center - sr/2:.2f}\u2013{center + sr/2:.2f} MHz"
+                cap["mode"] = "continuous"
                 cap["channels"] = []
                 for ch in entry.get("channels", []):
                     cap["channels"].append({
@@ -492,26 +554,84 @@ class ServerOrchestrator:
                     })
             elif cap_type == "rtlsdr":
                 cap["device"] = f"RTL-SDR #{entry.get('device_index', 0)}"
-                cap["center_freq_mhz"] = entry.get("center_freq_mhz", 0)
+                center = entry.get("center_freq_mhz", 0)
+                sr = entry.get("sample_rate_mhz", 2.4)
+                cap["center_freq_mhz"] = center
+                cap["sample_rate_mhz"] = sr
                 cap["parsers"] = entry.get("parsers", [])
+                cap["coverage"] = f"{center - sr/2:.2f}\u2013{center + sr/2:.2f} MHz"
+                cap["mode"] = "continuous"
             elif cap_type == "rtlsdr_sweep":
                 cap["device"] = f"RTL-SDR #{entry.get('device_index', 0)}"
                 cap["band_start_mhz"] = entry.get("band_start_mhz", 0)
                 cap["band_end_mhz"] = entry.get("band_end_mhz", 0)
                 cap["mode"] = "hopping"
                 cap["parsers"] = entry.get("parsers", [])
+                cap["coverage"] = f"{cap['band_start_mhz']}\u2013{cap['band_end_mhz']} MHz"
             elif cap_type == "ble":
                 cap["device"] = entry.get("adapter", "hci1")
                 cap["parsers"] = entry.get("parsers", [])
+                # BLE adv listens on all 3 primary advertising channels simultaneously
+                cap["coverage"] = "2402 / 2426 / 2480 MHz (adv ch 37/38/39)"
+                cap["mode"] = "passive"
             elif cap_type == "wifi":
                 cap["device"] = entry.get("interface", "wlan1")
-                cap["channels"] = entry.get("channels", [])
-                cap["band"] = entry.get("band")
+                # Resolve channel list (custom > band preset > default)
+                try:
+                    from capture.wifi import (
+                        CHANNELS_24GHZ, CHANNELS_5GHZ_NON_DFS,
+                        CHANNELS_5GHZ_ALL, CHANNELS_DEFAULT, channel_to_freq)
+                except Exception:
+                    CHANNELS_24GHZ = [1, 6, 11]
+                    CHANNELS_5GHZ_NON_DFS = [36, 40, 44, 48, 149, 153, 157, 161, 165]
+                    CHANNELS_5GHZ_ALL = CHANNELS_5GHZ_NON_DFS
+                    CHANNELS_DEFAULT = CHANNELS_24GHZ + CHANNELS_5GHZ_NON_DFS
+                    channel_to_freq = lambda ch: None  # noqa: E731
+                band = entry.get("band")
+                chs = entry.get("channels")
+                if not chs:
+                    if band == "2.4":
+                        chs = CHANNELS_24GHZ
+                    elif band == "5":
+                        chs = CHANNELS_5GHZ_NON_DFS
+                    elif band == "all":
+                        chs = CHANNELS_24GHZ + CHANNELS_5GHZ_ALL
+                    else:
+                        chs = CHANNELS_DEFAULT
+                cap["channels"] = chs
+                cap["band"] = band
                 cap["parsers"] = entry.get("parsers", [])
+                # Build coverage string: channel count + freq sample
+                freqs = [channel_to_freq(c) for c in chs]
+                freqs = [f for f in freqs if f]
+                if freqs:
+                    cap["coverage"] = (
+                        f"{len(chs)} channels "
+                        f"({min(freqs)}\u2013{max(freqs)} MHz)")
+                else:
+                    cap["coverage"] = f"{len(chs)} channels"
+                cap["mode"] = "hopping" if len(chs) > 1 else "continuous"
             elif cap_type == "standalone":
                 cap["device"] = f"RTL-SDR #{entry.get('device_index', '')}" if entry.get("device_index") is not None else ""
                 cap["scanner_type"] = entry.get("scanner_type", "")
                 cap["args"] = entry.get("args", [])
+                # Known scanner type → coverage lookup
+                scanner = cap["scanner_type"]
+                info = _STANDALONE_COVERAGE.get(scanner)
+                if info:
+                    cap["coverage"] = info[0]
+                    cap["mode"] = info[1]
+
+            # Attach health status (status / message / updated)
+            with self._status_lock:
+                status_entry = self._capture_status.get(cap["name"])
+            if status_entry:
+                cap["status"] = status_entry.get("status", "pending")
+                cap["status_message"] = status_entry.get("message", "")
+                cap["status_updated"] = status_entry.get("updated", "")
+            else:
+                cap["status"] = "pending"
+                cap["status_message"] = ""
             captures.append(cap)
 
         info = {
@@ -861,10 +981,26 @@ class ServerOrchestrator:
         # Dashboard display loop
         try:
             while not self._stop_event.is_set():
+                self._poll_capture_health()
                 self._print_dashboard()
                 self._stop_event.wait(2.0)
         except KeyboardInterrupt:
             pass
+
+    def _poll_capture_health(self):
+        """Check capture sources for degraded state (e.g. HackRF queue drops)."""
+        for name, capture in self._captures:
+            if isinstance(capture, tuple):
+                continue  # standalone — status tracked by _run_standalone
+            # HackRF queue drops → degraded
+            drops = getattr(capture, "_drop_count", 0)
+            if drops:
+                last_drops = getattr(capture, "_reported_drops", 0)
+                if drops != last_drops:
+                    self._set_status(
+                        name, "degraded",
+                        f"dropped {drops} blocks (sample rate too high?)")
+                    capture._reported_drops = drops
 
     def stop(self):
         """Signal all captures to stop and wait for threads."""
@@ -917,11 +1053,13 @@ class ServerOrchestrator:
 
     def _run_capture(self, name, capture):
         """Run a capture source (blocking) in a thread."""
+        self._set_status(name, "running", "")
         try:
             capture.start()
         except Exception as e:
             if not self._stop_event.is_set():
                 print(f"\n  [ERROR] {name}: {e}")
+                self._set_status(name, "failed", str(e)[:200])
 
     def _run_standalone(self, name, entry):
         """Run a standalone scanner in a subprocess."""
@@ -966,13 +1104,18 @@ class ServerOrchestrator:
                 stdout=sp.PIPE, stderr=sp.PIPE,
             )
             print(f"  [standalone] {name}: pid {proc.pid}, cmd: {' '.join(cmd)}")
+            self._set_status(name, "running", f"pid {proc.pid}")
 
             while not self._stop_event.is_set():
                 if proc.poll() is not None:
                     # Process exited — check for errors
                     stderr = proc.stderr.read().decode().strip()
-                    if stderr and proc.returncode != 0:
+                    if proc.returncode != 0:
+                        err = stderr.splitlines()[-1] if stderr else f"exit {proc.returncode}"
                         print(f"\n  [ERROR] standalone {name} exited ({proc.returncode}): {stderr[:200]}")
+                        self._set_status(name, "failed", err[:200])
+                    else:
+                        self._set_status(name, "failed", "exited cleanly")
                     break
                 self._stop_event.wait(1.0)
 
@@ -986,6 +1129,7 @@ class ServerOrchestrator:
         except Exception as e:
             if not self._stop_event.is_set():
                 print(f"\n  [ERROR] standalone {name}: {e}")
+                self._set_status(name, "failed", str(e)[:200])
 
     def _write_line(self, text=""):
         """Write a line directly to the real stdout, bypassing print override.
