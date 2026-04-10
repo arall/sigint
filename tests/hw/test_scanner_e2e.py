@@ -52,7 +52,7 @@ VOICE_WAV = os.path.join(os.path.dirname(__file__), '..', 'data',
                          'original_voice.wav')
 TX_SAMPLE_RATE = 2e6
 FM_DEVIATION = 2500
-TX_GAIN = 47
+TX_GAIN = 20
 EXPECTED_WORDS = ["alpha", "bravo", "charlie", "radio", "check"]
 
 
@@ -144,21 +144,24 @@ def test_pmr_scanner(channel_num, do_transcribe=True):
         # Wait for TX to finish + holdover to expire
         tx_proc.wait(timeout=int(tx_duration + 5))
         print(f"  TX done, waiting for holdover...", flush=True)
-        time.sleep(4)
+        time.sleep(6)
 
-        # Stop scanner by closing the SDR device (causes read to fail,
-        # which triggers the exception handler and cleanup)
+        # Stop scanner by closing the SDR device (causes reader thread
+        # to exit, main loop detects it and enters finally block which
+        # finalizes any active transmissions)
         if scanner.sdr:
             try:
                 scanner.sdr.cancel_read_async()
             except Exception:
                 pass
+            time.sleep(1)  # Let reader thread exit cleanly
             try:
                 scanner.sdr.close()
             except Exception:
                 pass
             scanner.sdr = None
-        scanner_thread.join(timeout=10)
+        # Allow time for shutdown finalization (demod on RPi is slow)
+        scanner_thread.join(timeout=60)
         os.unlink(tx_file.name)
 
         if scanner_error[0]:

@@ -283,6 +283,7 @@ class PMRScanner:
         self._tx_last_active = {ch: None for ch in PMR_CHANNELS}
         self._tx_peak_snr = {ch: 0.0 for ch in PMR_CHANNELS}
         self._tx_peak_power = {ch: -100.0 for ch in PMR_CHANNELS}
+        self._tx_signal_samples = {ch: 0 for ch in PMR_CHANNELS}  # Signal-present sample count
         self._sample_offset = 0  # Cumulative sample count for phase continuity
 
         # Digital channel state
@@ -292,6 +293,7 @@ class PMRScanner:
         self._dpmr_peak_snr = {}     # ch -> float
         self._dpmr_peak_power = {}   # ch -> float
         self._dpmr_buffers = {}      # ch -> list of (offset, samples) tuples
+        self._dpmr_signal_samples = {}  # ch -> int
         for ch in DPMR_CHANNELS:
             self._dpmr_active[ch] = False
             self._dpmr_start[ch] = None
@@ -299,6 +301,7 @@ class PMRScanner:
             self._dpmr_peak_snr[ch] = 0.0
             self._dpmr_peak_power[ch] = -100.0
             self._dpmr_buffers[ch] = []
+            self._dpmr_signal_samples[ch] = 0
 
     def _get_audio_filename(self, channel: int) -> str:
         """Generate audio filename with timestamp and channel."""
@@ -331,6 +334,9 @@ class PMRScanner:
                 self._tx_peak_snr[channel] = snr
                 self._tx_peak_power[channel] = power
 
+            # Count only signal-present samples for duration filtering
+            self._tx_signal_samples[channel] += len(samples)
+
         # Buffer IQ samples whenever TX is active (including holdover)
         # This prevents audio gaps during brief signal dips in voice pauses
         # Store sample offset for phase-continuous frequency shifting
@@ -350,10 +356,9 @@ class PMRScanner:
                 audio_file = None
                 transcript = None
 
-                # Check signal duration from actual samples (not wall-clock
-                # which includes holdover time)
-                total_samples = sum(len(s) for _, s in self._wideband_buffers[channel])
-                signal_duration = total_samples / self.sample_rate
+                # Check signal duration from signal-present samples only
+                # (excludes holdover noise that inflates the count)
+                signal_duration = self._tx_signal_samples[channel] / self.sample_rate
 
                 if signal_duration < self.MIN_TX_DURATION:
                     # Too short — noise spike, discard
@@ -364,6 +369,8 @@ class PMRScanner:
                             self._wideband_buffers[channel], self.sample_rate,
                             self.center_freq, channel_freq, self.AUDIO_SAMPLE_RATE)
                         if len(full_audio) > 0:
+                            # Update duration from actual audio output
+                            signal_duration = len(full_audio) / audio_rate
                             audio_file = self._get_audio_filename(channel)
                             save_audio(full_audio, audio_rate, audio_file)
                     except Exception as e:
@@ -404,6 +411,7 @@ class PMRScanner:
                 self._tx_peak_snr[channel] = 0.0
                 self._tx_peak_power[channel] = -100.0
                 self._tx_last_active[channel] = None
+                self._tx_signal_samples[channel] = 0
 
                 return audio_file
 
@@ -483,6 +491,9 @@ class PMRScanner:
                 self._dpmr_peak_snr[channel] = snr
                 self._dpmr_peak_power[channel] = power
 
+            # Count only signal-present samples for duration filtering
+            self._dpmr_signal_samples[channel] += len(samples)
+
         # Buffer IQ during active transmission (including holdover)
         if self._dpmr_active[channel] and self.record_audio:
             self._dpmr_buffers[channel].append(
@@ -493,9 +504,8 @@ class PMRScanner:
             if time_since >= self.TX_HOLDOVER_TIME:
                 self._dpmr_active[channel] = False
 
-                # Check signal duration from actual samples
-                total_samples = sum(len(s) for _, s in self._dpmr_buffers[channel])
-                duration = total_samples / self.sample_rate
+                # Check signal duration from signal-present samples only
+                duration = self._dpmr_signal_samples[channel] / self.sample_rate
 
                 # Save discriminator audio for DSD decoding
                 audio_file = None
@@ -532,6 +542,7 @@ class PMRScanner:
                 self._dpmr_peak_snr[channel] = 0.0
                 self._dpmr_peak_power[channel] = -100.0
                 self._dpmr_last_active[channel] = None
+                self._dpmr_signal_samples[channel] = 0
 
     def display_channels(self, channel_powers, noise_floor, recording_channels=None, dpmr_powers=None):
         """Display channel activity with a visual indicator."""
@@ -700,6 +711,9 @@ class PMRScanner:
                 try:
                     samples = sample_queue.get(timeout=2.0)
                 except queue.Empty:
+                    # Exit if reader thread died (SDR closed externally)
+                    if not reader_thread.is_alive():
+                        break
                     continue
 
                 # Process this chunk
@@ -741,23 +755,34 @@ class PMRScanner:
 
         except KeyboardInterrupt:
             print("\n\nStopping scan...")
+        except Exception as e:
+            print(f"Error: {e}")
+            print("\nMake sure:")
+            print("  1. RTL-SDR is connected")
+            print("  2. pyrtlsdr is installed: pip install pyrtlsdr")
+            print("  3. No other program is using the SDR")
+        finally:
             stop_event.set()
 
-            # Save any remaining IQ buffers and log active transmissions
+            # Finalize any active transmissions before closing
             for ch_num, ch_freq in PMR_CHANNELS.items():
                 if self._tx_active[ch_num]:
                     audio_file = None
                     if self.record_audio and self._wideband_buffers[ch_num]:
-                        full_audio, _ = extract_and_demodulate_buffers(
-                            self._wideband_buffers[ch_num], self.sample_rate,
-                            self.center_freq, ch_freq, self.AUDIO_SAMPLE_RATE)
-                        audio_file = self._get_audio_filename(ch_num)
-                        save_audio(
-                            full_audio, self.AUDIO_SAMPLE_RATE, audio_file)
-                        print(
-                            f"Saved audio for CH{ch_num}: {os.path.basename(audio_file)}")
+                        try:
+                            full_audio, _ = extract_and_demodulate_buffers(
+                                self._wideband_buffers[ch_num], self.sample_rate,
+                                self.center_freq, ch_freq, self.AUDIO_SAMPLE_RATE)
+                            if len(full_audio) > 0:
+                                audio_file = self._get_audio_filename(ch_num)
+                                save_audio(
+                                    full_audio, self.AUDIO_SAMPLE_RATE, audio_file)
+                                print(
+                                    f"Saved audio for CH{ch_num}: {os.path.basename(audio_file)}")
+                        except Exception:
+                            pass
+                        self._wideband_buffers[ch_num] = []
 
-                    # Log the interrupted transmission
                     self.logger.log_signal(
                         signal_type="PMR446",
                         frequency_hz=ch_freq,
@@ -767,15 +792,7 @@ class PMRScanner:
                         audio_file=os.path.basename(
                             audio_file) if audio_file else None,
                     )
-        except Exception as e:
-            stop_event.set()
-            print(f"Error: {e}")
-            print("\nMake sure:")
-            print("  1. RTL-SDR is connected")
-            print("  2. pyrtlsdr is installed: pip install pyrtlsdr")
-            print("  3. No other program is using the SDR")
-        finally:
-            stop_event.set()
+
             if self.sdr:
                 self.sdr.close()
                 print("SDR closed.")

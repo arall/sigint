@@ -458,6 +458,7 @@ class FMScanner:
         self._tx_last_active = {ch: None for ch in self.channels}
         self._tx_peak_snr = {ch: 0.0 for ch in self.channels}
         self._tx_peak_power = {ch: -100.0 for ch in self.channels}
+        self._tx_signal_samples = {ch: 0 for ch in self.channels}
         self._sample_offset = 0
 
     def _get_audio_filename(self, channel):
@@ -471,10 +472,9 @@ class FMScanner:
         audio_file = None
         transcript = None
 
-        # Compute signal duration from actual samples (not wall-clock,
-        # which includes holdover time and would let noise spikes through)
-        total_samples = sum(len(s) for _, s in self._wideband_buffers[channel])
-        duration = total_samples / self.sample_rate
+        # Compute signal duration from signal-present samples only
+        # (excludes holdover noise that inflates the count)
+        duration = self._tx_signal_samples[channel] / self.sample_rate
 
         # Discard noise spikes — real voice transmissions are longer
         if duration < self.MIN_TX_DURATION:
@@ -482,6 +482,7 @@ class FMScanner:
             self._tx_peak_snr[channel] = 0.0
             self._tx_peak_power[channel] = -100.0
             self._tx_last_active[channel] = None
+            self._tx_signal_samples[channel] = 0
             return None
 
         if self.record_audio and self._wideband_buffers[channel]:
@@ -492,6 +493,8 @@ class FMScanner:
                     center_freq, ch_freq, self.AUDIO_SAMPLE_RATE,
                     fm_deviation=self.fm_deviation)
                 if len(full_audio) > 0:
+                    # Update duration from actual audio output
+                    duration = len(full_audio) / audio_rate
                     audio_file = self._get_audio_filename(channel)
                     save_audio(full_audio, audio_rate, audio_file)
             except Exception as e:
@@ -526,6 +529,7 @@ class FMScanner:
         self._tx_peak_snr[channel] = 0.0
         self._tx_peak_power[channel] = -100.0
         self._tx_last_active[channel] = None
+        self._tx_signal_samples[channel] = 0
 
         return audio_file
 
@@ -547,6 +551,9 @@ class FMScanner:
                 self._tx_start[channel] = datetime.now()
                 self._tx_peak_snr[channel] = snr
                 self._tx_peak_power[channel] = power
+
+            # Count only signal-present samples for duration filtering
+            self._tx_signal_samples[channel] += len(samples)
 
         if self._tx_active[channel] and self.record_audio:
             self._wideband_buffers[channel].append(

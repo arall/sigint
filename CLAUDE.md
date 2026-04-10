@@ -252,7 +252,8 @@ The FM voice parser (`parsers/fm/voice.py`) enables voice demodulation and recor
 - **Buffer coalescing** — `_finalize_tx()` merges adjacent small channelizer blocks into large contiguous chunks before demodulation, producing full-length audio clips instead of sub-second fragments.
 - **Reuses PMR pipeline** — `extract_and_demodulate_buffers()` and `save_audio()` from `scanners/pmr.py` for proven FM demodulation with phase continuity and de-clicking.
 - **Server config** — registered as `"fm_voice"` in server parser factory. Channel config supports `"band"`, `"transcribe"`, `"whisper_model"`, `"language"` fields.
-- **Detection thresholds** — `DETECTION_SNR_DB = 10.0`, `MIN_TX_DURATION = 0.5s` (sample-based), `MAX_TX_DURATION = 30.0s` force-finalizes runaway recordings. All three audio paths (PMRScanner, FMScanner, FMVoiceParser) use sample-based duration filtering and consistent holdover (2.0s).
+- **Detection thresholds** — `DETECTION_SNR_DB = 15.0`, `MIN_TX_DURATION = 0.5s` (signal-present samples only, not wall-clock), `MAX_TX_DURATION = 30.0s` force-finalizes runaway recordings. All three audio paths (PMRScanner, FMScanner, FMVoiceParser) track signal-present sample counts separately from holdover buffering for accurate duration filtering. Consistent holdover (2.0s).
+- **Shutdown finalization** — PMRScanner finalizes active transmissions (demod + save audio) in its `finally` block, so recordings are preserved regardless of how the scanner is stopped (Ctrl+C, external close, or error). The main loop exits cleanly when the reader thread dies (e.g., SDR closed externally).
 - **HackRF sensitivity** — HackRF has lower sensitivity than RTL-SDR for narrowband FM, but the channelizer now coalesces output blocks (~100ms) for stable noise floor estimation and reliable voice detection. Gain is configurable per-capture in server JSON config (lna_gain, vga_gain, amp_enable).
 
 ### Server Standalone Subprocess

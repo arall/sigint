@@ -140,7 +140,15 @@ class HackRFCaptureSource(BaseCaptureSource):
                 try:
                     sample_queue.put_nowait(samples)
                 except queue.Full:
-                    pass  # Drop if consumer can't keep up
+                    if not hasattr(self, '_drop_count'):
+                        self._drop_count = 0
+                        self._drop_first = time.time()
+                    self._drop_count += 1
+                    now = time.time()
+                    # Log every 10 drops to avoid spam
+                    if self._drop_count % 10 == 1:
+                        print(f"  [WARN] HackRF queue full — dropped {self._drop_count} blocks "
+                              f"({(now - self._drop_first):.1f}s since first drop)")
             except Exception:
                 if not self._stop_event.is_set():
                     break

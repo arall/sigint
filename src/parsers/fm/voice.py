@@ -154,7 +154,7 @@ class FMVoiceParser(BaseParser):
     records active transmissions.
     """
 
-    DETECTION_SNR_DB = 15.0  # Matches RTL-SDR PMR scanner threshold
+    DETECTION_SNR_DB = 15.0  # Must exceed adjacent-channel leakage from strong signals
     TX_HOLDOVER_TIME = 2.0  # seconds — bridges voice pauses
     MIN_TX_DURATION = 0.5   # seconds — filters sub-second noise spikes (sample-based, not wall-clock)
     MAX_TX_DURATION = 30.0  # seconds — force-finalize runaway recordings
@@ -215,6 +215,7 @@ class FMVoiceParser(BaseParser):
         self._tx_peak_power = {}
         self._tx_last_active = {}
         self._tx_buffers = {}  # (sample_offset, samples) tuples
+        self._tx_signal_samples = {}  # Signal-present sample count
         for ch in self.active_channels:
             self._tx_active[ch] = False
             self._tx_start[ch] = None
@@ -222,6 +223,7 @@ class FMVoiceParser(BaseParser):
             self._tx_peak_power[ch] = -100.0
             self._tx_last_active[ch] = None
             self._tx_buffers[ch] = []
+            self._tx_signal_samples[ch] = 0
 
         self._sample_offset = 0
         self._detection_count = 0
@@ -275,6 +277,8 @@ class FMVoiceParser(BaseParser):
                     self._tx_peak_power[ch_label], power)
                 self._tx_buffers[ch_label].append(
                     (current_offset, samples.copy()))
+                # Count only signal-present samples for duration filtering
+                self._tx_signal_samples[ch_label] += len(samples)
 
                 if not self._tx_active[ch_label]:
                     self._tx_active[ch_label] = True
@@ -303,6 +307,8 @@ class FMVoiceParser(BaseParser):
         peak_power = self._tx_peak_power[ch_label]
         buffers = self._tx_buffers[ch_label]
 
+        signal_samples = self._tx_signal_samples[ch_label]
+
         # Reset state
         self._tx_active[ch_label] = False
         self._tx_start[ch_label] = None
@@ -310,14 +316,14 @@ class FMVoiceParser(BaseParser):
         self._tx_peak_power[ch_label] = -100.0
         self._tx_last_active[ch_label] = None
         self._tx_buffers[ch_label] = []
+        self._tx_signal_samples[ch_label] = 0
 
         if peak_snr < self.min_snr_db or not buffers:
             return
 
-        # Compute actual signal duration from buffered samples (not wall-clock,
-        # which includes holdover time and would let noise spikes through)
-        total_samples = sum(len(s) for _, s in buffers)
-        signal_duration = total_samples / self.sample_rate
+        # Compute signal duration from signal-present samples only
+        # (excludes holdover noise that inflates the count)
+        signal_duration = signal_samples / self.sample_rate
 
         # Discard noise spikes — real voice transmissions are longer
         if signal_duration < self.MIN_TX_DURATION:
@@ -351,6 +357,9 @@ class FMVoiceParser(BaseParser):
             )
 
             if len(audio) > 0:
+                # Update duration from actual audio output
+                signal_duration = len(audio) / audio_rate
+
                 # Save audio
                 ts_str = time.strftime("%Y%m%d_%H%M%S")
                 freq_mhz = ch_freq / 1e6
