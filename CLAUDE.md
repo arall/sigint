@@ -252,7 +252,7 @@ The FM voice parser (`parsers/fm/voice.py`) enables voice demodulation and recor
 - **Reuses PMR pipeline** — `extract_and_demodulate_buffers()` and `save_audio()` from `scanners/pmr.py` for proven FM demodulation with phase continuity and de-clicking.
 - **Server config** — registered as `"fm_voice"` in server parser factory. Channel config supports `"band"`, `"transcribe"`, `"whisper_model"`, `"language"` fields.
 - **Detection thresholds** — `DETECTION_SNR_DB = 10.0`, `MIN_TX_DURATION = 0.5s` (sample-based), `MAX_TX_DURATION = 30.0s` force-finalizes runaway recordings. All three audio paths (PMRScanner, FMScanner, FMVoiceParser) use sample-based duration filtering and consistent holdover (2.0s).
-- **HackRF sensitivity** — HackRF wideband capture has ~35 dB worse sensitivity than RTL-SDR for narrowband FM voice. Use RTL-SDR standalone scanners for reliable voice capture; HackRF channelizer path works for wideband scanning/detection only.
+- **HackRF sensitivity** — HackRF has lower sensitivity than RTL-SDR for narrowband FM, but the channelizer now coalesces output blocks (~100ms) for stable noise floor estimation and reliable voice detection. Gain is configurable per-capture in server JSON config (lna_gain, vga_gain, amp_enable).
 
 ### Server Standalone Subprocess
 
@@ -381,6 +381,6 @@ Wideband OFDM video downlink detection in `dsp/drone_video.py`. Uses HackRF 20 M
 - Recorder module is partially implemented
 - macOS-only library paths in loader.py (Homebrew Intel + Apple Silicon)
 - RTL-SDR frequency offset (~16 ppm) may assign transmissions to adjacent PMR channel
-- HackRF One has ~17 ppm crystal error and ~35 dB worse sensitivity than RTL-SDR for narrowband FM — unsuitable for voice reception without external LNA. Use RTL-SDR standalone scanner for voice capture.
+- HackRF One has ~17 ppm crystal error and lower sensitivity than RTL-SDR for narrowband FM. The channelizer coalesces output blocks to compensate. For best results, increase lna_gain/vga_gain in server config or enable amp.
 - HackRF `hackrf_transfer -C <ppm>` corrects RX frequency but doesn't help sensitivity. Server config supports `"ppm"` field per HackRF.
 - RF loopback audio quality limited by consumer SDR phase noise (~0.25 cross-correlation)

@@ -230,6 +230,7 @@ class ServerOrchestrator:
         self._stop_event = threading.Event()
         self._threads = []
         self._captures = []
+        self._channelizers = []
         self._parsers = {}  # name -> parser instance
         self._start_time = None
         self._web_port = web_port
@@ -542,7 +543,10 @@ class ServerOrchestrator:
             ppm=entry.get("ppm", 0),
         )
 
-        channelizer = Channelizer(center_freq=center, sample_rate=sr)
+        # Use actual_center_freq (PPM-corrected) so channelizer frequency
+        # shifts align with real signal positions, not commanded frequency
+        channelizer = Channelizer(
+            center_freq=capture.actual_center_freq, sample_rate=sr)
 
         channels = list(entry.get("channels", []))
 
@@ -590,6 +594,7 @@ class ServerOrchestrator:
 
         capture.add_parser(channelizer.handle_frame)
         self._captures.append((name, capture))
+        self._channelizers.append(channelizer)
         print(f"  [+] HackRF '{name}': {center/1e6:.1f} MHz, "
               f"{sr/1e6:.0f} MS/s, {len(channels)} channels")
 
@@ -879,6 +884,13 @@ class ServerOrchestrator:
 
         for t in self._threads:
             t.join(timeout=5)
+
+        # Flush channelizer coalesce buffers so parsers see final samples
+        for ch in self._channelizers:
+            try:
+                ch.flush()
+            except Exception:
+                pass
 
         # Shutdown parsers (persist state)
         for name, parser in self._parsers.items():

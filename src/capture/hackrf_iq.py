@@ -44,6 +44,10 @@ class HackRFCaptureSource(BaseCaptureSource):
         super().__init__()
         self.center_freq = center_freq
         self.sample_rate = sample_rate
+        # Actual tuned frequency accounting for crystal error.
+        # The channelizer should use this (not center_freq) so that
+        # frequency shifts align with real signal positions.
+        self.actual_center_freq = center_freq * (1 + ppm * 1e-6) if ppm else center_freq
         self.lna_gain = lna_gain
         self.vga_gain = vga_gain
         self.amp_enable = amp_enable
@@ -69,13 +73,12 @@ class HackRFCaptureSource(BaseCaptureSource):
             cmd.extend(['-a', '1'])
         if self.serial:
             cmd.extend(['-d', self.serial])
-        if self.ppm:
-            cmd.extend(['-C', str(self.ppm)])
 
+        ppm_info = f", ppm {self.ppm}" if self.ppm else ""
         print(f"[*] HackRF: {self.center_freq/1e6:.3f} MHz, "
               f"{self.sample_rate/1e6:.1f} MS/s, "
               f"LNA {self.lna_gain} dB, VGA {self.vga_gain} dB"
-              f"{' +AMP' if self.amp_enable else ''}")
+              f"{' +AMP' if self.amp_enable else ''}{ppm_info}")
 
         self._process = subprocess.Popen(
             cmd,

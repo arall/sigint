@@ -154,7 +154,7 @@ class FMVoiceParser(BaseParser):
     records active transmissions.
     """
 
-    DETECTION_SNR_DB = 10.0  # HackRF proven unusable for voice; 10 dB safe for RTL-SDR path
+    DETECTION_SNR_DB = 15.0  # Matches RTL-SDR PMR scanner threshold
     TX_HOLDOVER_TIME = 2.0  # seconds — bridges voice pauses
     MIN_TX_DURATION = 0.5   # seconds — filters sub-second noise spikes (sample-based, not wall-clock)
     MAX_TX_DURATION = 30.0  # seconds — force-finalize runaway recordings
