@@ -35,6 +35,130 @@ _ANSI_RE = re.compile(r'\033\[[0-9;]*m')
 _SAFE_FILENAME_RE = re.compile(r'^[a-zA-Z0-9_\-\.]+\.wav$')
 
 
+def _get_system_stats():
+    """Read CPU, memory, and disk stats from /proc and os (Linux)."""
+    stats = {}
+    try:
+        # CPU usage from /proc/stat (compute between two reads)
+        # Use load average instead — instantaneous and no state needed
+        load1, load5, load15 = os.getloadavg()
+        cpu_count = os.cpu_count() or 1
+        stats["load"] = round(load1, 2)
+        stats["cpu_pct"] = round(load1 / cpu_count * 100, 1)
+
+        # Memory from /proc/meminfo
+        with open('/proc/meminfo', 'r') as f:
+            meminfo = {}
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    meminfo[parts[0].rstrip(':')] = int(parts[1])
+        total_kb = meminfo.get('MemTotal', 0)
+        avail_kb = meminfo.get('MemAvailable', 0)
+        used_kb = total_kb - avail_kb
+        stats["mem_total_mb"] = round(total_kb / 1024)
+        stats["mem_used_mb"] = round(used_kb / 1024)
+        stats["mem_pct"] = round(used_kb / total_kb * 100, 1) if total_kb else 0
+
+        # CPU temperature (Raspberry Pi)
+        try:
+            with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+                stats["cpu_temp"] = round(int(f.read().strip()) / 1000, 1)
+        except (FileNotFoundError, ValueError):
+            pass
+
+        # Disk usage for the partition containing the output dir
+        st = os.statvfs('/')
+        disk_total = st.f_blocks * st.f_frsize
+        disk_free = st.f_bavail * st.f_frsize
+        disk_used = disk_total - disk_free
+        stats["disk_total_gb"] = round(disk_total / (1024**3), 1)
+        stats["disk_used_gb"] = round(disk_used / (1024**3), 1)
+        stats["disk_pct"] = round(disk_used / disk_total * 100, 1) if disk_total else 0
+
+    except Exception:
+        pass
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Persona loader — reads persona JSON databases from the output directory
+# ---------------------------------------------------------------------------
+
+def _load_personas(output_dir, active_sigs=None):
+    """Load and merge BLE + WiFi persona databases into a unified list.
+
+    Args:
+        output_dir: Path to the output directory containing persona JSON files.
+        active_sigs: Optional dict of {dev_sig: {"rssi": float, "apple_device": str}}
+                     from recent detections, used to mark active devices.
+    """
+    active_sigs = active_sigs or {}
+    personas = []
+
+    for filename, transport in [
+        ("personas_bt.json", "BLE"),
+        ("personas.json", "WiFi"),
+    ]:
+        path = os.path.join(output_dir, filename)
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+
+        for key, p in data.get("personas", {}).items():
+            macs = p.get("macs_seen", [])
+            names = p.get("ssids", [])
+            dev_sig = p.get("dev_sig", key.split(":")[0])
+            manufacturer = p.get("manufacturer") or ""
+            randomized = p.get("randomized", False)
+
+            # Active state from recent detections
+            active_info = active_sigs.get(dev_sig, {})
+            apple_device = active_info.get("apple_device", "")
+
+            # Build best human-readable label
+            label = ""
+            if names:
+                label = ", ".join(names[:3])
+            elif apple_device:
+                label = apple_device
+            elif manufacturer:
+                label = manufacturer
+            elif macs and not randomized:
+                label = macs[0]
+            else:
+                # Anonymous device — show short sig hash
+                label = dev_sig[:8] if dev_sig else ""
+
+            personas.append({
+                "transport": transport,
+                "dev_sig": dev_sig,
+                "label": label,
+                "manufacturer": manufacturer,
+                "apple_device": apple_device,
+                "names": names,
+                "macs": macs,
+                "mac_count": len(macs),
+                "randomized": randomized,
+                "sessions": p.get("sessions", 0),
+                "total_probes": p.get("total_probes", 0),
+                "first_session": p.get("first_session", ""),
+                "last_session": p.get("last_session", ""),
+                "active": bool(active_info),
+                "last_rssi": active_info.get("rssi"),
+            })
+
+    # Sort: active first, then by last_session, then by probes
+    personas.sort(key=lambda p: (
+        p["active"],
+        p["last_session"],
+        p["total_probes"],
+    ), reverse=True)
+    return personas
+
+
 # ---------------------------------------------------------------------------
 # CSV tailer — watches the output directory for the latest CSV and tails it
 # ---------------------------------------------------------------------------
@@ -48,7 +172,7 @@ class CSVTailer:
         self._stop = threading.Event()
 
         # State
-        self._detections = deque(maxlen=500)
+        self._detections = deque(maxlen=50000)
         self._type_counts = Counter()
         self._type_last_seen = {}
         self._type_last_snr = {}
@@ -60,9 +184,9 @@ class CSVTailer:
         self._start_time = time.time()
 
         # File tracking
-        self._current_csv = None
+        self._loaded_csvs = set()   # fully-read CSV paths
+        self._tailing_csv = None    # currently tailing (latest) CSV path
         self._file_handle = None
-        self._reader = None
         self._file_pos = 0
 
     def start(self):
@@ -73,51 +197,71 @@ class CSVTailer:
 
     def stop(self):
         self._stop.set()
-        if self._file_handle:
-            self._file_handle.close()
+        try:
+            if self._file_handle:
+                self._file_handle.close()
+        except Exception:
+            pass
 
-    def _find_latest_csv(self):
-        """Find the most recently modified CSV in output_dir."""
+    def _find_all_csvs(self):
+        """Find all CSV files in output_dir, sorted by mtime."""
         try:
             csvs = [
                 os.path.join(self.output_dir, f)
                 for f in os.listdir(self.output_dir)
                 if f.endswith('.csv')
             ]
-            if not csvs:
-                return None
-            return max(csvs, key=os.path.getmtime)
+            return sorted(csvs, key=os.path.getmtime)
         except OSError:
-            return None
+            return []
 
-    def _run(self):
-        """Background loop: find CSV, tail new rows."""
-        while not self._stop.is_set():
-            latest = self._find_latest_csv()
-
-            # Switch to new CSV if it changed
-            if latest and latest != self._current_csv:
-                if self._file_handle:
-                    self._file_handle.close()
-                self._current_csv = latest
-                self._csv_name = os.path.basename(latest)
-                self._file_handle = open(latest, 'r', newline='')
-                # Read existing content
-                reader = csv.DictReader(self._file_handle)
+    def _read_full_csv(self, path):
+        """Read all rows from a CSV file."""
+        try:
+            with open(path, 'r', newline='') as f:
+                reader = csv.DictReader(f)
                 for row in reader:
                     self._process_row(row)
-                self._file_pos = self._file_handle.tell()
+        except Exception:
+            pass
 
-            # Tail for new lines
-            if self._file_handle:
+    def _run(self):
+        """Background loop: read all CSVs, tail the latest for new rows."""
+        while not self._stop.is_set():
+            all_csvs = self._find_all_csvs()
+
+            # Read any new CSV files we haven't seen yet
+            for csv_path in all_csvs:
+                if csv_path in self._loaded_csvs:
+                    continue
+                # If we're already tailing a file, close it
+                if self._file_handle:
+                    self._file_handle.close()
+                    self._file_handle = None
+
+                self._read_full_csv(csv_path)
+                self._loaded_csvs.add(csv_path)
+                self._csv_name = os.path.basename(csv_path)
+
+            # Tail the latest CSV for new rows
+            latest = all_csvs[-1] if all_csvs else None
+            if latest:
+                if self._tailing_csv != latest or self._file_handle is None:
+                    # (Re)open the file for tailing
+                    if self._file_handle:
+                        self._file_handle.close()
+                    self._tailing_csv = latest
+                    self._file_handle = open(latest, 'r', newline='')
+                    self._file_handle.seek(0, 2)  # seek to end
+                    self._file_pos = self._file_handle.tell()
+
+                # Check for new lines
                 self._file_handle.seek(self._file_pos)
                 for line in self._file_handle:
                     line = line.strip()
                     if not line:
                         continue
-                    # Parse CSV line using the known headers
                     try:
-                        # Re-parse with DictReader on single line
                         import io
                         rdr = csv.DictReader(
                             io.StringIO(line),
@@ -129,7 +273,6 @@ class CSVTailer:
                             ],
                         )
                         row = next(rdr)
-                        # Skip if it looks like a header row
                         if row.get("timestamp") == "timestamp":
                             continue
                         self._process_row(row)
@@ -194,6 +337,8 @@ class CSVTailer:
                 "audio_file": audio_file if audio_file else None,
                 "detail": detail,
                 "transcript": transcript,
+                "dev_sig": meta.get("dev_sig", ""),
+                "apple_device": meta.get("apple_device", ""),
             })
 
             # Recent events feed
@@ -266,6 +411,7 @@ class CSVTailer:
             "captures": [],
             "signals": signals,
             "recent": recent,
+            "system": _get_system_stats(),
         }
 
     def get_detections(self, limit=50, offset=0, signal_type=None):
@@ -291,6 +437,24 @@ class CSVTailer:
                     "total": sum(counts.values()),
                 })
         return result
+
+    def get_active_sigs(self, minutes=5):
+        """Return dict of dev_sig → info for devices seen in the last N minutes."""
+        cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
+        active = {}
+        with self._lock:
+            for d in reversed(self._detections):
+                if d["timestamp"] < cutoff:
+                    break
+                sig = d.get("dev_sig")
+                if not sig:
+                    continue
+                if sig not in active:
+                    active[sig] = {
+                        "rssi": d.get("snr_db"),
+                        "apple_device": d.get("apple_device", ""),
+                    }
+        return active
 
 
 def _extract_detail(sig, channel, meta):
@@ -381,6 +545,10 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_detections(qs)
         elif path == '/api/activity':
             self._serve_activity(qs)
+        elif path == '/api/config':
+            self._serve_config()
+        elif path == '/api/personas':
+            self._serve_personas(qs)
         elif path.startswith('/audio/'):
             self._serve_audio(path[7:])
         else:
@@ -432,6 +600,22 @@ class WebHandler(BaseHTTPRequestHandler):
     def _serve_activity(self, qs):
         minutes = min(int(qs.get("minutes", [60])[0]), 180)
         self._send_json(self.server.tailer.get_activity(minutes))
+
+    def _serve_config(self):
+        info_path = os.path.join(self.server.output_dir, "server_info.json")
+        try:
+            with open(info_path, 'r') as f:
+                self._send_json(json.load(f))
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._send_json({"captures": []})
+
+    def _serve_personas(self, qs):
+        transport = qs.get("transport", [None])[0]
+        active_sigs = self.server.tailer.get_active_sigs(minutes=5)
+        personas = _load_personas(self.server.output_dir, active_sigs)
+        if transport:
+            personas = [p for p in personas if p["transport"] == transport]
+        self._send_json(personas)
 
     def _serve_audio(self, filename):
         if not _SAFE_FILENAME_RE.match(filename):
@@ -485,7 +669,8 @@ def run_web_server(output_dir, port=8080):
         print("\n[WEB] Shutting down...")
         stop_event.set()
         tailer.stop()
-        server.shutdown()
+        # Shutdown in a thread to avoid deadlock (signal handler can't block)
+        threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
@@ -686,20 +871,25 @@ tr:last-child td { border-bottom: none; }
   <div><span class="label">CSV </span><span class="value" id="h-csv" style="color:#888">-</span></div>
 </div>
 
+<!-- System stats bar -->
+<div class="header" style="font-size:12px; gap: 8px 20px; padding: 8px 16px;">
+  <div><span class="label">CPU </span><span class="value" id="s-cpu">-</span></div>
+  <div><span class="label">Temp </span><span class="value" id="s-temp">-</span></div>
+  <div><span class="label">Mem </span><span class="value" id="s-mem">-</span></div>
+  <div><span class="label">Disk </span><span class="value" id="s-disk">-</span></div>
+</div>
+
 <!-- Tabs -->
 <div class="tabs">
   <button class="tab-btn active" data-tab="overview">Overview</button>
   <button class="tab-btn" data-tab="detections">Detections</button>
+  <button class="tab-btn" data-tab="devices">Devices</button>
+  <button class="tab-btn" data-tab="captures">Captures</button>
   <button class="tab-btn" data-tab="activity">Activity</button>
 </div>
 
 <!-- Tab: Overview -->
 <div id="tab-overview" class="tab-content active">
-  <div class="section" id="captures-section" style="display:none">
-    <div class="section-title">Listening</div>
-    <div class="section-body" id="captures"></div>
-  </div>
-
   <div class="section">
     <div class="section-title">Signals</div>
     <table>
@@ -744,6 +934,53 @@ tr:last-child td { border-bottom: none; }
   </div>
 </div>
 
+<!-- Tab: Devices -->
+<div id="tab-devices" class="tab-content">
+  <!-- Summary cards -->
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap" id="dev-stats"></div>
+
+  <div class="section">
+    <div class="section-title">
+      <span>Known Devices</span>
+      <div class="filter-bar">
+        <select id="dev-transport">
+          <option value="">All</option>
+          <option value="BLE">BLE</option>
+          <option value="WiFi">WiFi</option>
+        </select>
+        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;text-transform:none;letter-spacing:0">
+          <input type="checkbox" id="dev-active-only"> Active only
+        </label>
+        <select id="dev-sort">
+          <option value="default">Sort: Active + Recent</option>
+          <option value="sessions">Sort: Sessions</option>
+          <option value="probes">Sort: Probes</option>
+          <option value="name">Sort: Name</option>
+        </select>
+        <button onclick="loadPersonas()">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th style="width:20px"></th><th>Type</th><th>Device</th><th>Manufacturer</th>
+        <th class="num">MACs</th><th class="num">Sessions</th>
+        <th class="num">Probes</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="dev-body">
+        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Captures -->
+<div id="tab-captures" class="tab-content">
+  <div class="section">
+    <div class="section-title">Capture Configuration</div>
+    <div class="section-body" id="captures"><div class="empty">loading...</div></div>
+  </div>
+</div>
+
 <!-- Tab: Activity -->
 <div id="tab-activity" class="tab-content">
   <div class="section">
@@ -775,6 +1012,83 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// --- Config / Captures ---
+let configLoaded = false;
+
+async function loadConfig() {
+  if (configLoaded) return;
+  const capEl = document.getElementById('captures');
+  try {
+    const r = await fetch('/api/config');
+    const cfg = await r.json();
+    if (!cfg.captures || !cfg.captures.length) {
+      capEl.innerHTML = '<div class="empty">no server_info.json found (server not running?)</div>';
+      configLoaded = true;
+      return;
+    }
+    let html = '';
+    cfg.captures.forEach(cap => {
+      const t = cap.type;
+      let line = '<div style="margin-bottom:8px">';
+      line += '<div><span style="color:#4fc3f7;font-weight:600">' + esc(cap.name) + '</span>';
+      line += ' <span style="color:#888">' + esc(cap.device || '') + '</span></div>';
+
+      const tags = [];
+      if (t === 'hackrf') {
+        tags.push(cap.center_freq_mhz + ' MHz');
+        tags.push(cap.sample_rate_mhz + ' MS/s');
+        if (cap.lna_gain != null) tags.push('LNA ' + cap.lna_gain);
+        if (cap.vga_gain != null) tags.push('VGA ' + cap.vga_gain);
+        if (cap.transcribe) tags.push('\u2705 transcribe');
+        if (cap.whisper_model && cap.whisper_model !== 'base') tags.push('whisper: ' + cap.whisper_model);
+        if (cap.language) tags.push('lang: ' + cap.language);
+      } else if (t === 'rtlsdr') {
+        tags.push(cap.center_freq_mhz + ' MHz');
+        if (cap.parsers) tags.push(cap.parsers.join(', '));
+      } else if (t === 'rtlsdr_sweep') {
+        tags.push(cap.band_start_mhz + '-' + cap.band_end_mhz + ' MHz');
+        tags.push('\u{1F500} hopping');
+        if (cap.parsers) tags.push(cap.parsers.join(', '));
+      } else if (t === 'ble') {
+        tags.push('Bluetooth LE');
+        if (cap.parsers) tags.push(cap.parsers.join(', '));
+      } else if (t === 'wifi') {
+        tags.push('WiFi monitor');
+        if (cap.channels && cap.channels.length) tags.push('ch ' + cap.channels.join(','));
+        if (cap.parsers) tags.push(cap.parsers.join(', '));
+      } else if (t === 'standalone') {
+        tags.push(esc(cap.scanner_type || ''));
+        if (cap.args && cap.args.length) tags.push(cap.args.join(' '));
+      }
+      if (tags.length) {
+        line += '<div style="font-size:12px;color:#aaa;margin-left:12px">' + tags.map(t => '<span style="background:#0f3460;padding:1px 6px;border-radius:3px;margin-right:4px;display:inline-block;margin-top:2px">' + esc(t) + '</span>').join('') + '</div>';
+      }
+
+      // Show channels for HackRF
+      if (t === 'hackrf' && cap.channels && cap.channels.length) {
+        cap.channels.forEach(ch => {
+          const chTags = [];
+          if (ch.band) chTags.push(ch.band);
+          chTags.push(ch.freq_mhz + ' MHz');
+          if (ch.bandwidth_mhz) chTags.push(ch.bandwidth_mhz + ' MHz BW');
+          if (ch.parsers) chTags.push(ch.parsers.join(', '));
+          if (ch.transcribe) chTags.push('\u2705 transcribe');
+          line += '<div style="font-size:11px;color:#888;margin-left:24px;margin-top:2px">\u2514 ' + chTags.join(' \u00b7 ') + '</div>';
+        });
+      }
+      line += '</div>';
+      html += line;
+    });
+    if (cfg.started) {
+      html += '<div style="font-size:11px;color:#555;margin-top:4px">Started: ' + esc(cfg.started.replace('T', ' ').split('.')[0]) + '</div>';
+    }
+    capEl.innerHTML = html;
+    configLoaded = true;
+  } catch(e) {
+    capEl.innerHTML = '<div class="empty">could not load config</div>';
+  }
+}
+
 // --- Overview Tab ---
 function updateOverview(state) {
   document.getElementById('h-time').textContent = state.time || '-';
@@ -792,16 +1106,30 @@ function updateOverview(state) {
     gpsEl.style.color = '#888';
   }
 
-  // Captures (only show if server provides them)
-  const capSec = document.getElementById('captures-section');
-  const capEl = document.getElementById('captures');
-  if (state.captures && state.captures.length) {
-    capSec.style.display = '';
-    capEl.innerHTML = state.captures
-      .map(c => '<div class="capture-line">' + esc(c) + '</div>').join('');
-  } else {
-    capSec.style.display = 'none';
+  // System stats
+  const sys = state.system || {};
+  const cpuEl = document.getElementById('s-cpu');
+  if (sys.cpu_pct != null) {
+    cpuEl.textContent = sys.cpu_pct + '%';
+    cpuEl.style.color = sys.cpu_pct > 80 ? '#f44336' : sys.cpu_pct > 50 ? '#ffeb3b' : '#4caf50';
   }
+  const tempEl = document.getElementById('s-temp');
+  if (sys.cpu_temp != null) {
+    tempEl.textContent = sys.cpu_temp + '\u00b0C';
+    tempEl.style.color = sys.cpu_temp > 75 ? '#f44336' : sys.cpu_temp > 60 ? '#ffeb3b' : '#4caf50';
+  }
+  const memEl = document.getElementById('s-mem');
+  if (sys.mem_used_mb != null) {
+    memEl.textContent = sys.mem_used_mb + ' / ' + sys.mem_total_mb + ' MB (' + sys.mem_pct + '%)';
+    memEl.style.color = sys.mem_pct > 85 ? '#f44336' : sys.mem_pct > 70 ? '#ffeb3b' : '#e0e0e0';
+  }
+  const diskEl = document.getElementById('s-disk');
+  if (sys.disk_used_gb != null) {
+    diskEl.textContent = sys.disk_used_gb + ' / ' + sys.disk_total_gb + ' GB (' + sys.disk_pct + '%)';
+    diskEl.style.color = sys.disk_pct > 90 ? '#f44336' : sys.disk_pct > 75 ? '#ffeb3b' : '#e0e0e0';
+  }
+
+  // (Captures are in their own tab now)
 
   // Signals table
   const tbody = document.getElementById('signals');
@@ -920,6 +1248,95 @@ function playAudio(btn, filename) {
   };
 }
 
+// --- Devices Tab ---
+let _personaCache = [];
+
+async function loadPersonas() {
+  const transport = document.getElementById('dev-transport').value;
+  const url = '/api/personas' + (transport ? '?transport=' + transport : '');
+  try {
+    const r = await fetch(url);
+    _personaCache = await r.json();
+    renderPersonas();
+  } catch(e) {}
+}
+
+function renderPersonas() {
+  const data = _personaCache;
+  const activeOnly = document.getElementById('dev-active-only').checked;
+  const sortBy = document.getElementById('dev-sort').value;
+
+  let filtered = activeOnly ? data.filter(p => p.active) : data;
+
+  if (sortBy === 'sessions') filtered.sort((a,b) => b.sessions - a.sessions);
+  else if (sortBy === 'probes') filtered.sort((a,b) => b.total_probes - a.total_probes);
+  else if (sortBy === 'name') filtered.sort((a,b) => (a.label||'zzz').localeCompare(b.label||'zzz'));
+  // default sort is from server (active + recent)
+
+  // Summary cards
+  const totalBle = data.filter(p => p.transport === 'BLE').length;
+  const totalWifi = data.filter(p => p.transport === 'WiFi').length;
+  const activeCount = data.filter(p => p.active).length;
+  const returning = data.filter(p => p.sessions >= 5).length;
+  const cardStyle = 'background:#16213e;border:1px solid #0f3460;border-radius:6px;padding:8px 14px;font-size:12px;text-align:center;min-width:80px';
+  document.getElementById('dev-stats').innerHTML =
+    '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#e0e0e0">'+data.length+'</div>Total</div>'
+    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#4caf50">'+activeCount+'</div>Active</div>'
+    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#00bcd4">'+totalBle+'</div>BLE</div>'
+    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#2196f3">'+totalWifi+'</div>WiFi</div>'
+    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#ffeb3b">'+returning+'</div>Returning</div>';
+
+  // Table
+  const tbody = document.getElementById('dev-body');
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">no devices found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filtered.map(p => {
+    const tColor = p.transport === 'BLE' ? '#00bcd4' : '#2196f3';
+    const lastSeen = p.last_session ? p.last_session.split('T')[0].slice(5) + ' ' + p.last_session.split('T')[1].split('.')[0] : '-';
+    const sessColor = p.sessions >= 20 ? '#f44336' : p.sessions >= 5 ? '#ffeb3b' : '#e0e0e0';
+    const macList = p.macs.map(m => esc(m)).join('\n');
+
+    // Build label cell
+    let labelHtml = '';
+    if (p.label) {
+      labelHtml = '<span style="color:#e0e0e0">' + esc(p.label) + '</span>';
+    } else {
+      labelHtml = '<span style="color:#555">unknown</span>';
+    }
+    // Badges
+    const badges = [];
+    if (p.apple_device) badges.push('<span style="background:#333;color:#aaa;padding:0 5px;border-radius:3px;font-size:10px">' + esc(p.apple_device) + '</span>');
+    if (p.randomized) badges.push('<span style="background:#333;color:#888;padding:0 5px;border-radius:3px;font-size:10px">rand</span>');
+    if (badges.length) labelHtml += ' ' + badges.join(' ');
+
+    // Active dot
+    const dot = p.active
+      ? '<span class="status-dot" title="Active now"></span>'
+      : '<span class="status-dot off" style="opacity:0.2"></span>';
+
+    // Row style
+    const rowStyle = p.sessions <= 1 ? 'opacity:0.5' : '';
+    const borderStyle = p.active ? 'border-left:3px solid #4caf50' : '';
+
+    return '<tr style="'+rowStyle+';'+borderStyle+'">'
+      + '<td>'+dot+'</td>'
+      + '<td style="color:'+tColor+';font-size:11px;white-space:nowrap">'+esc(p.transport)+'</td>'
+      + '<td>'+labelHtml+'</td>'
+      + '<td style="color:#888;font-size:12px">'+esc(p.manufacturer || '')+'</td>'
+      + '<td class="num" title="'+esc(macList)+'" style="cursor:help">'+p.mac_count+'</td>'
+      + '<td class="num" style="color:'+sessColor+'">'+p.sessions+'</td>'
+      + '<td class="num">'+p.total_probes.toLocaleString()+'</td>'
+      + '<td style="font-size:12px;white-space:nowrap">'+lastSeen+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+document.getElementById('dev-transport').addEventListener('change', () => loadPersonas());
+document.getElementById('dev-active-only').addEventListener('change', () => renderPersonas());
+document.getElementById('dev-sort').addEventListener('change', () => renderPersonas());
+
 // --- Activity Tab ---
 async function loadActivity() {
   try {
@@ -987,6 +1404,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     panel.style.display = 'block';
     location.hash = btn.dataset.tab;
     if (btn.dataset.tab === 'detections') loadDetections();
+    if (btn.dataset.tab === 'devices') loadPersonas();
+    if (btn.dataset.tab === 'captures') loadConfig();
     if (btn.dataset.tab === 'activity') loadActivity();
   });
 });
