@@ -79,6 +79,7 @@ src/
     lora.py               # LoRa orchestrator: RTLSDRCapture + LoRaEnergyParser
     drone_video.py        # Drone video link scanner: HackRF + DroneVideoLinkParser
     server.py             # Central server: all captures + parsers in parallel from JSON config
+    web.py                # Web dashboard HTTP server (standalone or embedded in server)
     wideband.py           # Wideband energy detection scanner
     recorder.py           # Raw IQ recording and replay
 tests/
