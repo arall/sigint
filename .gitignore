@@ -1,0 +1,11 @@
+.env
+output/*
+.DS_Store
+.claude/
+*.log
+.venv/
+venv/
+__pycache__/
+*.pyc
+atak/*
+configs/*.json

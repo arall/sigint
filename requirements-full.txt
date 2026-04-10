@@ -1,0 +1,20 @@
+# Core (required for all RTL-SDR scanners)
+numpy>=1.20.0
+pyrtlsdr>=0.3.0
+scipy>=1.7.0
+matplotlib>=3.5.0
+
+# GPS support (--gps flag)
+pyserial>=3.5
+
+# WiFi probe scanner (sdr.py wifi)
+scapy>=2.5.0
+
+# Speech-to-text transcription (--transcribe flag)
+openai-whisper>=20231117
+
+# Remote Whisper API transcription (alternative to local whisper)
+openai>=1.0.0
+
+# Test audio generation (tests only)
+gTTS>=2.3.0

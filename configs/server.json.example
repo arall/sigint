@@ -1,0 +1,57 @@
+{
+  "captures": [
+    {
+      "name": "uhf",
+      "type": "hackrf",
+      "serial": "YOUR_HACKRF_SERIAL_1",
+      "center_freq_mhz": 434,
+      "sample_rate_mhz": 4,
+      "lna_gain": 32,
+      "vga_gain": 40,
+      "channels": [
+        {
+          "name": "keyfob",
+          "freq_mhz": 433.92,
+          "bandwidth_mhz": 2,
+          "parsers": ["keyfob", "tpms"]
+        }
+      ]
+    },
+    {
+      "name": "ism868",
+      "type": "hackrf",
+      "serial": "YOUR_HACKRF_SERIAL_2",
+      "center_freq_mhz": 868.5,
+      "sample_rate_mhz": 8,
+      "lna_gain": 32,
+      "vga_gain": 40,
+      "channels": [
+        {
+          "name": "lora",
+          "freq_mhz": 868.1,
+          "bandwidth_mhz": 2.4,
+          "parsers": ["lora", "elrs"]
+        }
+      ]
+    },
+    {
+      "name": "adsb",
+      "type": "standalone",
+      "scanner_type": "adsb",
+      "device_index": 0,
+      "gain": 40
+    },
+    {
+      "name": "ble",
+      "type": "ble",
+      "adapter": "hci1",
+      "parsers": ["apple_continuity", "remoteid_ble"]
+    },
+    {
+      "name": "wifi",
+      "type": "wifi",
+      "interface": "wlan1",
+      "parsers": ["probe_request", "remoteid_wifi"]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "captures": [
+    {
+      "name": "uhf",
+      "type": "hackrf",
+      "serial": "YOUR_HACKRF_SERIAL_1",
+      "center_freq_mhz": 440,
+      "sample_rate_mhz": 20,
+      "lna_gain": 32,
+      "vga_gain": 40,
+      "ppm": -17,
+      "transcribe": true,
+      "channels": []
+    },
+    {
+      "name": "vhf",
+      "type": "hackrf",
+      "serial": "YOUR_HACKRF_SERIAL_2",
+      "center_freq_mhz": 151,
+      "sample_rate_mhz": 20,
+      "lna_gain": 32,
+      "vga_gain": 40,
+      "ppm": 17,
+      "transcribe": true,
+      "channels": []
+    },
+    {
+      "name": "pmr",
+      "type": "standalone",
+      "scanner_type": "pmr",
+      "device_index": 0,
+      "args": ["--transcribe"]
+    },
+    {
+      "name": "ble",
+      "type": "ble",
+      "adapter": "hci1",
+      "parsers": ["apple_continuity", "remoteid_ble"]
+    },
+    {
+      "name": "wifi",
+      "type": "wifi",
+      "interface": "wlan1",
+      "parsers": ["probe_request", "remoteid_wifi"]
+    }
+  ]
+}

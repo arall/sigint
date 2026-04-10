@@ -1,0 +1,38 @@
+{
+  "scanners": [
+    {
+      "name": "pmr446",
+      "type": "pmr",
+      "device_index": 0,
+      "device_id": "sdr-pmr",
+      "gain": 40
+    },
+    {
+      "name": "2m-amateur",
+      "type": "fm",
+      "band": "2m",
+      "device_index": 1,
+      "device_id": "sdr-2m",
+      "gain": 40,
+      "dwell": 5.0
+    },
+    {
+      "name": "70cm-eu",
+      "type": "fm",
+      "band": "70cm",
+      "device_index": 2,
+      "device_id": "sdr-70cm-eu",
+      "channels": ["CALL", "U272", "U274", "U276", "U278", "U280", "U282", "U284"],
+      "gain": 40
+    },
+    {
+      "name": "70cm-us",
+      "type": "fm",
+      "band": "70cm",
+      "device_index": 3,
+      "device_id": "sdr-70cm-us",
+      "channels": ["USCALL", "446.025", "446.050", "446.075", "446.100"],
+      "gain": 40
+    }
+  ]
+}
