@@ -119,12 +119,24 @@ python3 sdr.py --tak --gps pmr
 ## Tests
 
 ```sh
-python3 tests/sw/test_pmr_demod.py       # Async streaming, demod pipeline
-python3 tests/sw/test_pmr_quality.py     # Audio quality regression
-python3 tests/sw/test_transcribe.py      # Whisper EN/ES/CA transcription
-python3 tests/sw/test_fm_voice_parser.py # FM voice parser (no hardware)
-python3 tests/sw/test_pmr_quality.py --rf    # RF loopback (needs HackRF + RTL-SDR)
-python3 tests/hw/tx_pmr_loopback.py          # Full TX/RX loopback
+# Full SW suite, 4 workers in parallel, ~44s wall clock on a Pi 5
+bash tests/run_tests.sh
+python3 tests/run_tests.py                   # same thing, invoked directly
+python3 tests/run_tests.py --workers 2       # dial down for throttled boxes
+python3 tests/run_tests.py --no-whisper      # skip transcription
+
+# Individual tests (still work when run by hand)
+python3 tests/sw/test_pmr_demod.py           # Async streaming, demod pipeline
+python3 tests/sw/test_pmr_quality.py         # Audio quality regression
+python3 tests/sw/test_transcribe.py          # Whisper EN/ES/CA transcription
+python3 tests/sw/test_fm_voice_parser.py     # FM voice parser (no hardware)
+python3 tests/sw/test_db_logger.py           # SQLite threading + round-trip
+python3 tests/sw/test_web_fetch_state.py     # Live/Log/Timeline/Devices SQL fetch
+python3 tests/sw/test_apple_continuity.py    # AirTag + Find My classification
+
+# Hardware loopback (HackRF + RTL-SDR)
+bash tests/run_tests.sh --hw
+python3 tests/hw/tx_pmr_loopback.py
 ```
 
 ## Analysis & Intelligence

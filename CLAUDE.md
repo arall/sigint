@@ -90,9 +90,9 @@ src/
     __init__.py           # Public: run_web_server, start_web_server_background
     categories.py         # Signal-type → real-world category map
     loaders.py            # Device + category loaders (pure functions, dict in / list-of-dict out)
-    fetch.py              # SQL-backed category fetch with multi-DB unioning
+    fetch.py              # SQL helpers: state/log/activity/active/category — every dashboard endpoint reads through here
     sessions.py           # Session discovery + path-traversal-safe resolve
-    tailer.py             # DBTailer: polls newest .db, builds live dashboard state
+    tailer.py             # DBTailer: tracks newest .db + caches fetch_live_state on a 2s background refresh thread
     server.py             # WebHandler HTTP routing + whitelisted static file serving
     static/               # Real index.html / style.css / app.js / leaflet.* (browser-debuggable)
 tests/
@@ -297,9 +297,35 @@ The server orchestrator (`scanners/server.py`) tracks per-capture status (`pendi
 Detection logging is a per-session SQLite file (`<type>_YYYYMMDD_HHMMSS.db`) in the output directory. `utils/logger.py` owns the single writer connection and serializes inserts under a mutex; `utils/db.py` bootstraps the schema, sets WAL mode and `synchronous=NORMAL`, and exposes `insert_detection` / `iter_detections` / `row_to_dict` / `max_rowid` helpers. Indexes on `(signal_type, ts_epoch)`, `ts_epoch`, `device_id`, and `(signal_type, device_id)` cover the dashboard, triangulation, heatmap, and correlator query patterns.
 
 - **Threading gotcha**: `sqlite3.connect()` must be called with `check_same_thread=False`. The logger is opened on the main thread but parsers call `logger.log()` from many worker threads (scapy sniff, hcidump reader, RTL-SDR async callback, HackRF channelizer). Without this flag every insert raises `ProgrammingError` deep inside the capture loops which silently swallow it — the symptom is detections visible in stdout (`[NEW AP]` prints etc.) but zero rows on disk. The logger's `_lock` already prevents concurrent use of the connection, so the flag is safe.
-- **Web tailer**: `web/tailer.py` `DBTailer` polls the newest `.db` file by rowid in read-only URI mode, picking up new inserts via `iter_detections(since_rowid=...)`. Each poll opens a fresh connection to avoid holding a long-lived reader across WAL checkpoints.
+- **Readonly mode + root-owned output**: when the server runs as sudo and the web UI runs as a normal user, the output dir and every `.db` file inside end up root-owned 0o755/0o644. SQLite's WAL reader needs to create a `-shm` sidecar on open, and a non-root reader can't write to the dir, so the open fails with "attempt to write a readonly database". Two defenses: the server's `start()` now sets `umask 0o002` and chmods the output dir to `0o777`; `db.connect(readonly=True)` probes the mode=ro connection and, on `OperationalError`, falls back to `?mode=ro&immutable=1` which skips WAL coordination entirely.
 - **External consumers**: if something wants CSV, shell out to `sqlite3 out.db -csv -header "SELECT * FROM detections"` — the codebase no longer writes CSV itself.
 - **One file per node**: triangulation still composes across nodes by shipping the `.db` file per sensor, exactly as it did with CSVs — no federation / replication.
+
+### SQL-first dashboard architecture
+
+After the Tier 1+2 refactor, every dashboard endpoint answers from a
+SQL query against the on-disk `.db` files — nothing comes from an
+in-memory deque or counter anymore. The DBTailer used to replay every
+detection into `_type_counts` / `_type_uniques` / `_activity_minutes`
+/ `_detections` deque / `_recent_bssids`; all of that is gone. What
+remains is a thin watcher + state cache.
+
+- **`web/fetch.py`** is the single entry point to detection data:
+    * `fetch_recent_detections(output_dir, limit, offset, signal_type)` — Log tab
+    * `fetch_activity_histogram(output_dir, minutes)` — Timeline tab (`GROUP BY substr(timestamp,1,16)`)
+    * `fetch_live_state(output_dir)` — Live tab per-type counts / uniques / last-seen + category rollup + recent events
+    * `fetch_active_dev_sigs(output_dir, minutes)` — Devices BLE + WiFi Clients active flag / RSSI
+    * `fetch_active_bssids(output_dir, minutes)` — Devices WiFi APs active flag / RSSI
+    * `fetch_detections_for_category_all(output_dir, name, window)` — Category tabs (already existed)
+  Every function unions across **every** `.db` in the output dir so standalone scanner subprocesses (`sdr.py pmr` writing `pmr446_*.db`, `adsb_*.db`, etc.) are visible to the dashboard without special-casing.
+
+- **Uniques via `json_extract`**: the per-type unique count query pushes the `_extract_uid` logic into SQL via a `CASE signal_type WHEN ...` expression (`_UNIQUES_SQL` in `fetch.py`). Avoids a per-row Python round trip and keeps `fetch_live_state` at ~200 ms on 10k-row DBs. **Keep this in sync** with `tailer._extract_uid`; if you change the uid key for a signal type in one place, change it in the other.
+
+- **DBTailer = watcher + cache**: `web/tailer.py` `DBTailer` is now ~300 lines. It finds the newest `.db`, updates `_tailing_db` / `_db_name` for the header display, and runs a background refresh thread that calls `fetch_live_state(...)` every 2 s and parks the result in `_cached_state`. `get_state()` returns the cached dict merged with `time` / `uptime` / `/proc` stats — sub-ms serve latency so SSE broadcasts don't block on SQL. The 2 s refresh interval matches the SSE cadence; raising it would make the Live tab feel laggy, lowering it burns CPU.
+
+- **Category fetch stays in the same file**: `fetch_detections_for_category_all` uses the same multi-DB pattern, plus transcripts-sidecar overlay. Session dropdown selections flip to the single-file `fetch_detections_for_category` path so the user's scope is respected.
+
+- **Restart-safe**: none of the dashboard state lives in memory. Restarting the web UI (or the server + the web UI together) no longer zeros the counts or wipes the Log tab backlog — everything reflects what's on disk.
 
 ### Web Dashboard Tabs
 
@@ -382,7 +408,7 @@ APs**, **WiFi Clients**, **BLE** (`web/loaders.py` `_load_wifi_aps` /
 - **WiFi Clients are NOT APs**: the old flat tab labeled client probe personas with the SSIDs they were *probing for*, so a phone searching for "NSA Hotspot #14" looked like an AP broadcasting that SSID. The client rows are now labeled by `manufacturer + fingerprint` with a small `probing: "SSID"` badge.
 - **WiFi APs** come from the persisted `aps.json` (`utils/ap_db.py`) keyed by BSSID. The loader groups 2.4/5 GHz radios of the same physical AP using a conservative heuristic — same non-empty SSID AND matching first 5 MAC octets — so the typical vendor pattern of incrementing only the last octet between radios collapses into one row. Over-splitting is harmless; over-grouping is what you should avoid.
 - **AP client tracking**: every non-beacon Dot11 frame referencing a known BSSID contributes a client MAC to that AP's `clients` set. The dashboard shows the count with a hover tooltip listing MACs, or an em-dash with a "no clients seen yet" tooltip when the channel hop hasn't dwelled long enough to see data frames.
-- **RSSI column** (BLE + WiFi Clients): pulls `last_rssi` from the persona's most recent detection within 5 min via `DBTailer.get_active_sigs`. Value is real dBm from `power_db` — note that `get_active_sigs` used to store `snr_db` under the `rssi` key which was off by 100 (BLE noise floor is a nominal -100); fixed. Idle rows show `—` and sort to the bottom of a DESC sort via a `-999` sentinel in `_devSortValue`. Colour bands: ≥-55 green, ≥-70 yellow, ≥-85 orange, else red.
+- **RSSI column** (BLE + WiFi Clients): pulls `last_rssi` from the persona's most recent detection within 5 min via `fetch_active_dev_sigs` in `web/fetch.py`. Value is real dBm from `power_db` — note that the historical in-memory implementation stored `snr_db` under the `rssi` key, which was off by 100 (BLE noise floor is a nominal -100); fixed at the SQL migration. Idle rows show `—` and sort to the bottom of a DESC sort via a `-999` sentinel in `_devSortValue`. Colour bands: ≥-55 green, ≥-70 yellow, ≥-85 orange, else red.
 - **BLE labels**: `_load_ble_devices` prefers the persisted `apple_device` (e.g. "AirPods Pro 2", "Apple Watch", "MacBook", **"AirTag (lost)"**) over the generic manufacturer. The Apple Continuity parser (`parsers/ble/apple_continuity.py`) persists this via `PersonaDB.update_persona(apple_device=...)`, and decodes Proximity Pairing model IDs from an `APPLE_PROXIMITY_MODELS` table (AirPods 1–4, AirPods Pro 1/2, AirPods Max, Beats line). Note: Proximity Pairing model IDs are **big-endian**, not little-endian — there was a latent bug in the old decoder that byte-swapped them.
 - **Row keys**: row identity uses `persona_key` (`dev_sig:ssid-set`) not `dev_sig`, because the DB can store multiple personas with the same `dev_sig` under different SSID sets. The per-subtab `_devExpanded` is a `Set` so multiple rows can be expanded simultaneously.
 - **Tooltips**: badges and capture-status pills use a central `TAG_TIPS` dictionary + `tipFor()` helper so adding a new badge only needs a dictionary entry, not per-call wiring. Tag-prefix matches (e.g. `lna `, `probing: `) handle dynamic values.
