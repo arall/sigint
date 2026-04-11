@@ -158,7 +158,10 @@ python3 tests/hw/tx_pmr_loopback.py
 - **IMSI catcher detection** — Compare observed cell IDs against OpenCelliD, flag unknown towers.
 - **GPS jamming detection** — Monitor L1 band (1575.42 MHz) for abnormal power levels.
 - **Tracker detection (RF)** — Monitor 800-960 MHz for periodic GSM/LTE bursts from hidden GPS trackers.
-- **Tracker detection (BLE)** — Tile advertisement parsing; AirTag/Find My classification is already implemented (see Devices tab). Missing: full anti-stalking detection across GPS positions per the IETF `draft-detecting-unwanted-location-trackers`.
+- **Tracker detection (BLE)** — Tile advertisement parsing; AirTag/Find My classification is already implemented (see Devices tab).
+- **Anti-stalking AirTag detector (basic)** — Build on the existing "AirTag (lost)" / "Find My accessory" labels: track any persona that keeps showing up alongside the scanner's GPS fix across multiple locations, alert when one appears at 3+ distinct places over 10+ minutes. Uses the detection log + persona DB directly, no new hardware. New `utils/stalker_detector.py` plus a dashboard widget.
+- **Anti-stalking AirTag detector (IETF-compliant)** — Full implementation of `draft-detecting-unwanted-location-trackers`: rotating-key correlation windows, separated-mode dwell tracking, multi-device owner disambiguation (users who carry several Apple devices). More serious version of the above; handles the edge cases Apple/Google's own detectors care about.
+- **WiFi deauth / evil-twin detection** — Passive parser on the existing monitor-mode WiFi adapter. Flag Dot11Deauth frames (count per BSSID over time — sudden spikes = deauth attack). Flag BSSIDs broadcasting a known SSID but with a prefix that doesn't match the registered AP set (evil twin). Lands in the Devices tab with a new "rogue" badge on the WiFi APs sub-table.
 - **Doppler / TDOA** — Time-difference-of-arrival for more precise geolocation. Requires GPS PPS time sync.
 - **ML-based AMC** — ONNX Runtime + RadioML pre-trained model for deeper modulation classification on CPU.
 
