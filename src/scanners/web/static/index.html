@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SDR Server</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- Header -->
+<div class="header" id="header">
+  <h1>SDR SERVER</h1>
+  <div><span class="label">Time </span><span class="value" id="h-time">-</span></div>
+  <div><span class="label">Up </span><span class="value" id="h-uptime">-</span></div>
+  <div><span class="label">Detections </span><span class="value highlight" id="h-count">0</span></div>
+  <div><span class="label">GPS </span><span class="value" id="h-gps">no fix</span></div>
+  <div><span class="label">DB </span><span class="value" id="h-db" style="color:#888">-</span></div>
+</div>
+
+<!-- System stats bar -->
+<div class="header" style="font-size:12px; gap: 8px 20px; padding: 8px 16px;">
+  <div><span class="label">CPU </span><span class="value" id="s-cpu">-</span></div>
+  <div><span class="label">Temp </span><span class="value" id="s-temp">-</span></div>
+  <div><span class="label">Mem </span><span class="value" id="s-mem">-</span></div>
+  <div><span class="label">Disk </span><span class="value" id="s-disk">-</span></div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs">
+  <button class="tab-btn active" data-tab="live">Live</button>
+  <button class="tab-btn" data-tab="voice">Voice</button>
+  <button class="tab-btn" data-tab="drones">Drones</button>
+  <button class="tab-btn" data-tab="aircraft">Aircraft</button>
+  <button class="tab-btn" data-tab="vessels">Vessels</button>
+  <button class="tab-btn" data-tab="vehicles">Vehicles</button>
+  <button class="tab-btn" data-tab="cellular">Cellular</button>
+  <button class="tab-btn" data-tab="devices">Devices</button>
+  <button class="tab-btn" data-tab="other">Other</button>
+  <button class="tab-btn" data-tab="log">Log</button>
+  <button class="tab-btn" data-tab="config">Config</button>
+  <button class="tab-btn" data-tab="timeline">Timeline</button>
+</div>
+
+<!-- Tab: Live -->
+<div id="tab-live" class="tab-content active">
+  <div class="section">
+    <div class="section-title">Categories</div>
+    <table>
+      <thead><tr>
+        <th>Category</th><th class="num">Count</th><th class="num">Unique</th>
+        <th>Last</th><th>Signal Types</th>
+      </tr></thead>
+      <tbody id="categories">
+        <tr><td colspan="5" class="empty">waiting for detections...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Recent</div>
+    <div class="section-body" id="recent"><div class="empty">...</div></div>
+  </div>
+</div>
+
+<!-- Tab: Voice -->
+<div id="tab-voice" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Voice Transmissions</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('voice')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Type</th><th>Channel</th><th class="num">Freq (MHz)</th>
+        <th class="num">Dur</th><th class="num">SNR</th><th>Transcript</th><th></th>
+      </tr></thead>
+      <tbody id="voice-body">
+        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Drones -->
+<div id="tab-drones" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Drones</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('drones')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Type</th><th>Serial / ID</th><th>UA Type</th><th>Protocol</th>
+        <th>Position</th><th class="num">Alt</th><th class="num">Speed</th>
+        <th>Operator</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="drones-body">
+        <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Aircraft -->
+<div id="tab-aircraft" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Aircraft (ADS-B)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('aircraft')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>ICAO</th><th>Callsign</th><th class="num">Altitude</th>
+        <th class="num">Speed</th><th class="num">Heading</th>
+        <th>Position</th><th class="num">Msgs</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="aircraft-body">
+        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Vessels -->
+<div id="tab-vessels" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Vessels (AIS)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('vessels')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>MMSI</th><th>Name</th><th>Type</th><th>Nav Status</th>
+        <th class="num">Speed</th><th class="num">Course</th>
+        <th>Position</th><th class="num">Msgs</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="vessels-body">
+        <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Vehicles -->
+<div id="tab-vehicles" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Vehicles (TPMS + Keyfobs)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('vehicles')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Kind</th><th>ID</th><th>Protocol</th><th class="num">Freq</th>
+        <th class="num">Pressure</th><th class="num">Temp</th>
+        <th class="num">Count</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="vehicles-body">
+        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Cellular -->
+<div id="tab-cellular" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Cellular Uplink Activity</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('cellular')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Technology</th><th>Band</th><th>Channel</th><th class="num">Freq (MHz)</th>
+        <th class="num">Hits</th><th class="num">Last SNR</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="cellular-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Other -->
+<div id="tab-other" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Other (ISM, LoRa, POCSAG)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('other')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Type</th><th>Channel</th><th class="num">Freq (MHz)</th>
+        <th class="num">SNR</th><th>Model / Protocol</th><th>Detail</th>
+      </tr></thead>
+      <tbody id="other-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Log -->
+<div id="tab-log" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Detections</span>
+      <div class="filter-bar">
+        <select id="det-filter"><option value="">All Types</option></select>
+        <button onclick="loadDetections()">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Type</th><th>Ch</th><th>Freq (MHz)</th>
+        <th class="num">SNR</th><th>Details</th><th></th>
+      </tr></thead>
+      <tbody id="det-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+    <div class="load-more">
+      <button id="det-more" onclick="loadDetections(true)">Load More</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tab: Devices -->
+<div id="tab-devices" class="tab-content">
+  <!-- Summary cards -->
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap" id="dev-stats"></div>
+
+  <!-- Sub-tabs -->
+  <div class="tabs" style="margin-bottom:8px">
+    <button class="dev-subtab-btn active" data-sub="wifi_aps">WiFi APs</button>
+    <button class="dev-subtab-btn" data-sub="wifi_clients">WiFi Clients</button>
+    <button class="dev-subtab-btn" data-sub="ble">BLE</button>
+    <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;text-transform:none;letter-spacing:0;margin-left:auto;padding-right:12px">
+      <input type="checkbox" id="dev-active-only"> Active only
+    </label>
+    <button onclick="loadDevices()" style="margin-right:8px">Refresh</button>
+  </div>
+
+  <!-- WiFi APs sub-pane -->
+  <div class="dev-subpane" data-sub="wifi_aps">
+    <div class="section">
+      <table>
+        <thead><tr>
+          <th style="width:20px"></th>
+          <th class="sortable" data-sub="wifi_aps" data-key="label">SSID</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="bssid_count">BSSID(s)</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="channel">Band / Ch</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="crypto">Crypto</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="manufacturer">Vendor</th>
+          <th class="sortable num" data-sub="wifi_aps" data-key="last_rssi">RSSI</th>
+          <th class="sortable num" data-sub="wifi_aps" data-key="client_count" title="Distinct client MACs seen communicating with this AP. Only populated while the scanner is tuned to the AP's channel, so counts grow slowly with channel hopping.">Clients</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="first_seen">First Seen</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="last_seen">Last Seen</th>
+        </tr></thead>
+        <tbody id="ap-body">
+          <tr><td colspan="10" class="empty">select tab to load...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- WiFi Clients sub-pane -->
+  <div class="dev-subpane" data-sub="wifi_clients" style="display:none">
+    <div class="section">
+      <table>
+        <thead><tr>
+          <th style="width:20px"></th>
+          <th class="sortable" data-sub="wifi_clients" data-key="label">Device</th>
+          <th class="sortable" data-sub="wifi_clients" data-key="manufacturer">Vendor</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="mac_count">MACs</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="ssid_count">SSIDs</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="sessions">Sessions</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="total_probes">Probes</th>
+          <th class="sortable" data-sub="wifi_clients" data-key="last_session">Last Seen</th>
+        </tr></thead>
+        <tbody id="wc-body">
+          <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- BLE sub-pane -->
+  <div class="dev-subpane" data-sub="ble" style="display:none">
+    <div class="section">
+      <table>
+        <thead><tr>
+          <th style="width:20px"></th>
+          <th class="sortable" data-sub="ble" data-key="label">Device</th>
+          <th class="sortable" data-sub="ble" data-key="manufacturer">Vendor</th>
+          <th class="sortable" data-sub="ble" data-key="apple_device">Apple</th>
+          <th class="sortable num" data-sub="ble" data-key="mac_count">MACs</th>
+          <th class="sortable num" data-sub="ble" data-key="sessions">Sessions</th>
+          <th class="sortable num" data-sub="ble" data-key="total_probes">Probes</th>
+          <th class="sortable" data-sub="ble" data-key="last_session">Last Seen</th>
+        </tr></thead>
+        <tbody id="ble-body">
+          <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Tab: Config -->
+<div id="tab-config" class="tab-content">
+  <div class="section">
+    <div class="section-title">Capture Configuration</div>
+    <div class="section-body" id="captures"><div class="empty">loading...</div></div>
+  </div>
+</div>
+
+<!-- Tab: Timeline -->
+<div id="tab-timeline" class="tab-content">
+  <div class="section">
+    <div class="section-title">Activity (last 60 minutes)</div>
+    <div class="chart-container" id="activity-chart">
+      <div class="empty">loading...</div>
+    </div>
+    <div class="activity-summary" id="activity-summary"></div>
+  </div>
+</div>
+
+<!-- Status -->
+<div class="status-bar">
+  <span class="status-dot" id="status-dot"></span>
+  <span id="status-text">connecting...</span>
+</div>
+
+<!-- Hidden audio element -->
+<audio id="audio-player" style="display:none"></audio>
+<script src="/static/app.js"></script>
+</body>
+</html>
