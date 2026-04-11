@@ -44,6 +44,7 @@
   <button class="tab-btn" data-tab="vehicles">Vehicles</button>
   <button class="tab-btn" data-tab="cellular">Cellular</button>
   <button class="tab-btn" data-tab="devices">Devices</button>
+  <button class="tab-btn" data-tab="correlations">Correlations</button>
   <button class="tab-btn" data-tab="other">Other</button>
   <button class="tab-btn" data-tab="log">Log</button>
   <button class="tab-btn" data-tab="config">Config</button>
@@ -219,6 +220,35 @@
         <tr><td colspan="7" class="empty">select tab to load...</td></tr>
       </tbody>
     </table>
+  </div>
+</div>
+
+<!-- Tab: Correlations -->
+<div id="tab-correlations" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Device Correlations</span>
+      <div class="filter-bar">
+        <span id="corr-summary" style="font-size:11px;color:#888"></span>
+        <button onclick="loadCorrelations()">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Device A</th><th>Device B</th>
+        <th class="num">Overlap</th><th class="num">Total A</th><th class="num">Total B</th>
+        <th class="num">Ratio</th><th>Cross-Transport</th>
+      </tr></thead>
+      <tbody id="corr-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="section">
+    <div class="section-title"><span>Clusters</span></div>
+    <div class="section-body" id="corr-clusters">
+      <div class="empty">no clusters yet</div>
+    </div>
   </div>
 </div>
 

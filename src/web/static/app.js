@@ -985,6 +985,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       initMap();
       loadMap();
     }
+    if (btn.dataset.tab === 'correlations') loadCorrelations();
     if (['voice','drones','aircraft','vessels','vehicles','cellular','other']
         .includes(btn.dataset.tab)) loadCategory(btn.dataset.tab);
   });
@@ -1014,6 +1015,77 @@ setInterval(() => {
     loadCategory(tab);
   }
 }, 3000);
+
+// --- Device Correlations tab ---
+// Reads output/correlations.json, which the server's live
+// DeviceCorrelator writes every 30s from the real-time _on_detection
+// hook. Pairs and clusters both shown; no filtering yet.
+async function loadCorrelations() {
+  try {
+    const r = await fetch('/api/correlations');
+    const data = await r.json();
+    renderCorrelations(data);
+  } catch (e) {}
+}
+
+function renderCorrelations(data) {
+  const pairs = data.correlated_pairs || [];
+  const clusters = data.clusters || [];
+  const total = data.total_devices || 0;
+  const ts = data.timestamp ? data.timestamp.replace('T', ' ').split('.')[0] : '—';
+
+  const summary = document.getElementById('corr-summary');
+  if (summary) {
+    summary.textContent = `${pairs.length} pair${pairs.length === 1 ? '' : 's'} · `
+      + `${clusters.length} cluster${clusters.length === 1 ? '' : 's'} · `
+      + `${total} device${total === 1 ? '' : 's'} · last ${ts}`;
+  }
+
+  const tbody = document.getElementById('corr-body');
+  if (!pairs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">'
+      + esc(data.note || 'no correlated pairs yet — run the server for a few minutes to accumulate co-occurrences')
+      + '</td></tr>';
+  } else {
+    tbody.innerHTML = pairs.map(p => {
+      const ratioColor = p.ratio >= 0.9 ? '#4caf50' : p.ratio >= 0.7 ? '#ffeb3b' : '#e0e0e0';
+      const xBadge = p.cross_transport
+        ? '<span style="background:#0f3460;color:#9ecbff;padding:0 5px;border-radius:3px;font-size:10px" title="Correlated across different signal types (e.g. WiFi + BLE)">cross</span>'
+        : '';
+      return '<tr>'
+        + '<td style="font-family:monospace;font-size:11px">' + esc(p.device_a) + '</td>'
+        + '<td style="font-family:monospace;font-size:11px">' + esc(p.device_b) + '</td>'
+        + '<td class="num">' + p.co_occurrences + '</td>'
+        + '<td class="num">' + p.total_a + '</td>'
+        + '<td class="num">' + p.total_b + '</td>'
+        + '<td class="num" style="color:' + ratioColor + '">' + (p.ratio * 100).toFixed(0) + '%</td>'
+        + '<td>' + xBadge + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  const clustEl = document.getElementById('corr-clusters');
+  if (!clusters.length) {
+    clustEl.innerHTML = '<div class="empty">no clusters yet — a cluster is 2+ devices that all correlate transitively</div>';
+  } else {
+    clustEl.innerHTML = clusters.map((c, i) =>
+      '<div style="padding:6px 0;border-bottom:1px solid #0f3460">'
+      + '<div style="color:#4fc3f7;font-weight:600;font-size:11px;margin-bottom:4px">Cluster ' + (i + 1) + ' (' + c.length + ' devices)</div>'
+      + '<div style="font-family:monospace;font-size:11px;color:#ccc">'
+      + c.map(esc).join('<br>')
+      + '</div></div>'
+    ).join('');
+  }
+}
+
+// Auto-refresh Correlations tab every 10s while active (the server
+// publishes every 30s so any faster is wasted work).
+setInterval(() => {
+  if (_selectedSession) return;
+  if (document.hidden) return;
+  const activeBtn = document.querySelector('.tab-btn.active');
+  if (activeBtn && activeBtn.dataset.tab === 'correlations') loadCorrelations();
+}, 10000);
 
 // --- Situational Awareness Map (Leaflet) ---
 // Lazy-initialized on first Map tab activation. Markers are grouped by

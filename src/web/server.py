@@ -103,6 +103,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_devices(qs)
         elif path == '/api/sessions':
             self._serve_sessions()
+        elif path == '/api/correlations':
+            self._serve_correlations()
         elif path.startswith('/api/cat/'):
             self._serve_category(path[len('/api/cat/'):], qs)
         elif path.startswith('/audio/'):
@@ -240,6 +242,23 @@ class WebHandler(BaseHTTPRequestHandler):
     def _serve_sessions(self):
         sessions = list_sessions(self.server.output_dir)
         self._send_json({"sessions": sessions})
+
+    def _serve_correlations(self):
+        """Read output/correlations.json published by the server's
+        live DeviceCorrelator on its 30s flush loop."""
+        path = os.path.join(self.server.output_dir, "correlations.json")
+        try:
+            with open(path, 'r') as f:
+                self._send_json(json.load(f))
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._send_json({
+                "correlated_pairs": [],
+                "clusters": [],
+                "total_devices": 0,
+                "timestamp": None,
+                "note": "no correlations.json yet — the live correlator "
+                        "publishes every 30s via the server flush loop",
+            })
 
     def _serve_devices(self, qs):
         out_dir = self.server.output_dir
