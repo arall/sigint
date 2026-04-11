@@ -58,6 +58,12 @@ run_test "FM voice parser"                "python3 tests/sw/test_fm_voice_parser
 run_test "PMR audio quality"              "python3 tests/sw/test_pmr_quality.py"
 run_test "PMR demod pipeline"             "python3 tests/sw/test_pmr_demod.py"
 
+# ---- Data layer tests ----
+run_test "DB + logger (threading)"        "python3 tests/sw/test_db_logger.py"
+run_test "PersonaDB merge semantics"      "python3 tests/sw/test_persona_db.py"
+run_test "ApDB merge semantics"           "python3 tests/sw/test_ap_db.py"
+run_test "Web loaders (categories/devices)" "python3 tests/sw/test_web_loaders.py"
+
 # ---- Transcription tests (needs Whisper) ----
 if python3 -c "import whisper" 2>/dev/null; then
     echo ""
