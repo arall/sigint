@@ -183,6 +183,59 @@ def test_missing_db_returns_empty():
     assert rows == []
 
 
+def test_fetch_all_unions_across_db_files():
+    """Regression for the 'standalone subprocess writes to its own .db'
+    case: sdr.py pmr writes pmr446_*.db while the main server writes
+    server_*.db. The live category tab must see both."""
+    from web.fetch import fetch_detections_for_category_all
+    from web.loaders import CATEGORY_LOADERS
+    from utils.logger import SignalLogger
+
+    tmp = tempfile.mkdtemp()
+
+    # File 1: the "server" DB — no voice
+    log1 = SignalLogger(output_dir=tmp, signal_type="server", min_snr_db=0)
+    log1.start()
+    log1.log_signal("WiFi-AP", 2437e6, -70, -95, channel="CH6")
+    log1.log_signal("BLE-Adv", 2402e6, -65, -95)
+    log1.stop()
+
+    # File 2: the "pmr" standalone subprocess DB — voice only
+    log2 = SignalLogger(output_dir=tmp, signal_type="pmr446", min_snr_db=0)
+    log2.start()
+    log2.log_signal("PMR446", 446e6, -50, -90, channel="CH1",
+                    metadata='{"duration_s":2.5}')
+    log2.log_signal("PMR446", 446e6, -50, -90, channel="CH2",
+                    metadata='{"duration_s":1.8}')
+    log2.stop()
+
+    # Single-file fetch on the server DB sees nothing voice
+    from web.fetch import fetch_detections_for_category
+    import glob, os
+    server_path = [p for p in glob.glob(os.path.join(tmp, "*.db"))
+                   if "server" in os.path.basename(p)][0]
+    single = fetch_detections_for_category(server_path, "voice")
+    assert single == [], \
+        "server DB alone should have no voice; got " + str(single)
+
+    # Union across both .db files sees the PMR detections
+    merged = fetch_detections_for_category_all(tmp, "voice")
+    assert len(merged) == 2, f"union should see 2 voice dets, got {len(merged)}"
+    types = {d["signal_type"] for d in merged}
+    assert types == {"PMR446"}
+
+    # And the loader renders them
+    rows = CATEGORY_LOADERS["voice"](merged)
+    assert len(rows) == 2
+    assert {r["channel"] for r in rows} == {"CH1", "CH2"}
+
+
+def test_fetch_all_empty_dir():
+    from web.fetch import fetch_detections_for_category_all
+    tmp = tempfile.mkdtemp()
+    assert fetch_detections_for_category_all(tmp, "voice") == []
+
+
 def test_ordering_is_oldest_first():
     """Deque ordering is oldest first, newest last. _load_voice iterates
     reversed(detections) to get newest-first rows. Make sure the SQL
@@ -216,6 +269,8 @@ def run_tests():
         ("Unknown category",            test_unknown_category_returns_empty),
         ("Missing db",                  test_missing_db_returns_empty),
         ("Oldest-first ordering",       test_ordering_is_oldest_first),
+        ("Union across .db files",      test_fetch_all_unions_across_db_files),
+        ("Union empty dir",             test_fetch_all_empty_dir),
     ]
 
     print("=" * 60)

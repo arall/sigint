@@ -12,6 +12,7 @@ category loaders in `web/loaders.py` consume them with no changes.
 """
 
 import json
+import os
 import time
 
 from utils import db as _db
@@ -145,3 +146,51 @@ def fetch_detections_for_category(
     # that use `reversed(detections)` assume that ordering. Flip.
     shaped.reverse()
     return shaped
+
+
+def fetch_detections_for_category_all(
+    output_dir,
+    category,
+    window_seconds=DEFAULT_WINDOW_SECONDS,
+    limit=DEFAULT_LIMIT,
+    now=None,
+):
+    """Union the category fetch across *every* .db file in an output dir.
+
+    The single-file fetcher above is scoped to one session — which breaks
+    for standalone scanners that write to their own DB (e.g. `sdr.py pmr`
+    as a server subprocess writes to pmr446_*.db, while the main server
+    writes server_*.db). In LIVE mode the user expects /api/cat/voice to
+    see voice transmissions regardless of which file carried them; this
+    helper does the union.
+
+    When the user picks a specific session from the header dropdown we
+    stay on the single-file path so the UI respects their scope.
+    """
+    try:
+        names = sorted(
+            f for f in os.listdir(output_dir)
+            if f.endswith('.db')
+            and not f.endswith('-wal')
+            and not f.endswith('-shm')
+        )
+    except OSError:
+        return []
+
+    merged = []
+    for name in names:
+        path = os.path.join(output_dir, name)
+        rows = fetch_detections_for_category(
+            path, category,
+            window_seconds=window_seconds,
+            limit=limit,
+            now=now,
+        )
+        merged.extend(rows)
+
+    # Sort by timestamp (oldest first, matching single-file output), then
+    # keep only the most recent `limit` rows across all files.
+    merged.sort(key=lambda r: r.get("timestamp", ""))
+    if len(merged) > limit:
+        merged = merged[-limit:]
+    return merged

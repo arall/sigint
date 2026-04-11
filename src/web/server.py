@@ -28,7 +28,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 from .categories import CATEGORY_LABELS
-from .fetch import fetch_detections_for_category
+from .fetch import fetch_detections_for_category, fetch_detections_for_category_all
 from .loaders import (
     CATEGORY_LOADERS,
     _load_ble_devices,
@@ -183,29 +183,32 @@ class WebHandler(BaseHTTPRequestHandler):
         window_hours = max(0.1, min(window_hours, 168))
         window_seconds = int(window_hours * 3600)
 
-        # Session override: ?session=<filename> picks a historical .db.
-        # Default is the live session (whatever tailer is currently tailing).
+        # Session override: ?session=<filename> picks a single historical
+        # .db. Default is LIVE mode, which unions every .db in the output
+        # directory — because standalone scanners (sdr.py pmr, adsb, ais,
+        # ...) write to their own files separate from the server .db, so
+        # a single-file scope would miss them.
         session_name = qs.get("session", [None])[0]
-        db_path = None
         session_resolved = None
+        detections = None
+
         if session_name:
             db_path = resolve_session_path(self.server.output_dir, session_name)
             if db_path is None:
                 self.send_error(400, f"Unknown session: {session_name}")
                 return
             session_resolved = session_name
-        else:
-            db_path = getattr(tailer, "_tailing_db", None)
-
-        # Prefer SQL fetch against the chosen .db so category history
-        # isn't capped at the 50k in-memory deque. Fall back to the deque
-        # only when no DB has been opened yet AND the user didn't pick a
-        # specific session.
-        detections = None
-        if db_path:
             try:
                 detections = fetch_detections_for_category(
                     db_path, name,
+                    window_seconds=window_seconds,
+                )
+            except Exception:
+                detections = None
+        else:
+            try:
+                detections = fetch_detections_for_category_all(
+                    self.server.output_dir, name,
                     window_seconds=window_seconds,
                 )
             except Exception:
