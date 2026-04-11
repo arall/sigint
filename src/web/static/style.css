@@ -25,12 +25,14 @@ h1 { font-size: 18px; font-weight: 600; }
   font-family: inherit; font-size: 13px;
 }
 .tab-btn.active { color: #e0e0e0; background: #1a1a2e; }
-.dev-subtab-btn {
+.dev-subtab-btn, .sig-subtab-btn {
   background: #0f1930; color: #888; border: 1px solid #0f3460;
   border-radius: 4px; padding: 6px 14px; cursor: pointer;
   font-family: inherit; font-size: 12px;
 }
-.dev-subtab-btn.active { color: #e0e0e0; background: #1a2a4e; border-color: #4fc3f7; }
+.dev-subtab-btn.active, .sig-subtab-btn.active {
+  color: #e0e0e0; background: #1a2a4e; border-color: #4fc3f7;
+}
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: #4fc3f7; }
 th.sortable.sort-asc::after { content: " \25b2"; color: #4fc3f7; font-size: 9px; }

@@ -37,15 +37,9 @@
 <div class="tabs">
   <button class="tab-btn active" data-tab="live">Live</button>
   <button class="tab-btn" data-tab="map">Map</button>
-  <button class="tab-btn" data-tab="voice">Voice</button>
-  <button class="tab-btn" data-tab="drones">Drones</button>
-  <button class="tab-btn" data-tab="aircraft">Aircraft</button>
-  <button class="tab-btn" data-tab="vessels">Vessels</button>
-  <button class="tab-btn" data-tab="vehicles">Vehicles</button>
-  <button class="tab-btn" data-tab="cellular">Cellular</button>
+  <button class="tab-btn" data-tab="signals">Signals</button>
   <button class="tab-btn" data-tab="devices">Devices</button>
   <button class="tab-btn" data-tab="correlations">Correlations</button>
-  <button class="tab-btn" data-tab="other">Other</button>
   <button class="tab-btn" data-tab="log">Log</button>
   <button class="tab-btn" data-tab="config">Config</button>
   <button class="tab-btn" data-tab="timeline">Timeline</button>
@@ -96,8 +90,20 @@
   </div>
 </div>
 
-<!-- Tab: Voice -->
-<div id="tab-voice" class="tab-content">
+<!-- Tab: Signals (groups Voice / Drones / Aircraft / Vessels / Vehicles / Cellular / Other) -->
+<div id="tab-signals" class="tab-content">
+  <div class="tabs" style="margin-bottom:8px">
+    <button class="sig-subtab-btn active" data-sub="voice">Voice</button>
+    <button class="sig-subtab-btn" data-sub="drones">Drones</button>
+    <button class="sig-subtab-btn" data-sub="aircraft">Aircraft</button>
+    <button class="sig-subtab-btn" data-sub="vessels">Vessels</button>
+    <button class="sig-subtab-btn" data-sub="vehicles">Vehicles</button>
+    <button class="sig-subtab-btn" data-sub="cellular">Cellular</button>
+    <button class="sig-subtab-btn" data-sub="other">Other</button>
+  </div>
+
+<!-- Sub-pane: Voice -->
+<div class="sig-subpane" data-sub="voice">
   <div class="section">
     <div class="section-title">
       <span>Voice Transmissions</span>
@@ -123,8 +129,8 @@
   </div>
 </div>
 
-<!-- Tab: Drones -->
-<div id="tab-drones" class="tab-content">
+<!-- Sub-pane: Drones -->
+<div class="sig-subpane" data-sub="drones" style="display:none">
   <div class="section">
     <div class="section-title">
       <span>Drones</span>
@@ -151,8 +157,8 @@
   </div>
 </div>
 
-<!-- Tab: Aircraft -->
-<div id="tab-aircraft" class="tab-content">
+<!-- Sub-pane: Aircraft -->
+<div class="sig-subpane" data-sub="aircraft" style="display:none">
   <div class="section">
     <div class="section-title">
       <span>Aircraft (ADS-B)</span>
@@ -178,8 +184,8 @@
   </div>
 </div>
 
-<!-- Tab: Vessels -->
-<div id="tab-vessels" class="tab-content">
+<!-- Sub-pane: Vessels -->
+<div class="sig-subpane" data-sub="vessels" style="display:none">
   <div class="section">
     <div class="section-title">
       <span>Vessels (AIS)</span>
@@ -206,8 +212,8 @@
   </div>
 </div>
 
-<!-- Tab: Vehicles -->
-<div id="tab-vehicles" class="tab-content">
+<!-- Sub-pane: Vehicles -->
+<div class="sig-subpane" data-sub="vehicles" style="display:none">
   <div class="section">
     <div class="section-title">
       <span>Vehicles (TPMS + Keyfobs)</span>
@@ -233,8 +239,8 @@
   </div>
 </div>
 
-<!-- Tab: Cellular -->
-<div id="tab-cellular" class="tab-content">
+<!-- Sub-pane: Cellular -->
+<div class="sig-subpane" data-sub="cellular" style="display:none">
   <div class="section">
     <div class="section-title">
       <span>Cellular Uplink Activity</span>
@@ -258,6 +264,33 @@
     </table>
   </div>
 </div>
+
+<!-- Sub-pane: Other -->
+<div class="sig-subpane" data-sub="other" style="display:none">
+  <div class="section">
+    <div class="section-title">
+      <span>Other (ISM, LoRa, POCSAG)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('other')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th class="sortable" data-tbl="other-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="other-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="other-body" data-key="channel">Channel</th>
+        <th class="sortable num" data-tbl="other-body" data-key="frequency_mhz">Freq (MHz)</th>
+        <th class="sortable num" data-tbl="other-body" data-key="snr_db">SNR</th>
+        <th class="sortable" data-tbl="other-body" data-key="model">Model / Protocol</th>
+        <th class="sortable" data-tbl="other-body" data-key="detail">Detail</th>
+      </tr></thead>
+      <tbody id="other-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</div><!-- /tab-signals -->
 
 <!-- Tab: Correlations -->
 <div id="tab-correlations" class="tab-content">
@@ -289,32 +322,6 @@
     <div class="section-body" id="corr-clusters">
       <div class="empty">no clusters yet</div>
     </div>
-  </div>
-</div>
-
-<!-- Tab: Other -->
-<div id="tab-other" class="tab-content">
-  <div class="section">
-    <div class="section-title">
-      <span>Other (ISM, LoRa, POCSAG)</span>
-      <div class="filter-bar">
-        <button onclick="loadCategory('other')">Refresh</button>
-      </div>
-    </div>
-    <table>
-      <thead><tr>
-        <th class="sortable" data-tbl="other-body" data-key="timestamp">Time</th>
-        <th class="sortable" data-tbl="other-body" data-key="signal_type">Type</th>
-        <th class="sortable" data-tbl="other-body" data-key="channel">Channel</th>
-        <th class="sortable num" data-tbl="other-body" data-key="frequency_mhz">Freq (MHz)</th>
-        <th class="sortable num" data-tbl="other-body" data-key="snr_db">SNR</th>
-        <th class="sortable" data-tbl="other-body" data-key="model">Model / Protocol</th>
-        <th class="sortable" data-tbl="other-body" data-key="detail">Detail</th>
-      </tr></thead>
-      <tbody id="other-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
-      </tbody>
-    </table>
   </div>
 </div>
 

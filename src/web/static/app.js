@@ -804,6 +804,29 @@ function onSessionChange() {
   }
 }
 
+// --- Signals parent tab + sub-nav ---
+// The seven category tabs (Voice/Drones/Aircraft/Vessels/Vehicles/Cellular/
+// Other) used to be top-level tab buttons. They're now sub-panes under a
+// single "Signals" tab, grouped with a sub-nav row that reuses the same
+// styling as the Devices sub-tabs. Category names still uniquely
+// identify each pane — nothing downstream changed.
+let _sigSubtab = 'voice';
+
+function switchSigSubtab(name) {
+  _sigSubtab = name;
+  document.querySelectorAll('.sig-subtab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.sub === name);
+  });
+  document.querySelectorAll('.sig-subpane').forEach(p => {
+    p.style.display = p.dataset.sub === name ? 'block' : 'none';
+  });
+  loadCategory(name);
+}
+
+document.querySelectorAll('.sig-subtab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchSigSubtab(btn.dataset.sub));
+});
+
 // --- Category Tabs (Voice / Drones / Aircraft / Vessels / Vehicles / Cellular / Other) ---
 const _CATEGORY_BODY_IDS = {
   voice:    'voice-body',
@@ -1059,7 +1082,11 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     const panel = document.getElementById('tab-' + btn.dataset.tab);
     panel.classList.add('active');
     panel.style.display = 'block';
-    location.hash = btn.dataset.tab;
+    // replaceState instead of location.hash — the latter triggers a
+    // jump-to-anchor if any element on the page happens to share the id
+    // (e.g. the Leaflet map container is <div id="map">, which makes
+    // clicking the Map tab scroll the page down to it).
+    history.replaceState(null, '', '#' + btn.dataset.tab);
     if (btn.dataset.tab === 'log') loadDetections();
     if (btn.dataset.tab === 'devices') loadDevices();
     if (btn.dataset.tab === 'config') loadConfig();
@@ -1069,12 +1096,21 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       loadMap();
     }
     if (btn.dataset.tab === 'correlations') loadCorrelations();
-    if (['voice','drones','aircraft','vessels','vehicles','cellular','other']
-        .includes(btn.dataset.tab)) loadCategory(btn.dataset.tab);
+    if (btn.dataset.tab === 'signals') loadCategory(_sigSubtab);
   });
 });
 
+// Category names resolve into the Signals parent + a sub-tab switch.
+// Everything else is a plain top-tab click.
+const _SIGNAL_CATEGORIES = ['voice','drones','aircraft','vessels','vehicles','cellular','other'];
+
 function goToTab(name) {
+  if (_SIGNAL_CATEGORIES.includes(name)) {
+    const btn = document.querySelector('.tab-btn[data-tab="signals"]');
+    if (btn) btn.click();
+    switchSigSubtab(name);
+    return;
+  }
   const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
   if (btn) btn.click();
 }
@@ -1085,17 +1121,15 @@ setInterval(() => {
   if (cfgTab && cfgTab.classList.contains('active')) loadConfig();
 }, 3000);
 
-// Auto-refresh the active category tab every 3s. Skips when a historical
-// session is selected from the dropdown (that data never changes) and
-// skips when the document is hidden (background tab in the browser).
-const _CATEGORY_TAB_NAMES = ['voice','drones','aircraft','vessels','vehicles','cellular','other'];
+// Auto-refresh the active signals sub-pane every 3s. Skips when a
+// historical session is selected from the dropdown (that data never
+// changes) and skips when the document is hidden (background tab).
 setInterval(() => {
   if (_selectedSession) return;
   if (document.hidden) return;
   const activeBtn = document.querySelector('.tab-btn.active');
-  const tab = activeBtn ? activeBtn.dataset.tab : null;
-  if (tab && _CATEGORY_TAB_NAMES.includes(tab)) {
-    loadCategory(tab);
+  if (activeBtn && activeBtn.dataset.tab === 'signals') {
+    loadCategory(_sigSubtab);
   }
 }, 3000);
 
@@ -1342,8 +1376,7 @@ setInterval(loadSessions, 15000);
 document.getElementById('session-select').addEventListener('change', onSessionChange);
 
 if (location.hash) {
-  const btn = document.querySelector('.tab-btn[data-tab="'+location.hash.slice(1)+'"]');
-  if (btn) btn.click();
+  goToTab(location.hash.slice(1));
 }
 
 // --- SSE Connection ---
@@ -1407,9 +1440,8 @@ function startPolling() {
 
 // Refresh activity chart every 60s if active
 setInterval(() => {
-  if (document.getElementById('tab-activity').classList.contains('active')) {
-    loadActivity();
-  }
+  const el = document.getElementById('tab-timeline');
+  if (el && el.classList.contains('active')) loadActivity();
 }, 60000);
 
 connectSSE();
