@@ -34,6 +34,63 @@ _ANSI_RE = re.compile(r'\033\[[0-9;]*m')
 _SAFE_FILENAME_RE = re.compile(r'^[a-zA-Z0-9_\-\.]+\.wav$')
 
 
+# ---------------------------------------------------------------------------
+# Category map — groups signal types into real-world domains so the
+# dashboard can show dedicated tabs (Voice / Drones / Aircraft / Vessels /
+# Vehicles / Cellular / Devices / Other) instead of one flat firehose.
+# Anything not listed falls into "other".
+# ---------------------------------------------------------------------------
+
+CATEGORIES = {
+    "voice": [
+        "PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS", "FM_voice",
+    ],
+    "drones": [
+        "RemoteID", "RemoteID-operator", "DroneCtrl", "DroneVideo",
+    ],
+    "aircraft": ["ADS-B"],
+    "vessels":  ["AIS"],
+    "vehicles": ["tpms", "keyfob"],
+    "cellular": [
+        "GSM-UPLINK-GSM-900", "GSM-UPLINK-GSM-850", "LTE-UPLINK",
+    ],
+    "devices": [
+        "BLE-Adv", "WiFi-Probe", "WiFi-AP",
+    ],
+    "other": [
+        "ISM", "lora", "pocsag",
+    ],
+}
+
+CATEGORY_LABELS = {
+    "voice":    "Voice",
+    "drones":   "Drones",
+    "aircraft": "Aircraft",
+    "vessels":  "Vessels",
+    "vehicles": "Vehicles",
+    "cellular": "Cellular",
+    "devices":  "Devices",
+    "other":    "Other",
+}
+
+CATEGORY_ORDER = [
+    "voice", "drones", "aircraft", "vessels",
+    "vehicles", "cellular", "devices", "other",
+]
+
+TYPE_TO_CATEGORY = {sig: cat for cat, sigs in CATEGORIES.items() for sig in sigs}
+
+
+def _category_of(signal_type):
+    """Map a raw signal_type string to a category id. Handles wildcards
+    (e.g. GSM-UPLINK-* → cellular) so new-subtypes don't fall through."""
+    if signal_type in TYPE_TO_CATEGORY:
+        return TYPE_TO_CATEGORY[signal_type]
+    if signal_type.startswith("GSM-UPLINK") or signal_type.startswith("LTE-UPLINK"):
+        return "cellular"
+    return "other"
+
+
 def _get_system_stats():
     """Read CPU, memory, and disk stats from /proc and os (Linux)."""
     stats = {}
@@ -535,18 +592,31 @@ class DBTailer:
                 self._type_uniques[sig].add(uid)
 
             # Detection buffer
+            try:
+                lat = float(row.get("latitude") or 0) or None
+            except (ValueError, TypeError):
+                lat = None
+            try:
+                lon = float(row.get("longitude") or 0) or None
+            except (ValueError, TypeError):
+                lon = None
             self._detections.append({
                 "timestamp": ts,
                 "signal_type": sig,
+                "category": _category_of(sig),
                 "frequency_mhz": round(freq / 1e6, 4) if freq else 0,
                 "channel": ch,
                 "snr_db": round(snr, 1) if snr > 0 else None,
+                "power_db": power_db if power_db else None,
                 "audio_file": audio_file if audio_file else None,
                 "detail": detail,
                 "transcript": transcript,
                 "dev_sig": meta.get("dev_sig", ""),
                 "apple_device": meta.get("apple_device", ""),
                 "device_id": row.get("device_id", "") or meta.get("bssid", ""),
+                "latitude": lat,
+                "longitude": lon,
+                "meta": meta,
             })
 
             # Recent events feed
@@ -596,11 +666,39 @@ class DBTailer:
             for sig in all_types:
                 signals.append({
                     "type": sig,
+                    "category": _category_of(sig),
                     "count": self._type_counts.get(sig, 0),
                     "uniques": len(self._type_uniques.get(sig, set())),
                     "last_seen": self._type_last_seen.get(sig),
                     "snr": self._type_last_snr.get(sig),
                     "detail": self._type_last_detail.get(sig, ""),
+                })
+
+            # Roll signals up into category summary rows for the Live tab
+            cat_counts = Counter()
+            cat_uniques = {}
+            cat_last_seen = {}
+            cat_types = {}
+            for s in signals:
+                c = s["category"]
+                cat_counts[c] += s["count"]
+                cat_uniques.setdefault(c, 0)
+                cat_uniques[c] += s["uniques"]
+                prev_ls = cat_last_seen.get(c, "")
+                if s["last_seen"] and s["last_seen"] > prev_ls:
+                    cat_last_seen[c] = s["last_seen"]
+                cat_types.setdefault(c, []).append(s["type"])
+            categories = []
+            for c in CATEGORY_ORDER:
+                if cat_counts.get(c, 0) == 0:
+                    continue
+                categories.append({
+                    "id": c,
+                    "label": CATEGORY_LABELS[c],
+                    "count": cat_counts.get(c, 0),
+                    "uniques": cat_uniques.get(c, 0),
+                    "last_seen": cat_last_seen.get(c, ""),
+                    "types": cat_types.get(c, []),
                 })
 
             recent = [
@@ -618,6 +716,7 @@ class DBTailer:
             "db": self._db_name,
             "captures": [],
             "signals": signals,
+            "categories": categories,
             "recent": recent,
             "system": _get_system_stats(),
         }
@@ -800,6 +899,351 @@ def _extract_uid(sig, row, meta):
 
 
 # ---------------------------------------------------------------------------
+# Category loaders — each builds a shaped, domain-specific row list from
+# the tailer's in-memory detection deque. Called by /api/cat/<name>.
+# ---------------------------------------------------------------------------
+
+def _fmt_ts_short(ts):
+    """Format an ISO timestamp as 'MM-DD HH:MM:SS' for table rendering."""
+    if not ts:
+        return "-"
+    parts = ts.split("T")
+    if len(parts) < 2:
+        return ts
+    return parts[0][5:] + " " + parts[1].split(".")[0]
+
+
+def _load_voice(detections):
+    """Each voice detection already represents one finalized transmission —
+    one row per detection, newest first."""
+    rows = []
+    voice_types = set(CATEGORIES["voice"])
+    for d in reversed(detections):
+        if d["signal_type"] not in voice_types:
+            continue
+        meta = d.get("meta") or {}
+        rows.append({
+            "timestamp": d["timestamp"],
+            "signal_type": d["signal_type"],
+            "channel": d["channel"],
+            "frequency_mhz": d["frequency_mhz"],
+            "duration_s": meta.get("duration_s"),
+            "snr_db": d["snr_db"],
+            "audio_file": d["audio_file"],
+            "transcript": d["transcript"] or meta.get("transcript") or "",
+            "language": meta.get("language", ""),
+        })
+        if len(rows) >= 200:
+            break
+    return rows
+
+
+def _load_drones(detections):
+    """Group drone detections into one row per unique drone.
+
+    Key by serial number (RemoteID) where available, otherwise by
+    device_id or frequency for DroneCtrl / DroneVideo. Aggregate
+    the latest position, altitude, speed, and operator GPS.
+    """
+    drones = {}
+    drone_types = set(CATEGORIES["drones"])
+    for d in detections:
+        sig = d["signal_type"]
+        if sig not in drone_types:
+            continue
+        meta = d.get("meta") or {}
+        if sig == "RemoteID":
+            key = meta.get("serial_number") or d["device_id"] or f"rid:{d['channel']}"
+        elif sig == "RemoteID-operator":
+            key = (meta.get("serial_number") or d["device_id"] or "") + ":op"
+        elif sig == "DroneCtrl":
+            key = f"ctrl:{meta.get('protocol','')}:{d['frequency_mhz']:.3f}"
+        elif sig == "DroneVideo":
+            key = f"video:{d['frequency_mhz']:.3f}"
+        else:
+            continue
+        rec = drones.get(key)
+        if rec is None:
+            rec = {
+                "key": key,
+                "signal_type": sig,
+                "serial": meta.get("serial_number", ""),
+                "ua_type": meta.get("ua_type", ""),
+                "operator_id": meta.get("operator_id", ""),
+                "protocol": meta.get("protocol", ""),
+                "frequency_mhz": d["frequency_mhz"],
+                "count": 0,
+                "first_seen": d["timestamp"],
+                "last_seen": d["timestamp"],
+                "last_lat": None,
+                "last_lon": None,
+                "altitude_m": None,
+                "speed_ms": None,
+                "op_lat": None,
+                "op_lon": None,
+            }
+            drones[key] = rec
+        rec["count"] += 1
+        if d["timestamp"] > rec["last_seen"]:
+            rec["last_seen"] = d["timestamp"]
+        if d["timestamp"] < rec["first_seen"]:
+            rec["first_seen"] = d["timestamp"]
+        # RemoteID detections carry drone position in metadata
+        if sig == "RemoteID":
+            if meta.get("latitude") is not None:
+                try:
+                    rec["last_lat"] = float(meta["latitude"])
+                    rec["last_lon"] = float(meta["longitude"])
+                except (ValueError, TypeError):
+                    pass
+            if meta.get("altitude") is not None:
+                try:
+                    rec["altitude_m"] = float(meta["altitude"])
+                except (ValueError, TypeError):
+                    pass
+            if meta.get("speed") is not None:
+                try:
+                    rec["speed_ms"] = float(meta["speed"])
+                except (ValueError, TypeError):
+                    pass
+        elif sig == "RemoteID-operator":
+            if meta.get("latitude") is not None:
+                try:
+                    rec["op_lat"] = float(meta["latitude"])
+                    rec["op_lon"] = float(meta["longitude"])
+                except (ValueError, TypeError):
+                    pass
+    out = list(drones.values())
+    out.sort(key=lambda r: r["last_seen"], reverse=True)
+    return out
+
+
+def _load_aircraft(detections):
+    """One row per aircraft, keyed by ICAO. Shows latest callsign,
+    altitude, speed, heading, and position."""
+    aircraft = {}
+    for d in detections:
+        if d["signal_type"] != "ADS-B":
+            continue
+        meta = d.get("meta") or {}
+        icao = meta.get("icao") or d["device_id"] or d["channel"]
+        if not icao:
+            continue
+        rec = aircraft.get(icao)
+        if rec is None:
+            rec = {
+                "icao": icao,
+                "callsign": "",
+                "altitude_ft": None,
+                "speed_kt": None,
+                "heading": None,
+                "latitude": None,
+                "longitude": None,
+                "count": 0,
+                "first_seen": d["timestamp"],
+                "last_seen": d["timestamp"],
+            }
+            aircraft[icao] = rec
+        rec["count"] += 1
+        if d["timestamp"] > rec["last_seen"]:
+            rec["last_seen"] = d["timestamp"]
+        cs = (meta.get("callsign") or "").strip()
+        if cs:
+            rec["callsign"] = cs
+        for k_out, k_meta, cast in (
+            ("altitude_ft", "altitude", _try_int),
+            ("speed_kt",    "speed",    _try_float),
+            ("heading",     "heading",  _try_float),
+        ):
+            v = meta.get(k_meta)
+            if v not in (None, ""):
+                c = cast(v)
+                if c is not None:
+                    rec[k_out] = c
+        if d.get("latitude") is not None:
+            rec["latitude"] = d["latitude"]
+            rec["longitude"] = d["longitude"]
+        elif meta.get("latitude") not in (None, ""):
+            rec["latitude"] = _try_float(meta["latitude"])
+            rec["longitude"] = _try_float(meta["longitude"])
+    out = list(aircraft.values())
+    out.sort(key=lambda r: r["last_seen"], reverse=True)
+    return out
+
+
+def _load_vessels(detections):
+    """One row per vessel, keyed by MMSI."""
+    vessels = {}
+    for d in detections:
+        if d["signal_type"] != "AIS":
+            continue
+        meta = d.get("meta") or {}
+        mmsi = meta.get("mmsi") or d["device_id"] or d["channel"]
+        if not mmsi:
+            continue
+        rec = vessels.get(mmsi)
+        if rec is None:
+            rec = {
+                "mmsi": mmsi,
+                "name": "",
+                "ship_type": "",
+                "nav_status": "",
+                "speed_kn": None,
+                "course": None,
+                "latitude": None,
+                "longitude": None,
+                "count": 0,
+                "first_seen": d["timestamp"],
+                "last_seen": d["timestamp"],
+            }
+            vessels[mmsi] = rec
+        rec["count"] += 1
+        if d["timestamp"] > rec["last_seen"]:
+            rec["last_seen"] = d["timestamp"]
+        if meta.get("name"):
+            rec["name"] = meta["name"]
+        if meta.get("ship_type"):
+            rec["ship_type"] = meta["ship_type"]
+        if meta.get("nav_status"):
+            rec["nav_status"] = meta["nav_status"]
+        rec["speed_kn"] = _try_float(meta.get("speed")) or rec["speed_kn"]
+        rec["course"]   = _try_float(meta.get("course")) or rec["course"]
+        if d.get("latitude") is not None:
+            rec["latitude"] = d["latitude"]
+            rec["longitude"] = d["longitude"]
+    out = list(vessels.values())
+    out.sort(key=lambda r: r["last_seen"], reverse=True)
+    return out
+
+
+def _load_vehicles(detections):
+    """TPMS sensors and keyfob bursts. One row per unique sensor / burst
+    pattern. Groups TPMS by sensor_id, keyfob by data_hex."""
+    items = {}
+    for d in detections:
+        sig = d["signal_type"]
+        meta = d.get("meta") or {}
+        if sig == "tpms":
+            sid = meta.get("sensor_id")
+            if not sid:
+                continue
+            key = f"tpms:{sid}"
+            rec = items.get(key) or {
+                "kind": "TPMS",
+                "id": sid,
+                "first_seen": d["timestamp"],
+                "last_seen":  d["timestamp"],
+                "count": 0,
+                "protocol": meta.get("protocol", ""),
+                "pressure_kpa": None,
+                "temperature_c": None,
+                "frequency_mhz": d["frequency_mhz"],
+            }
+            rec["count"] += 1
+            if d["timestamp"] > rec["last_seen"]:
+                rec["last_seen"] = d["timestamp"]
+            rec["pressure_kpa"]  = _try_float(meta.get("pressure_kpa"))  or rec["pressure_kpa"]
+            rec["temperature_c"] = _try_float(meta.get("temperature_c")) or rec["temperature_c"]
+            items[key] = rec
+        elif sig == "keyfob":
+            dhex = meta.get("data_hex", "")
+            key = f"kf:{dhex or d['frequency_mhz']}"
+            rec = items.get(key) or {
+                "kind": "Keyfob",
+                "id": dhex or f"{d['frequency_mhz']} MHz",
+                "first_seen": d["timestamp"],
+                "last_seen":  d["timestamp"],
+                "count": 0,
+                "protocol": meta.get("protocol", ""),
+                "frequency_mhz": d["frequency_mhz"],
+                "pressure_kpa": None,
+                "temperature_c": None,
+            }
+            rec["count"] += 1
+            if d["timestamp"] > rec["last_seen"]:
+                rec["last_seen"] = d["timestamp"]
+            items[key] = rec
+    out = list(items.values())
+    out.sort(key=lambda r: r["last_seen"], reverse=True)
+    return out
+
+
+def _load_cellular(detections):
+    """Aggregate cellular uplink detections per channel / frequency."""
+    chans = {}
+    for d in detections:
+        sig = d["signal_type"]
+        if not (sig.startswith("GSM-UPLINK") or sig.startswith("LTE-UPLINK")):
+            continue
+        key = f"{sig}:{d['frequency_mhz']:.3f}"
+        rec = chans.get(key) or {
+            "technology": "GSM" if sig.startswith("GSM") else "LTE",
+            "band": sig,
+            "channel": d["channel"],
+            "frequency_mhz": d["frequency_mhz"],
+            "first_seen": d["timestamp"],
+            "last_seen":  d["timestamp"],
+            "count": 0,
+            "last_snr": d["snr_db"],
+        }
+        rec["count"] += 1
+        if d["timestamp"] > rec["last_seen"]:
+            rec["last_seen"] = d["timestamp"]
+            rec["last_snr"] = d["snr_db"]
+        chans[key] = rec
+    out = list(chans.values())
+    out.sort(key=lambda r: r["last_seen"], reverse=True)
+    return out
+
+
+def _load_other(detections):
+    """Catch-all for ISM / LoRa / POCSAG and anything uncategorized."""
+    rows = []
+    for d in reversed(detections):
+        if d["category"] != "other":
+            continue
+        meta = d.get("meta") or {}
+        rows.append({
+            "timestamp": d["timestamp"],
+            "signal_type": d["signal_type"],
+            "channel": d["channel"],
+            "frequency_mhz": d["frequency_mhz"],
+            "snr_db": d["snr_db"],
+            "detail": d["detail"],
+            "model": meta.get("model", ""),
+            "protocol": meta.get("protocol", ""),
+        })
+        if len(rows) >= 200:
+            break
+    return rows
+
+
+def _try_int(v):
+    try:
+        return int(float(v))
+    except (ValueError, TypeError):
+        return None
+
+
+def _try_float(v):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+CATEGORY_LOADERS = {
+    "voice":    _load_voice,
+    "drones":   _load_drones,
+    "aircraft": _load_aircraft,
+    "vessels":  _load_vessels,
+    "vehicles": _load_vehicles,
+    "cellular": _load_cellular,
+    "other":    _load_other,
+}
+
+
+# ---------------------------------------------------------------------------
 # HTTP Server
 # ---------------------------------------------------------------------------
 
@@ -828,6 +1272,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_config()
         elif path == '/api/devices':
             self._serve_devices(qs)
+        elif path.startswith('/api/cat/'):
+            self._serve_category(path[len('/api/cat/'):], qs)
         elif path.startswith('/audio/'):
             self._serve_audio(path[7:])
         else:
@@ -887,6 +1333,22 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send_json(json.load(f))
         except (FileNotFoundError, json.JSONDecodeError):
             self._send_json({"captures": []})
+
+    def _serve_category(self, name, qs):
+        loader = CATEGORY_LOADERS.get(name)
+        if loader is None:
+            self.send_error(404, f"Unknown category: {name}")
+            return
+        tailer = self.server.tailer
+        with tailer._lock:
+            detections = list(tailer._detections)
+        rows = loader(detections)
+        self._send_json({
+            "category": name,
+            "label": CATEGORY_LABELS.get(name, name),
+            "rows": rows,
+            "total": len(rows),
+        })
 
     def _serve_devices(self, qs):
         tailer = self.server.tailer
@@ -1185,8 +1647,15 @@ tr:last-child td { border-bottom: none; }
 <!-- Tabs -->
 <div class="tabs">
   <button class="tab-btn active" data-tab="live">Live</button>
-  <button class="tab-btn" data-tab="log">Log</button>
+  <button class="tab-btn" data-tab="voice">Voice</button>
+  <button class="tab-btn" data-tab="drones">Drones</button>
+  <button class="tab-btn" data-tab="aircraft">Aircraft</button>
+  <button class="tab-btn" data-tab="vessels">Vessels</button>
+  <button class="tab-btn" data-tab="vehicles">Vehicles</button>
+  <button class="tab-btn" data-tab="cellular">Cellular</button>
   <button class="tab-btn" data-tab="devices">Devices</button>
+  <button class="tab-btn" data-tab="other">Other</button>
+  <button class="tab-btn" data-tab="log">Log</button>
   <button class="tab-btn" data-tab="config">Config</button>
   <button class="tab-btn" data-tab="timeline">Timeline</button>
 </div>
@@ -1194,14 +1663,14 @@ tr:last-child td { border-bottom: none; }
 <!-- Tab: Live -->
 <div id="tab-live" class="tab-content active">
   <div class="section">
-    <div class="section-title">Signals</div>
+    <div class="section-title">Categories</div>
     <table>
       <thead><tr>
-        <th>Signal</th><th class="num">Count</th><th class="num">Uniq</th>
-        <th>Last</th><th class="num">SNR</th><th>Details</th>
+        <th>Category</th><th class="num">Count</th><th class="num">Unique</th>
+        <th>Last</th><th>Signal Types</th>
       </tr></thead>
-      <tbody id="signals">
-        <tr><td colspan="6" class="empty">waiting for detections...</td></tr>
+      <tbody id="categories">
+        <tr><td colspan="5" class="empty">waiting for detections...</td></tr>
       </tbody>
     </table>
   </div>
@@ -1209,6 +1678,157 @@ tr:last-child td { border-bottom: none; }
   <div class="section">
     <div class="section-title">Recent</div>
     <div class="section-body" id="recent"><div class="empty">...</div></div>
+  </div>
+</div>
+
+<!-- Tab: Voice -->
+<div id="tab-voice" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Voice Transmissions</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('voice')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Type</th><th>Channel</th><th class="num">Freq (MHz)</th>
+        <th class="num">Dur</th><th class="num">SNR</th><th>Transcript</th><th></th>
+      </tr></thead>
+      <tbody id="voice-body">
+        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Drones -->
+<div id="tab-drones" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Drones</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('drones')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Type</th><th>Serial / ID</th><th>UA Type</th><th>Protocol</th>
+        <th>Position</th><th class="num">Alt</th><th class="num">Speed</th>
+        <th>Operator</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="drones-body">
+        <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Aircraft -->
+<div id="tab-aircraft" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Aircraft (ADS-B)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('aircraft')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>ICAO</th><th>Callsign</th><th class="num">Altitude</th>
+        <th class="num">Speed</th><th class="num">Heading</th>
+        <th>Position</th><th class="num">Msgs</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="aircraft-body">
+        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Vessels -->
+<div id="tab-vessels" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Vessels (AIS)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('vessels')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>MMSI</th><th>Name</th><th>Type</th><th>Nav Status</th>
+        <th class="num">Speed</th><th class="num">Course</th>
+        <th>Position</th><th class="num">Msgs</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="vessels-body">
+        <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Vehicles -->
+<div id="tab-vehicles" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Vehicles (TPMS + Keyfobs)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('vehicles')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Kind</th><th>ID</th><th>Protocol</th><th class="num">Freq</th>
+        <th class="num">Pressure</th><th class="num">Temp</th>
+        <th class="num">Count</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="vehicles-body">
+        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Cellular -->
+<div id="tab-cellular" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Cellular Uplink Activity</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('cellular')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Technology</th><th>Band</th><th>Channel</th><th class="num">Freq (MHz)</th>
+        <th class="num">Hits</th><th class="num">Last SNR</th><th>Last Seen</th>
+      </tr></thead>
+      <tbody id="cellular-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Other -->
+<div id="tab-other" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Other (ISM, LoRa, POCSAG)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('other')">Refresh</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Type</th><th>Channel</th><th class="num">Freq (MHz)</th>
+        <th class="num">SNR</th><th>Model / Protocol</th><th>Detail</th>
+      </tr></thead>
+      <tbody id="other-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
@@ -1600,23 +2220,24 @@ function updateOverview(state) {
 
   // (Config is in its own tab)
 
-  // Signals table
-  const tbody = document.getElementById('signals');
-  if (state.signals && state.signals.length) {
-    tbody.innerHTML = state.signals.map(s => {
-      const color = TYPE_COLORS[s.type] || '#ccc';
-      const isTx = s.detail && s.detail.startsWith('"');
-      const cls = 'detail' + (isTx ? ' transcript' : '');
-      return '<tr>'
-        + '<td class="sig-type" style="color:'+color+'">'+esc(s.type)+'</td>'
-        + '<td class="num">'+s.count+'</td>'
-        + '<td class="num">'+(s.uniques>1?'('+s.uniques+')':'')+'</td>'
-        + '<td>'+(s.last_seen||'-')+'</td>'
-        + '<td class="num">'+(s.snr!=null?s.snr.toFixed(1)+' dB':'-')+'</td>'
-        + '<td class="'+cls+'">'+esc(s.detail||'')+'</td></tr>';
+  // Categories table (Live tab overview)
+  const tbody = document.getElementById('categories');
+  if (state.categories && state.categories.length) {
+    tbody.innerHTML = state.categories.map(c => {
+      const typesStr = c.types.map(t => {
+        const col = TYPE_COLORS[t] || '#ccc';
+        return '<span style="color:'+col+';margin-right:8px">'+esc(t)+'</span>';
+      }).join('');
+      return '<tr style="cursor:pointer" onclick="goToTab(\''+esc(c.id)+'\')">'
+        + '<td style="font-weight:600;color:#e0e0e0">'+esc(c.label)+'</td>'
+        + '<td class="num">'+c.count+'</td>'
+        + '<td class="num">'+(c.uniques>0?c.uniques:'-')+'</td>'
+        + '<td>'+(c.last_seen||'-')+'</td>'
+        + '<td style="font-size:11px">'+typesStr+'</td>'
+        + '</tr>';
     }).join('');
   } else {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">waiting for detections...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">waiting for detections...</td></tr>';
   }
 
   // Recent events
@@ -1995,6 +2616,181 @@ document.querySelectorAll('th.sortable').forEach(th => {
 });
 document.getElementById('dev-active-only').addEventListener('change', () => renderDevices());
 
+// --- Category Tabs (Voice / Drones / Aircraft / Vessels / Vehicles / Cellular / Other) ---
+async function loadCategory(name) {
+  try {
+    const r = await fetch('/api/cat/' + encodeURIComponent(name));
+    const data = await r.json();
+    const rows = data.rows || [];
+    const fn = _CATEGORY_RENDERERS[name];
+    if (fn) fn(rows);
+  } catch(e) {}
+}
+
+function _emptyRow(bodyId, cols, msg) {
+  const tbody = document.getElementById(bodyId);
+  if (tbody) tbody.innerHTML = '<tr><td colspan="'+cols+'" class="empty">'+esc(msg)+'</td></tr>';
+}
+
+function _fmtCoord(lat, lon) {
+  if (lat == null || lon == null) return '-';
+  return lat.toFixed(4) + ', ' + lon.toFixed(4);
+}
+
+function renderVoice(rows) {
+  const tbody = document.getElementById('voice-body');
+  if (!rows.length) { _emptyRow('voice-body', 8, 'no voice transmissions yet'); return; }
+  tbody.innerHTML = rows.map(r => {
+    const ts = r.timestamp ? r.timestamp.split('T')[1].split('.')[0] : '-';
+    const color = TYPE_COLORS[r.signal_type] || '#ccc';
+    const dur = r.duration_s != null ? (+r.duration_s).toFixed(1)+'s' : '-';
+    const tx = r.transcript || '';
+    const audio = r.audio_file
+      ? '<button class="play-btn" onclick="playAudio(this,\''+esc(r.audio_file)+'\')">&#9654;</button>'
+      : '';
+    return '<tr>'
+      + '<td>'+ts+'</td>'
+      + '<td class="sig-type" style="color:'+color+'">'+esc(r.signal_type)+'</td>'
+      + '<td>'+esc(r.channel||'-')+'</td>'
+      + '<td class="num">'+(r.frequency_mhz ? r.frequency_mhz.toFixed(3) : '-')+'</td>'
+      + '<td class="num">'+dur+'</td>'
+      + '<td class="num">'+(r.snr_db != null ? r.snr_db+' dB' : '-')+'</td>'
+      + '<td class="detail'+(tx?' transcript':'')+'">'+esc(tx?('\u201c'+tx+'\u201d'):'')+'</td>'
+      + '<td>'+audio+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderDrones(rows) {
+  const tbody = document.getElementById('drones-body');
+  if (!rows.length) { _emptyRow('drones-body', 9, 'no drones detected — RemoteID / DroneCtrl / DroneVideo not seen yet'); return; }
+  tbody.innerHTML = rows.map(r => {
+    const color = TYPE_COLORS[r.signal_type] || '#ccc';
+    const pos = _fmtCoord(r.last_lat, r.last_lon);
+    const alt = r.altitude_m != null ? r.altitude_m.toFixed(0)+' m' : '-';
+    const spd = r.speed_ms != null ? r.speed_ms.toFixed(1)+' m/s' : '-';
+    const op  = _fmtCoord(r.op_lat, r.op_lon);
+    return '<tr>'
+      + '<td class="sig-type" style="color:'+color+'">'+esc(r.signal_type)+'</td>'
+      + '<td style="font-family:monospace">'+esc(r.serial||r.key||'-')+'</td>'
+      + '<td>'+esc(r.ua_type||'')+'</td>'
+      + '<td>'+esc(r.protocol||'')+'</td>'
+      + '<td style="font-size:11px">'+pos+'</td>'
+      + '<td class="num">'+alt+'</td>'
+      + '<td class="num">'+spd+'</td>'
+      + '<td style="font-size:11px">'+op+'</td>'
+      + '<td style="font-size:11px">'+(r.last_seen||'-')+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderAircraft(rows) {
+  const tbody = document.getElementById('aircraft-body');
+  if (!rows.length) { _emptyRow('aircraft-body', 8, 'no aircraft detected — ADS-B capture not running'); return; }
+  tbody.innerHTML = rows.map(r => {
+    const alt = r.altitude_ft != null ? r.altitude_ft+' ft' : '-';
+    const spd = r.speed_kt != null ? r.speed_kt.toFixed(0)+' kt' : '-';
+    const hdg = r.heading != null ? r.heading.toFixed(0)+'\u00b0' : '-';
+    const pos = _fmtCoord(r.latitude, r.longitude);
+    return '<tr>'
+      + '<td style="font-family:monospace">'+esc(r.icao)+'</td>'
+      + '<td style="font-weight:600">'+esc(r.callsign||'-')+'</td>'
+      + '<td class="num">'+alt+'</td>'
+      + '<td class="num">'+spd+'</td>'
+      + '<td class="num">'+hdg+'</td>'
+      + '<td style="font-size:11px">'+pos+'</td>'
+      + '<td class="num">'+r.count+'</td>'
+      + '<td style="font-size:11px">'+(r.last_seen||'-')+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderVessels(rows) {
+  const tbody = document.getElementById('vessels-body');
+  if (!rows.length) { _emptyRow('vessels-body', 9, 'no vessels detected — AIS capture not running'); return; }
+  tbody.innerHTML = rows.map(r => {
+    const spd = r.speed_kn != null ? r.speed_kn.toFixed(1)+' kn' : '-';
+    const crs = r.course != null ? r.course.toFixed(0)+'\u00b0' : '-';
+    const pos = _fmtCoord(r.latitude, r.longitude);
+    return '<tr>'
+      + '<td style="font-family:monospace">'+esc(r.mmsi)+'</td>'
+      + '<td style="font-weight:600">'+esc(r.name||'-')+'</td>'
+      + '<td>'+esc(r.ship_type||'')+'</td>'
+      + '<td>'+esc(r.nav_status||'')+'</td>'
+      + '<td class="num">'+spd+'</td>'
+      + '<td class="num">'+crs+'</td>'
+      + '<td style="font-size:11px">'+pos+'</td>'
+      + '<td class="num">'+r.count+'</td>'
+      + '<td style="font-size:11px">'+(r.last_seen||'-')+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderVehicles(rows) {
+  const tbody = document.getElementById('vehicles-body');
+  if (!rows.length) { _emptyRow('vehicles-body', 8, 'no TPMS / keyfob detections yet'); return; }
+  tbody.innerHTML = rows.map(r => {
+    const pressure = r.pressure_kpa != null ? r.pressure_kpa.toFixed(0)+' kPa' : '-';
+    const temp     = r.temperature_c != null ? r.temperature_c.toFixed(0)+' \u00b0C' : '-';
+    const kindCol  = r.kind === 'TPMS' ? '#4fc3f7' : '#ffb74d';
+    return '<tr>'
+      + '<td style="color:'+kindCol+';font-weight:600">'+esc(r.kind)+'</td>'
+      + '<td style="font-family:monospace">'+esc(r.id)+'</td>'
+      + '<td>'+esc(r.protocol||'')+'</td>'
+      + '<td class="num">'+(r.frequency_mhz ? r.frequency_mhz.toFixed(3) : '-')+'</td>'
+      + '<td class="num">'+pressure+'</td>'
+      + '<td class="num">'+temp+'</td>'
+      + '<td class="num">'+r.count+'</td>'
+      + '<td style="font-size:11px">'+(r.last_seen||'-')+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderCellular(rows) {
+  const tbody = document.getElementById('cellular-body');
+  if (!rows.length) { _emptyRow('cellular-body', 7, 'no cellular uplink activity detected'); return; }
+  tbody.innerHTML = rows.map(r => {
+    return '<tr>'
+      + '<td style="font-weight:600;color:#ff7043">'+esc(r.technology)+'</td>'
+      + '<td style="font-size:11px">'+esc(r.band)+'</td>'
+      + '<td>'+esc(r.channel||'-')+'</td>'
+      + '<td class="num">'+(r.frequency_mhz ? r.frequency_mhz.toFixed(3) : '-')+'</td>'
+      + '<td class="num">'+r.count+'</td>'
+      + '<td class="num">'+(r.last_snr != null ? r.last_snr+' dB' : '-')+'</td>'
+      + '<td style="font-size:11px">'+(r.last_seen||'-')+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderOther(rows) {
+  const tbody = document.getElementById('other-body');
+  if (!rows.length) { _emptyRow('other-body', 7, 'no other detections'); return; }
+  tbody.innerHTML = rows.map(r => {
+    const ts = r.timestamp ? r.timestamp.split('T')[1].split('.')[0] : '-';
+    const color = TYPE_COLORS[r.signal_type] || '#ccc';
+    const info = [r.model, r.protocol].filter(Boolean).join(' / ');
+    return '<tr>'
+      + '<td>'+ts+'</td>'
+      + '<td class="sig-type" style="color:'+color+'">'+esc(r.signal_type)+'</td>'
+      + '<td>'+esc(r.channel||'-')+'</td>'
+      + '<td class="num">'+(r.frequency_mhz ? r.frequency_mhz.toFixed(3) : '-')+'</td>'
+      + '<td class="num">'+(r.snr_db != null ? r.snr_db+' dB' : '-')+'</td>'
+      + '<td>'+esc(info)+'</td>'
+      + '<td class="detail">'+esc(r.detail||'')+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+const _CATEGORY_RENDERERS = {
+  voice:    renderVoice,
+  drones:   renderDrones,
+  aircraft: renderAircraft,
+  vessels:  renderVessels,
+  vehicles: renderVehicles,
+  cellular: renderCellular,
+  other:    renderOther,
+};
+
 // --- Activity Tab ---
 async function loadActivity() {
   try {
@@ -2065,8 +2861,15 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (btn.dataset.tab === 'devices') loadDevices();
     if (btn.dataset.tab === 'config') loadConfig();
     if (btn.dataset.tab === 'timeline') loadActivity();
+    if (['voice','drones','aircraft','vessels','vehicles','cellular','other']
+        .includes(btn.dataset.tab)) loadCategory(btn.dataset.tab);
   });
 });
+
+function goToTab(name) {
+  const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
+  if (btn) btn.click();
+}
 
 // Auto-refresh Config tab every 3s so status badges stay live
 setInterval(() => {
