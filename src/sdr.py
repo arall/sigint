@@ -1331,7 +1331,7 @@ def _dispatch_scanner(args):
         _run_server(args, gps, tak_client)
 
     elif args.command == "web":
-        from scanners.web import run_web_server
+        from web import run_web_server
         output_dir = getattr(args, 'dir', None) or args.output
         run_web_server(output_dir, port=args.port)
 

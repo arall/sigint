@@ -1079,7 +1079,7 @@ class ServerOrchestrator:
 
         # Start web UI if configured
         if self._web_port:
-            from scanners.web import start_web_server_background
+            from web import start_web_server_background
             start_web_server_background(self._output_dir, port=self._web_port)
             print(f"  [+] Web UI: http://0.0.0.0:{self._web_port}/")
 

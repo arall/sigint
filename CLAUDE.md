@@ -84,9 +84,15 @@ src/
     lora.py               # LoRa orchestrator: RTLSDRCapture + LoRaEnergyParser
     drone_video.py        # Drone video link scanner: HackRF + DroneVideoLinkParser
     server.py             # Central server: all captures + parsers in parallel from JSON config
-    web.py                # Web dashboard HTTP server (standalone or embedded in server)
     wideband.py           # Wideband energy detection scanner
     recorder.py           # Raw IQ recording and replay
+  web/                    # Dashboard UI (consumer layer; reads from .db + JSON sidecars)
+    __init__.py           # Public: run_web_server, start_web_server_background
+    categories.py         # Signal-type → real-world category map
+    loaders.py            # Device + category loaders (pure functions, dict in / list-of-dict out)
+    tailer.py             # DBTailer: polls newest .db, builds live dashboard state
+    server.py             # WebHandler HTTP routing + whitelisted static file serving
+    static/               # Real index.html / style.css / app.js (browser-debuggable)
 tests/
   data/                   # Shared test audio (voice WAVs, gTTS MP3s)
   run_tests.sh            # Test runner (--hw for hardware tests)
@@ -289,13 +295,13 @@ The server orchestrator (`scanners/server.py`) tracks per-capture status (`pendi
 Detection logging is a per-session SQLite file (`<type>_YYYYMMDD_HHMMSS.db`) in the output directory. `utils/logger.py` owns the single writer connection and serializes inserts under a mutex; `utils/db.py` bootstraps the schema, sets WAL mode and `synchronous=NORMAL`, and exposes `insert_detection` / `iter_detections` / `row_to_dict` / `max_rowid` helpers. Indexes on `(signal_type, ts_epoch)`, `ts_epoch`, `device_id`, and `(signal_type, device_id)` cover the dashboard, triangulation, heatmap, and correlator query patterns.
 
 - **Threading gotcha**: `sqlite3.connect()` must be called with `check_same_thread=False`. The logger is opened on the main thread but parsers call `logger.log()` from many worker threads (scapy sniff, hcidump reader, RTL-SDR async callback, HackRF channelizer). Without this flag every insert raises `ProgrammingError` deep inside the capture loops which silently swallow it — the symptom is detections visible in stdout (`[NEW AP]` prints etc.) but zero rows on disk. The logger's `_lock` already prevents concurrent use of the connection, so the flag is safe.
-- **Web tailer**: `scanners/web.py` `DBTailer` polls the newest `.db` file by rowid in read-only URI mode, picking up new inserts via `iter_detections(since_rowid=...)`. Each poll opens a fresh connection to avoid holding a long-lived reader across WAL checkpoints.
+- **Web tailer**: `web/tailer.py` `DBTailer` polls the newest `.db` file by rowid in read-only URI mode, picking up new inserts via `iter_detections(since_rowid=...)`. Each poll opens a fresh connection to avoid holding a long-lived reader across WAL checkpoints.
 - **External consumers**: if something wants CSV, shell out to `sqlite3 out.db -csv -header "SELECT * FROM detections"` — the codebase no longer writes CSV itself.
 - **One file per node**: triangulation still composes across nodes by shipping the `.db` file per sensor, exactly as it did with CSVs — no federation / replication.
 
 ### Devices Tab (web dashboard)
 
-The former "Personas" tab is now "Devices" with three sub-tabs: **WiFi APs**, **WiFi Clients**, **BLE** (`scanners/web.py` `_load_wifi_aps` / `_load_wifi_clients` / `_load_ble_devices`). Important semantics:
+The former "Personas" tab is now "Devices" with three sub-tabs: **WiFi APs**, **WiFi Clients**, **BLE** (`web/loaders.py` `_load_wifi_aps` / `_load_wifi_clients` / `_load_ble_devices`). Important semantics:
 
 - **WiFi Clients are NOT APs**: the old flat tab labeled client probe personas with the SSIDs they were *probing for*, so a phone searching for "NSA Hotspot #14" looked like an AP broadcasting that SSID. The client rows are now labeled by `manufacturer + fingerprint` with a small `probing: "SSID"` badge.
 - **WiFi APs** come from the persisted `aps.json` (`utils/ap_db.py`) keyed by BSSID. The loader groups 2.4/5 GHz radios of the same physical AP using a conservative heuristic — same non-empty SSID AND matching first 5 MAC octets — so the typical vendor pattern of incrementing only the last octet between radios collapses into one row. Over-splitting is harmless; over-grouping is what you should avoid.
