@@ -232,12 +232,14 @@ class FMVoiceParser(BaseParser):
         self._audio_dir = os.path.join(output_dir, "audio")
         os.makedirs(self._audio_dir, exist_ok=True)
 
-        # Background transcription worker (non-blocking)
+        # Background transcription worker (non-blocking). Writes into the
+        # session .db's `transcripts` table via the shared logger writer.
         self._async_transcriber = None
         if self.transcribe:
             from utils.async_transcriber import AsyncTranscriber
-            self._async_transcriber = AsyncTranscriber(output_dir=output_dir)
-            self._async_transcriber.start()
+            self._async_transcriber = AsyncTranscriber(logger=self.logger)
+            # start() is deferred to first submit() so the worker only
+            # imports Whisper once we actually have something to transcribe.
 
     @property
     def detection_count(self):

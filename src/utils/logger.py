@@ -206,6 +206,26 @@ class SignalLogger:
         _db.insert_detection(self._conn, detection)
         self._detection_count += 1
 
+    def log_transcript(self, audio_file: str, text: str,
+                       language: Optional[str] = None) -> None:
+        """Upsert a Whisper transcript into the session DB.
+
+        The async transcriber worker calls this when a transcription
+        completes. Uses the same writer connection + lock as the
+        detection writer, so there's no connection-per-write churn
+        and transcripts arrive in the same .db as the detections
+        that reference them.
+        """
+        if not audio_file or not text:
+            return
+        with self._lock:
+            if self._conn is None:
+                return
+            try:
+                _db.insert_transcript(self._conn, audio_file, text, language)
+            except Exception as e:
+                print(f"[logger] log_transcript failed: {e}")
+
     @property
     def detection_count(self) -> int:
         """Return the number of detections logged so far."""

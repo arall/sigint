@@ -36,6 +36,16 @@ CREATE INDEX IF NOT EXISTS idx_detections_type_ts   ON detections(signal_type, t
 CREATE INDEX IF NOT EXISTS idx_detections_ts        ON detections(ts_epoch);
 CREATE INDEX IF NOT EXISTS idx_detections_device    ON detections(device_id);
 CREATE INDEX IF NOT EXISTS idx_detections_type_dev  ON detections(signal_type, device_id);
+
+-- Whisper transcripts are keyed by audio filename (basename of the WAV
+-- the FM voice pipeline writes to output/audio/). One row per audio
+-- file; INSERT OR REPLACE on re-transcription.
+CREATE TABLE IF NOT EXISTS transcripts (
+    audio_file TEXT PRIMARY KEY,
+    text       TEXT NOT NULL,
+    language   TEXT,
+    ts_epoch   REAL NOT NULL
+);
 """
 
 
@@ -198,3 +208,31 @@ def iter_detections(
 def max_rowid(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM detections").fetchone()
     return int(row[0]) if row else 0
+
+
+def insert_transcript(conn: sqlite3.Connection, audio_file: str,
+                      text: str, language: str = None) -> None:
+    """Upsert a Whisper transcript keyed by audio filename (basename).
+    Called from the logger's writer thread, serialized under its lock."""
+    import os as _os
+    import time as _time
+    key = _os.path.basename(audio_file or "")
+    if not key or not text:
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO transcripts (audio_file, text, language, ts_epoch) "
+        "VALUES (?, ?, ?, ?)",
+        (key, text, language, _time.time()),
+    )
+
+
+def get_transcripts(conn: sqlite3.Connection) -> dict:
+    """Return {audio_file: text} for every transcript in the DB."""
+    try:
+        rows = conn.execute(
+            "SELECT audio_file, text FROM transcripts"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+    except sqlite3.OperationalError:
+        # Old .db files that predate the transcripts table
+        return {}

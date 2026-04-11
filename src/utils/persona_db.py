@@ -3,56 +3,194 @@ Persistent Persona Database
 Stores and retrieves device persona fingerprints across scanning sessions.
 
 Each persona is identified by its device signature (from 802.11 IEs) combined
-with its accumulated SSID set. The database is stored as a JSON file and
-updated at the end of each scanning session.
+with its accumulated SSID set. Stored as a table in a SQLite devices.db
+that lives alongside the per-session detection .db files but is not
+itself treated as a session (see web/sessions.py is_session_db_name).
 
-Schema:
-{
-    "personas": {
-        "<persona_key>": {
-            "dev_sig": "abc123",
-            "ssids": ["HomeWiFi", "GymFree"],
-            "macs_seen": ["aa:bb:cc:dd:ee:ff", ...],
-            "manufacturer": "Apple, Inc.",
-            "randomized": true,
-            "sessions": 3,
-            "first_session": "2026-04-03T21:00:00",
-            "last_session": "2026-04-05T14:30:00",
-            "total_probes": 142
-        }
-    },
-    "updated": "2026-04-05T14:30:00"
-}
+Public API is unchanged from the old JSON-backed version — callers still
+do `PersonaDB(path, table=...)`, `update_persona(...)`, `find(...)`,
+`get_session_count(...)`, `save()`, `.total_personas`. The `path` used
+to be a personas.json file; now it's a devices.db file, and an optional
+`table` argument picks the table name (default "personas"; WiFi uses
+"personas_wifi" and BLE uses "personas_bt" so the two kinds share one
+.db without colliding). If the constructor is given a legacy .json path,
+it auto-migrates into the sibling devices.db and keeps going.
 """
 
 import json
 import os
+import re
+import sqlite3
+import threading
 from datetime import datetime
+
+
+def _derive_db_path_and_table(path):
+    """Accept either a legacy .json path or a .db path. Return
+    (db_path, table, legacy_json_path_or_None)."""
+    if path.endswith(".db"):
+        return path, None, None
+    # Legacy migration: personas.json → devices.db, table from basename
+    directory = os.path.dirname(path) or "."
+    base = os.path.basename(path)
+    if base == "personas.json":
+        table = "personas_wifi"
+    elif base == "personas_bt.json":
+        table = "personas_bt"
+    else:
+        table = re.sub(r"\W+", "_", os.path.splitext(base)[0]) or "personas"
+    return os.path.join(directory, "devices.db"), table, path
 
 
 class PersonaDB:
     """Persistent store for persona fingerprints across sessions."""
 
-    def __init__(self, path):
-        self.path = path
+    _CREATE_TEMPLATE = """
+    CREATE TABLE IF NOT EXISTS {table} (
+        persona_key   TEXT PRIMARY KEY,
+        dev_sig       TEXT,
+        ssids         TEXT,
+        macs_seen     TEXT,
+        manufacturer  TEXT,
+        apple_device  TEXT,
+        randomized    INTEGER,
+        sessions      INTEGER,
+        first_session TEXT,
+        last_session  TEXT,
+        total_probes  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_{table}_devsig ON {table}(dev_sig);
+    """
+
+    def __init__(self, path, table=None):
+        db_path, derived_table, legacy_json = _derive_db_path_and_table(path)
+        self.path = db_path
+        self.table = table or derived_table or "personas"
+        # Validate the table name so the f-string SQL is safe
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.table):
+            raise ValueError(f"invalid table name: {self.table!r}")
         self._data = {"personas": {}, "updated": None}
+        self._conn = None
+        self._lock = threading.Lock()
+        self._open()
+        self._maybe_import_json(legacy_json)
         self._load()
 
+    def _open(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self._conn = sqlite3.connect(
+            self.path, timeout=5.0, isolation_level=None,
+            check_same_thread=False,
+        )
+        self._conn.executescript(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;"
+        )
+        self._conn.executescript(self._CREATE_TEMPLATE.format(table=self.table))
+
+    def _maybe_import_json(self, legacy_json):
+        """One-shot migration: if a pre-migration .json file exists AND
+        this table is still empty, pull its personas into the table so
+        the user doesn't lose their accumulated identity data."""
+        if not legacy_json or not os.path.exists(legacy_json):
+            return
+        try:
+            row = self._conn.execute(
+                f"SELECT COUNT(*) FROM {self.table}"
+            ).fetchone()
+            if row and row[0] > 0:
+                return  # already migrated or populated
+        except sqlite3.OperationalError:
+            return
+        try:
+            with open(legacy_json, "r") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        personas = data.get("personas") if isinstance(data, dict) else None
+        if not personas:
+            return
+        print(f"[persona-db] importing {len(personas)} rows "
+              f"from {os.path.basename(legacy_json)} → {self.table}")
+        with self._conn:
+            for key, p in personas.items():
+                self._conn.execute(
+                    f"INSERT OR REPLACE INTO {self.table} VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        key,
+                        p.get("dev_sig", ""),
+                        json.dumps(p.get("ssids", []) or []),
+                        json.dumps(p.get("macs_seen", []) or []),
+                        p.get("manufacturer"),
+                        p.get("apple_device"),
+                        int(bool(p.get("randomized"))),
+                        int(p.get("sessions", 0)),
+                        p.get("first_session", ""),
+                        p.get("last_session", ""),
+                        int(p.get("total_probes", 0)),
+                    ),
+                )
+
     def _load(self):
-        """Load existing database from disk."""
-        if os.path.exists(self.path):
-            try:
-                with open(self.path, "r") as f:
-                    self._data = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                pass
+        """Pull every row from the SQL table into the in-memory dict."""
+        self._data = {"personas": {}, "updated": None}
+        try:
+            rows = self._conn.execute(
+                f"SELECT persona_key, dev_sig, ssids, macs_seen, manufacturer, "
+                f"apple_device, randomized, sessions, first_session, "
+                f"last_session, total_probes FROM {self.table}"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return
+        latest = ""
+        for r in rows:
+            self._data["personas"][r[0]] = {
+                "dev_sig": r[1] or "",
+                "ssids": json.loads(r[2] or "[]"),
+                "macs_seen": json.loads(r[3] or "[]"),
+                "manufacturer": r[4],
+                "apple_device": r[5],
+                "randomized": bool(r[6]),
+                "sessions": int(r[7] or 0),
+                "first_session": r[8] or "",
+                "last_session": r[9] or "",
+                "total_probes": int(r[10] or 0),
+            }
+            if r[9] and r[9] > latest:
+                latest = r[9]
+        # Derive "updated" from the most-recent last_session so the
+        # summary() contract matches the old JSON-backed behavior.
+        if latest:
+            self._data["updated"] = latest
 
     def save(self):
-        """Write database to disk."""
+        """Write the in-memory dict back to the SQL table. Called on the
+        server's 30s flush loop and at parser shutdown."""
         self._data["updated"] = datetime.now().isoformat()
-        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-        with open(self.path, "w") as f:
-            json.dump(self._data, f, indent=2)
+        with self._lock:
+            try:
+                with self._conn:  # BEGIN/COMMIT
+                    self._conn.execute(f"DELETE FROM {self.table}")
+                    for key, p in self._data["personas"].items():
+                        self._conn.execute(
+                            f"INSERT INTO {self.table} VALUES "
+                            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                key,
+                                p.get("dev_sig", ""),
+                                json.dumps(p.get("ssids", []) or []),
+                                json.dumps(p.get("macs_seen", []) or []),
+                                p.get("manufacturer"),
+                                p.get("apple_device"),
+                                int(bool(p.get("randomized"))),
+                                int(p.get("sessions", 0)),
+                                p.get("first_session", ""),
+                                p.get("last_session", ""),
+                                int(p.get("total_probes", 0)),
+                            ),
+                        )
+            except sqlite3.OperationalError as e:
+                print(f"[persona-db] save failed: {e}")
 
     @staticmethod
     def _make_key(dev_sig, ssids):

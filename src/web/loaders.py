@@ -3,7 +3,7 @@ Device + category loaders for the web dashboard.
 
 Two groups of pure functions, consumed by the HTTP endpoints:
 
-Device loaders (read persisted JSON sidecars in the output directory):
+Device loaders (read the persistent devices.db tables):
   _load_wifi_clients / _load_wifi_aps / _load_ble_devices
     → feed the Devices tab's three sub-sections.
 
@@ -18,8 +18,80 @@ handler to resolve a category id to its loader function.
 
 import json
 import os
+import sqlite3
 
 from .categories import CATEGORIES
+
+
+def _open_devices_db(output_dir):
+    """Open output/devices.db read-only. Returns None when the file
+    doesn't exist yet (the parsers haven't written anything) or when
+    even the readonly open fails. Each call opens a fresh connection
+    so we never share state across threads or requests.
+    """
+    path = os.path.join(output_dir, "devices.db")
+    if not os.path.isfile(path):
+        return None
+    abs_path = os.path.abspath(path)
+    try:
+        conn = sqlite3.connect(
+            f"file:{abs_path}?mode=ro", uri=True, timeout=2.0,
+            isolation_level=None, check_same_thread=False,
+        )
+    except sqlite3.OperationalError:
+        try:
+            conn = sqlite3.connect(
+                f"file:{abs_path}?mode=ro&immutable=1", uri=True, timeout=2.0,
+                isolation_level=None, check_same_thread=False,
+            )
+        except sqlite3.OperationalError:
+            return None
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _iter_persona_rows(output_dir, table):
+    """Yield rows from a persona table (personas_wifi or personas_bt)
+    in the devices.db. Silently returns nothing when the DB is absent
+    or the table hasn't been created yet."""
+    conn = _open_devices_db(output_dir)
+    if conn is None:
+        return
+    try:
+        for r in conn.execute(
+            f"SELECT persona_key, dev_sig, ssids, macs_seen, manufacturer, "
+            f"apple_device, randomized, sessions, first_session, "
+            f"last_session, total_probes FROM {table}"
+        ).fetchall():
+            yield r
+    except sqlite3.OperationalError:
+        return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _iter_ap_rows(output_dir):
+    """Yield wifi_aps rows from the devices.db."""
+    conn = _open_devices_db(output_dir)
+    if conn is None:
+        return
+    try:
+        for r in conn.execute(
+            "SELECT bssid, ssids, channels, crypto, manufacturer, hidden, "
+            "beacon_interval, last_rssi, first_seen, last_seen, sessions, "
+            "total_beacons, clients, client_count FROM wifi_aps"
+        ).fetchall():
+            yield r
+    except sqlite3.OperationalError:
+        return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -57,28 +129,22 @@ TYPE_COLORS = {
 # ---------------------------------------------------------------------------
 
 def _load_wifi_clients(output_dir, active_sigs=None):
-    """Read personas.json and return WiFi client device records.
+    """Read the personas_wifi table from devices.db and shape WiFi client
+    device records for the Devices tab.
 
     A WiFi client is a phone/laptop that emits probe requests. The label
     is manufacturer+fingerprint (NOT the SSID — that's what the client is
     probing FOR, not its identity).
     """
     active_sigs = active_sigs or {}
-    path = os.path.join(output_dir, "personas.json")
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
     clients = []
-    for key, p in data.get("personas", {}).items():
-        dev_sig = p.get("dev_sig", key.split(":")[0])
-        persona_key = key
-        macs = p.get("macs_seen", []) or []
-        ssids = p.get("ssids", []) or []
-        manufacturer = p.get("manufacturer") or ""
-        randomized = p.get("randomized", False)
+    for r in _iter_persona_rows(output_dir, "personas_wifi"):
+        persona_key = r["persona_key"]
+        dev_sig = r["dev_sig"] or persona_key.split(":")[0]
+        macs = json.loads(r["macs_seen"] or "[]")
+        ssids = json.loads(r["ssids"] or "[]")
+        manufacturer = r["manufacturer"] or ""
+        randomized = bool(r["randomized"])
 
         active_info = active_sigs.get(dev_sig, {})
 
@@ -99,10 +165,10 @@ def _load_wifi_clients(output_dir, active_sigs=None):
             "mac_count": len(macs),
             "ssids": ssids,
             "ssid_count": len(ssids),
-            "sessions": p.get("sessions", 0),
-            "total_probes": p.get("total_probes", 0),
-            "first_session": p.get("first_session", ""),
-            "last_session": p.get("last_session", ""),
+            "sessions": int(r["sessions"] or 0),
+            "total_probes": int(r["total_probes"] or 0),
+            "first_session": r["first_session"] or "",
+            "last_session": r["last_session"] or "",
             "active": bool(active_info),
             "last_rssi": active_info.get("rssi"),
         })
@@ -114,28 +180,21 @@ def _load_wifi_clients(output_dir, active_sigs=None):
 
 
 def _load_ble_devices(output_dir, active_sigs=None):
-    """Read personas_bt.json and return BLE device records."""
+    """Read the personas_bt table from devices.db and shape BLE records."""
     active_sigs = active_sigs or {}
-    path = os.path.join(output_dir, "personas_bt.json")
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
     devices = []
-    for key, p in data.get("personas", {}).items():
-        dev_sig = p.get("dev_sig", key.split(":")[0])
-        persona_key = key
-        macs = p.get("macs_seen", []) or []
-        names = p.get("ssids", []) or []  # BLE advertised names reuse "ssids"
-        manufacturer = p.get("manufacturer") or ""
-        randomized = p.get("randomized", False)
+    for r in _iter_persona_rows(output_dir, "personas_bt"):
+        persona_key = r["persona_key"]
+        dev_sig = r["dev_sig"] or persona_key.split(":")[0]
+        macs = json.loads(r["macs_seen"] or "[]")
+        names = json.loads(r["ssids"] or "[]")  # BLE names reuse "ssids"
+        manufacturer = r["manufacturer"] or ""
+        randomized = bool(r["randomized"])
 
         active_info = active_sigs.get(dev_sig, {})
         # Prefer the persisted apple_device (survives restart); fall back to
         # the value captured from recent live detections.
-        apple_device = p.get("apple_device") or active_info.get("apple_device", "")
+        apple_device = r["apple_device"] or active_info.get("apple_device", "")
 
         if apple_device:
             label = apple_device
@@ -158,10 +217,10 @@ def _load_ble_devices(output_dir, active_sigs=None):
             "macs": macs,
             "mac_count": len(macs),
             "names": names,
-            "sessions": p.get("sessions", 0),
-            "total_probes": p.get("total_probes", 0),
-            "first_session": p.get("first_session", ""),
-            "last_session": p.get("last_session", ""),
+            "sessions": int(r["sessions"] or 0),
+            "total_probes": int(r["total_probes"] or 0),
+            "first_session": r["first_session"] or "",
+            "last_session": r["last_session"] or "",
             "active": bool(active_info),
             "last_rssi": active_info.get("rssi"),
         })
@@ -173,7 +232,8 @@ def _load_ble_devices(output_dir, active_sigs=None):
 
 
 def _load_wifi_aps(output_dir, active_bssids=None):
-    """Read aps.json and return WiFi AP records grouped by physical AP.
+    """Read the wifi_aps table from devices.db and return records
+    grouped by physical AP.
 
     Conservative grouping heuristic: two BSSIDs are merged into the same
     physical AP row if they share a non-empty SSID AND their first 5 MAC
@@ -181,14 +241,25 @@ def _load_wifi_aps(output_dir, active_bssids=None):
     increment only the last octet). Anything else stays ungrouped.
     """
     active_bssids = active_bssids or {}
-    path = os.path.join(output_dir, "aps.json")
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-    ap_map = data.get("aps", {})
+    ap_map = {}
+    for r in _iter_ap_rows(output_dir):
+        bssid = r["bssid"]
+        ap_map[bssid] = {
+            "bssid": bssid,
+            "ssids": json.loads(r["ssids"] or "[]"),
+            "channels": json.loads(r["channels"] or "[]"),
+            "crypto": r["crypto"] or "",
+            "manufacturer": r["manufacturer"] or "",
+            "hidden": bool(r["hidden"]),
+            "beacon_interval": r["beacon_interval"],
+            "last_rssi": r["last_rssi"],
+            "first_seen": r["first_seen"] or "",
+            "last_seen": r["last_seen"] or "",
+            "sessions": int(r["sessions"] or 0),
+            "total_beacons": int(r["total_beacons"] or 0),
+            "clients": json.loads(r["clients"] or "[]"),
+            "client_count": int(r["client_count"] or 0),
+        }
     groups = []
 
     def group_key(rec):

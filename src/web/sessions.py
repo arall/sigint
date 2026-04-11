@@ -17,6 +17,32 @@ import sqlite3
 from datetime import datetime
 
 
+# Reserved support-file names that must NOT appear in the session
+# dropdown or get tailed by the DBTailer. These live in the same
+# output directory but hold persistent state (persona/AP store)
+# rather than per-session detection history.
+_SUPPORT_DB_NAMES = {
+    "devices.db",      # PersonaDB + ApDB cross-session store
+}
+
+
+def is_session_db_name(name):
+    """Return True if `name` looks like a per-session detection .db.
+
+    We use a name-based deny list rather than a regex because scanners
+    may use any basename convention and we don't want to be surprised
+    by a new one. Anything ending in `.db` that isn't in the reserved
+    set and isn't a WAL/SHM sidecar is a session file.
+    """
+    if not name.endswith('.db'):
+        return False
+    if name.endswith('-wal') or name.endswith('-shm'):
+        return False
+    if name in _SUPPORT_DB_NAMES:
+        return False
+    return True
+
+
 # path → (mtime, metadata_dict) cache. Historical sessions don't change,
 # so after the first read we can serve their metadata indefinitely. The
 # active session's mtime bumps on every detection, so we recompute it.
@@ -38,7 +64,7 @@ def list_sessions(output_dir):
     try:
         names = [
             f for f in os.listdir(output_dir)
-            if f.endswith('.db')
+            if is_session_db_name(f)
             and not f.endswith('-wal')
             and not f.endswith('-shm')
         ]

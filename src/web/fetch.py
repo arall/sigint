@@ -27,23 +27,52 @@ DEFAULT_WINDOW_SECONDS = 6 * 3600   # 6 hours
 DEFAULT_LIMIT = 5000
 
 
-def _load_transcripts(output_dir):
-    """Load output/transcripts.json, the async Whisper sidecar keyed by
-    audio filename. The transcriber writes here *after* the detection
-    row has been logged to the .db, so the transcript is NOT in the
-    row's metadata blob — we have to overlay it at read time.
-
-    Returns an empty dict when the file is missing or malformed.
-    """
-    path = os.path.join(output_dir, "transcripts.json")
+def _load_transcripts_for_db(db_path):
+    """Read the `transcripts` table from one detection .db and return
+    {audio_file: text}. Empty dict on any read error or missing table
+    (old .db files predating the transcripts table schema)."""
     try:
-        with open(path, "r") as f:
+        conn = _db.connect(db_path, readonly=True)
+    except Exception:
+        return {}
+    try:
+        return _db.get_transcripts(conn)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _load_transcripts(output_dir):
+    """Union transcripts from every .db file in `output_dir`. Used by
+    the single-file session fetch path when the caller didn't pre-load;
+    the multi-file fetchers call `_load_transcripts_for_db` per file
+    to keep each .db's transcripts scoped to its own detections.
+
+    Also reads `transcripts.json` if it still exists — purely for
+    backwards compatibility with sessions created before the table
+    landed. The async transcriber no longer writes that file.
+    """
+    merged = {}
+    legacy = os.path.join(output_dir, "transcripts.json")
+    try:
+        with open(legacy, "r") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            return data
+            merged.update(data)
     except (OSError, json.JSONDecodeError):
         pass
-    return {}
+
+    from .sessions import is_session_db_name
+    try:
+        names = [f for f in os.listdir(output_dir) if is_session_db_name(f)]
+    except OSError:
+        return merged
+    for name in names:
+        path = os.path.join(output_dir, name)
+        merged.update(_load_transcripts_for_db(path))
+    return merged
 
 
 def _category_predicate(category):
@@ -177,11 +206,12 @@ def fetch_detections_for_category(
         except Exception:
             pass
 
-    # If the caller didn't pre-load transcripts (single-file/legacy path),
-    # load them from the .db's sibling transcripts.json. The union fetcher
-    # passes a pre-loaded dict so we don't re-read it N times.
+    # If the caller didn't pre-load transcripts, read them from this
+    # one .db's `transcripts` table. The union fetcher pre-loads across
+    # all .db files and passes the merged dict in so we don't re-query
+    # the same table N times.
     if transcripts is None:
-        transcripts = _load_transcripts(os.path.dirname(db_path))
+        transcripts = _load_transcripts_for_db(db_path)
     shaped = [_row_to_detection_dict(r, transcripts) for r in rows]
     # We pulled newest-first; the deque is oldest-first and the loaders
     # that use `reversed(detections)` assume that ordering. Flip.
@@ -212,13 +242,9 @@ def fetch_detections_for_category_all(
     When the user picks a specific session from the header dropdown we
     stay on the single-file path so the UI respects their scope.
     """
+    from .sessions import is_session_db_name
     try:
-        names = sorted(
-            f for f in os.listdir(output_dir)
-            if f.endswith('.db')
-            and not f.endswith('-wal')
-            and not f.endswith('-shm')
-        )
+        names = sorted(f for f in os.listdir(output_dir) if is_session_db_name(f))
     except OSError:
         return []
 
@@ -251,14 +277,14 @@ def fetch_detections_for_category_all(
 # ---------------------------------------------------------------------------
 
 def _iter_db_paths(output_dir):
-    """Yield every .db file in `output_dir`, sorted alphabetically so the
-    order across calls is stable (makes debugging less confusing)."""
+    """Yield every session .db file in `output_dir`, sorted alphabetically
+    so the order across calls is stable (makes debugging less confusing).
+    Excludes support DBs like devices.db (persistent persona/AP store)."""
+    from .sessions import is_session_db_name
     try:
         names = sorted(
             f for f in os.listdir(output_dir)
-            if f.endswith('.db')
-            and not f.endswith('-wal')
-            and not f.endswith('-shm')
+            if is_session_db_name(f)
         )
     except OSError:
         return

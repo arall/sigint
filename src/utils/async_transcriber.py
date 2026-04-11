@@ -1,27 +1,34 @@
 """
 Background transcription worker.
 
-Consumes (audio_file, model, language) jobs from a queue and runs Whisper
-in a dedicated daemon thread, so the scanner pipeline never blocks on
-transcription. Results are published to a TranscriptStore sidecar so the
-web UI can back-fill already-logged detections.
+Consumes (audio_file, model, language) jobs from a queue and runs
+Whisper in a dedicated daemon thread, so the scanner pipeline never
+blocks on transcription. Results land in the session .db's
+`transcripts` table via the SignalLogger's `log_transcript()` writer,
+which the web UI reads with a JOIN on `audio_file` to back-fill the
+Voice tab rows that were logged with empty transcripts during the
+race window.
 """
 
 import os
 import queue
 import threading
 
-from utils.transcript_store import TranscriptStore
-
 
 class AsyncTranscriber:
     """Single-worker background transcription queue."""
 
-    def __init__(self, output_dir, transcript_path=None):
-        self.output_dir = output_dir
-        self.transcript_path = transcript_path or os.path.join(
-            output_dir, "transcripts.json")
-        self.store = TranscriptStore(self.transcript_path)
+    def __init__(self, logger):
+        """
+        Args:
+            logger: a SignalLogger instance. The worker calls
+                logger.log_transcript(audio_file, text, language)
+                for every completed job. The logger must have been
+                started before submit() is called, but that's the
+                normal scanner ordering (logger.start() then the
+                first detection arrives).
+        """
+        self.logger = logger
         self._queue = queue.Queue()
         self._stop_event = threading.Event()
         self._worker = None
@@ -45,8 +52,7 @@ class AsyncTranscriber:
     def stop(self, timeout=2.0):
         """Signal the worker to stop. Does not wait for the queue to drain."""
         self._stop_event.set()
-        # Wake the worker up
-        self._queue.put(None)
+        self._queue.put(None)   # wake the worker up
         if self._worker:
             self._worker.join(timeout=timeout)
 
@@ -72,7 +78,7 @@ class AsyncTranscriber:
                     continue
                 text = transcribe(audio_file, model_name=model, language=language)
                 if text:
-                    self.store.set(audio_file, text)
+                    self.logger.log_transcript(audio_file, text, language=language)
                     base = os.path.basename(audio_file)
                     print(f'  \U0001F4DD transcribed {base}: "{text[:80]}"')
             except Exception as e:

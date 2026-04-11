@@ -123,22 +123,24 @@ def test_holdover_bridges_gap():
 
         ch1_offset = 446.00625e6 - center_freq
 
-        # Phase 1: signal for ~1s
+        # Phase 1: signal for ~1s of signal-sample time
         for _ in range(4):
             iq = generate_fm_signal(ch1_offset, sample_rate, 0.5, snr_db=25)
             parser.handle_frame(iq)
-            time.sleep(0.15)
+            time.sleep(0.01)
 
-        # Short gap: 0.5s of noise (well within 2s holdover)
+        # Short gap: noise (must stay well under the 2s holdover, so keep
+        # the inter-frame sleeps small — parallel test runners see CPU
+        # contention that can stretch each sleep).
         for _ in range(5):
             parser.handle_frame(generate_noise(sample_rate, 0.1, 0.01))
-            time.sleep(0.1)
+            time.sleep(0.01)
 
-        # Phase 2: signal again for ~1s
+        # Phase 2: signal again
         for _ in range(4):
             iq = generate_fm_signal(ch1_offset, sample_rate, 0.5, snr_db=25)
             parser.handle_frame(iq)
-            time.sleep(0.15)
+            time.sleep(0.01)
 
         parser.shutdown()
         # Should be 1 detection (holdover bridged the gap), not 2

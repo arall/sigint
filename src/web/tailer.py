@@ -16,7 +16,9 @@ watcher plus a state cache:
                                     every ~2s so SSE + /api/state are
                                     sub-millisecond reads despite the
                                     underlying query being ~200ms
-  - `_transcripts`               — whisper sidecar cache (mtime-keyed)
+
+Transcripts now live in each session's `.db` (`transcripts` table),
+read directly by `web/fetch.py` at query time — no sidecar poll here.
 
 Also hosts two stateless helpers used by `web/fetch.py`:
 
@@ -110,14 +112,14 @@ class DBTailer:
         self._stop.set()
 
     def _find_all_dbs(self):
-        """Return all .db files in output_dir sorted by mtime."""
+        """Return all session .db files in output_dir sorted by mtime.
+        Excludes support DBs like devices.db (persona store)."""
+        from .sessions import is_session_db_name
         try:
             dbs = [
                 os.path.join(self.output_dir, f)
                 for f in os.listdir(self.output_dir)
-                if f.endswith('.db')
-                and not f.endswith('-wal')
-                and not f.endswith('-shm')
+                if is_session_db_name(f)
             ]
             return sorted(dbs, key=os.path.getmtime)
         except OSError:

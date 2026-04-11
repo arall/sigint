@@ -236,33 +236,30 @@ def test_fetch_all_empty_dir():
     assert fetch_detections_for_category_all(tmp, "voice") == []
 
 
-def test_fetch_overlays_transcripts_sidecar():
-    """Regression: the SQL fetch must overlay transcripts.json onto voice
-    rows, matching the deque-path behavior in _process_row. Without this,
-    transcripts live in the sidecar but never reach the Voice tab."""
-    import json as _json
+def test_fetch_overlays_transcripts_table():
+    """Regression: the SQL fetch must overlay the `transcripts` table
+    onto voice rows. Without this, transcripts sit in their own table
+    but never reach the Voice tab — the race window between logging a
+    voice detection and the async transcriber writing its result."""
     from web.fetch import fetch_detections_for_category, fetch_detections_for_category_all
     from utils.logger import SignalLogger
 
     tmp = tempfile.mkdtemp()
     log = SignalLogger(output_dir=tmp, signal_type="sv", min_snr_db=0)
     p = log.start()
-    # Voice detection logged BEFORE the transcriber writes the sidecar —
+    # Voice detection logged BEFORE the transcriber writes the table —
     # this is the real-world timing of the async transcription pipeline.
     log.log_signal(
         "PMR446", 446e6, -50, -90, channel="CH7",
         audio_file="pmr_ch7_20260411_150308.wav",
-        metadata='{}',  # no transcript yet
+        metadata='{}',
     )
+    # Transcriber now writes its output into the transcripts table via
+    # the logger's shared writer connection.
+    log.log_transcript("pmr_ch7_20260411_150308.wav", "hola mundo", language="es")
     log.stop()
 
-    # Transcriber now writes its output keyed by audio filename
-    with open(os.path.join(tmp, "transcripts.json"), "w") as f:
-        _json.dump({
-            "pmr_ch7_20260411_150308.wav": "hola mundo",
-        }, f)
-
-    # Single-file path should pick up the sidecar transcript
+    # Single-file path should pick up the table transcript
     rows = fetch_detections_for_category(p, "voice")
     assert len(rows) == 1
     assert rows[0]["transcript"] == "hola mundo"
@@ -308,7 +305,7 @@ def run_tests():
         ("Oldest-first ordering",       test_ordering_is_oldest_first),
         ("Union across .db files",      test_fetch_all_unions_across_db_files),
         ("Union empty dir",             test_fetch_all_empty_dir),
-        ("Transcript sidecar overlay",  test_fetch_overlays_transcripts_sidecar),
+        ("Transcript table overlay",    test_fetch_overlays_transcripts_table),
     ]
 
     print("=" * 60)

@@ -277,12 +277,14 @@ class PMRScanner:
         self.sdr = None
 
         # Background transcription worker — lets detections appear on the
-        # dashboard immediately, with transcripts back-filled when ready.
+        # dashboard immediately, with transcripts back-filled into the
+        # same .db's `transcripts` table when Whisper finishes.
         self._async_transcriber = None
         if self.transcribe_audio:
             from utils.async_transcriber import AsyncTranscriber
-            self._async_transcriber = AsyncTranscriber(output_dir=output_dir)
-            self._async_transcriber.start()
+            self._async_transcriber = AsyncTranscriber(logger=self.logger)
+            # Start deferred until logger.start() runs (so the writer
+            # connection exists before the worker tries to log_transcript).
 
         # Track active transmissions per channel (analog)
         self._tx_active = {ch: False for ch in PMR_CHANNELS}

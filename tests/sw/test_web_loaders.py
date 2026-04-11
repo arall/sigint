@@ -270,10 +270,25 @@ def test_load_other_catchall():
 
 # ---- Device loaders ----
 
-def _write_json(output_dir, filename, data):
-    os.makedirs(output_dir, exist_ok=True)
-    with open(os.path.join(output_dir, filename), "w") as f:
-        json.dump(data, f)
+def _seed_persona(output_dir, table, persona_key, **fields):
+    """Write one persona row directly into the devices.db's persona table
+    via PersonaDB so the loaders have something to read. Uses the same
+    schema the real parsers write through."""
+    from utils.persona_db import PersonaDB
+    db_path = os.path.join(output_dir, "devices.db")
+    db = PersonaDB(db_path, table=table)
+    # PersonaDB.update_persona merges by dev_sig+ssids; easier to poke
+    # straight into _data for deterministic test fixtures.
+    db._data["personas"][persona_key] = fields
+    db.save()
+
+
+def _seed_ap(output_dir, **fields):
+    from utils.ap_db import ApDB
+    db_path = os.path.join(output_dir, "devices.db")
+    db = ApDB(db_path)
+    db._data["aps"][fields["bssid"]] = fields
+    db.save()
 
 
 def test_load_wifi_clients_label_is_not_ssid():
@@ -283,21 +298,18 @@ def test_load_wifi_clients_label_is_not_ssid():
     from web.loaders import _load_wifi_clients
 
     tmp = tempfile.mkdtemp()
-    _write_json(tmp, "personas.json", {
-        "personas": {
-            "dead:NSA Hotspot #14": {
-                "dev_sig": "dead",
-                "ssids": ["NSA Hotspot #14"],
-                "macs_seen": ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"],
-                "manufacturer": None,
-                "randomized": True,
-                "sessions": 42,
-                "total_probes": 123,
-                "first_session": "2026-04-01",
-                "last_session":  "2026-04-11",
-            }
-        }
-    })
+    _seed_persona(
+        tmp, "personas_wifi", "dead:NSA Hotspot #14",
+        dev_sig="dead",
+        ssids=["NSA Hotspot #14"],
+        macs_seen=["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"],
+        manufacturer=None,
+        randomized=True,
+        sessions=42,
+        total_probes=123,
+        first_session="2026-04-01",
+        last_session="2026-04-11",
+    )
     rows = _load_wifi_clients(tmp)
     assert len(rows) == 1
     r = rows[0]
@@ -312,22 +324,19 @@ def test_load_ble_devices_prefers_apple_device():
     from web.loaders import _load_ble_devices
 
     tmp = tempfile.mkdtemp()
-    _write_json(tmp, "personas_bt.json", {
-        "personas": {
-            "aw1": {
-                "dev_sig": "aw1",
-                "ssids": [],
-                "macs_seen": ["aa:aa:aa:aa:aa:aa"],
-                "manufacturer": "Apple",
-                "apple_device": "Apple Watch",
-                "randomized": True,
-                "sessions": 10,
-                "total_probes": 100,
-                "first_session": "2026-04-01",
-                "last_session":  "2026-04-11",
-            }
-        }
-    })
+    _seed_persona(
+        tmp, "personas_bt", "aw1",
+        dev_sig="aw1",
+        ssids=[],
+        macs_seen=["aa:aa:aa:aa:aa:aa"],
+        manufacturer="Apple",
+        apple_device="Apple Watch",
+        randomized=True,
+        sessions=10,
+        total_probes=100,
+        first_session="2026-04-01",
+        last_session="2026-04-11",
+    )
     rows = _load_ble_devices(tmp)
     assert len(rows) == 1
     assert rows[0]["label"] == "Apple Watch", \
@@ -342,55 +351,24 @@ def test_load_wifi_aps_physical_ap_grouping():
     from web.loaders import _load_wifi_aps
 
     tmp = tempfile.mkdtemp()
-    _write_json(tmp, "aps.json", {
-        "aps": {
-            "aa:bb:cc:dd:ee:00": {
-                "bssid": "aa:bb:cc:dd:ee:00",
-                "ssids": ["Home"],
-                "channels": [6],
-                "crypto": "WPA2-PSK",
-                "manufacturer": "Ubiquiti",
-                "hidden": False,
-                "first_seen": "t0",
-                "last_seen":  "t1",
-                "sessions": 1,
-                "total_beacons": 10,
-                "last_rssi": -60,
-                "clients": ["c1"],
-                "client_count": 1,
-            },
-            "aa:bb:cc:dd:ee:01": {
-                "bssid": "aa:bb:cc:dd:ee:01",
-                "ssids": ["Home"],
-                "channels": [36],
-                "crypto": "WPA2-PSK",
-                "manufacturer": "Ubiquiti",
-                "hidden": False,
-                "first_seen": "t0",
-                "last_seen":  "t2",
-                "sessions": 1,
-                "total_beacons": 12,
-                "last_rssi": -65,
-                "clients": ["c2"],
-                "client_count": 1,
-            },
-            # Different physical AP — same SSID but different prefix
-            "ff:ee:dd:cc:bb:aa": {
-                "bssid": "ff:ee:dd:cc:bb:aa",
-                "ssids": ["Home"],
-                "channels": [11],
-                "crypto": "WPA2-PSK",
-                "manufacturer": "TP-Link",
-                "hidden": False,
-                "first_seen": "t0",
-                "last_seen":  "t1",
-                "sessions": 1,
-                "total_beacons": 5,
-                "clients": [],
-                "client_count": 0,
-            },
-        }
-    })
+    for bssid, extra in [
+        ("aa:bb:cc:dd:ee:00", {"channels": [6],  "last_rssi": -60, "clients": ["c1"], "total_beacons": 10}),
+        ("aa:bb:cc:dd:ee:01", {"channels": [36], "last_rssi": -65, "clients": ["c2"], "total_beacons": 12}),
+        # Different physical AP — same SSID but different 5-octet prefix
+        ("ff:ee:dd:cc:bb:aa", {"channels": [11], "last_rssi": -70, "clients": [],     "total_beacons": 5}),
+    ]:
+        _seed_ap(
+            tmp,
+            bssid=bssid,
+            ssids=["Home"],
+            crypto="WPA2-PSK",
+            manufacturer="Ubiquiti" if bssid.startswith("aa") else "TP-Link",
+            hidden=False,
+            first_seen="t0",
+            last_seen="t2" if "ee:01" in bssid else "t1",
+            sessions=1,
+            **extra,
+        )
     groups = _load_wifi_aps(tmp)
     # Ubiquiti pair → 1 grouped row; TP-Link → 1 ungrouped
     counts = {g["bssid_count"] for g in groups}
