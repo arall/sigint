@@ -35,6 +35,7 @@ from .loaders import (
     _load_wifi_aps,
     _load_wifi_clients,
 )
+from .sessions import list_sessions, resolve_session_path
 from .tailer import DBTailer
 
 
@@ -91,6 +92,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_config()
         elif path == '/api/devices':
             self._serve_devices(qs)
+        elif path == '/api/sessions':
+            self._serve_sessions()
         elif path.startswith('/api/cat/'):
             self._serve_category(path[len('/api/cat/'):], qs)
         elif path.startswith('/audio/'):
@@ -178,12 +181,25 @@ class WebHandler(BaseHTTPRequestHandler):
         window_hours = max(0.1, min(window_hours, 168))
         window_seconds = int(window_hours * 3600)
 
-        # Prefer SQL fetch against the currently-tailed .db so category
-        # history isn't capped at the 50k in-memory deque. Fall back to
-        # the deque if no DB has been opened yet (e.g. web started before
-        # the server wrote its first detection).
+        # Session override: ?session=<filename> picks a historical .db.
+        # Default is the live session (whatever tailer is currently tailing).
+        session_name = qs.get("session", [None])[0]
+        db_path = None
+        session_resolved = None
+        if session_name:
+            db_path = resolve_session_path(self.server.output_dir, session_name)
+            if db_path is None:
+                self.send_error(400, f"Unknown session: {session_name}")
+                return
+            session_resolved = session_name
+        else:
+            db_path = getattr(tailer, "_tailing_db", None)
+
+        # Prefer SQL fetch against the chosen .db so category history
+        # isn't capped at the 50k in-memory deque. Fall back to the deque
+        # only when no DB has been opened yet AND the user didn't pick a
+        # specific session.
         detections = None
-        db_path = getattr(tailer, "_tailing_db", None)
         if db_path:
             try:
                 detections = fetch_detections_for_category(
@@ -206,8 +222,13 @@ class WebHandler(BaseHTTPRequestHandler):
             "rows": rows,
             "total": len(rows),
             "source": source,
+            "session": session_resolved,
             "window_hours": window_hours,
         })
+
+    def _serve_sessions(self):
+        sessions = list_sessions(self.server.output_dir)
+        self._send_json({"sessions": sessions})
 
     def _serve_devices(self, qs):
         tailer = self.server.tailer

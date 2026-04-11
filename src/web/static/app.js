@@ -665,10 +665,64 @@ document.querySelectorAll('th.sortable').forEach(th => {
 });
 document.getElementById('dev-active-only').addEventListener('change', () => renderDevices());
 
+// --- Session switcher (header dropdown) ---
+// "" = LIVE (tailed current session). Non-empty = basename of a historical
+// .db file. Only category tabs honor this; Live/Log/Timeline always show
+// the active session.
+let _selectedSession = "";
+
+async function loadSessions() {
+  try {
+    const r = await fetch('/api/sessions');
+    const data = await r.json();
+    const sel = document.getElementById('session-select');
+    if (!sel) return;
+    // Remember current selection; reset options
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">LIVE</option>';
+    (data.sessions || []).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.name;
+      const when = s.mtime_iso ? s.mtime_iso.replace('T', ' ') : '';
+      const n = s.detection_count || 0;
+      const live = s.live ? ' (live)' : '';
+      opt.textContent = s.name + live + ' — ' + n + ' dets — ' + when;
+      sel.appendChild(opt);
+    });
+    // Restore prior selection if it still exists
+    if (prev && Array.from(sel.options).some(o => o.value === prev)) {
+      sel.value = prev;
+    }
+  } catch(e) {}
+}
+
+function onSessionChange() {
+  const sel = document.getElementById('session-select');
+  _selectedSession = sel.value || "";
+  const status = document.getElementById('session-status');
+  if (_selectedSession) {
+    status.textContent = 'BROWSING';
+    status.style.color = '#ff9800';
+  } else {
+    status.textContent = 'LIVE';
+    status.style.color = '#4caf50';
+  }
+  // Refresh the active category tab, if any
+  const activeBtn = document.querySelector('.tab-btn.active');
+  const tab = activeBtn ? activeBtn.dataset.tab : null;
+  if (tab && ['voice','drones','aircraft','vessels','vehicles','cellular','other'].includes(tab)) {
+    loadCategory(tab);
+  }
+}
+
 // --- Category Tabs (Voice / Drones / Aircraft / Vessels / Vehicles / Cellular / Other) ---
 async function loadCategory(name) {
   try {
-    const r = await fetch('/api/cat/' + encodeURIComponent(name));
+    let url = '/api/cat/' + encodeURIComponent(name);
+    if (_selectedSession) {
+      url += '?session=' + encodeURIComponent(_selectedSession);
+    }
+    const r = await fetch(url);
     const data = await r.json();
     const rows = data.rows || [];
     const fn = _CATEGORY_RENDERERS[name];
@@ -925,6 +979,13 @@ setInterval(() => {
   const cfgTab = document.getElementById('tab-config');
   if (cfgTab && cfgTab.classList.contains('active')) loadConfig();
 }, 3000);
+
+// Session dropdown: initial load + change handler + periodic refresh so
+// new sessions on disk show up without a full page reload.
+loadSessions();
+setInterval(loadSessions, 15000);
+document.getElementById('session-select').addEventListener('change', onSessionChange);
+
 if (location.hash) {
   const btn = document.querySelector('.tab-btn[data-tab="'+location.hash.slice(1)+'"]');
   if (btn) btn.click();
