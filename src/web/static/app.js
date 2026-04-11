@@ -78,6 +78,64 @@ function tipAttr(tag) {
   return t ? ' title="' + esc(t) + '"' : '';
 }
 
+// --- Generic per-table client-side sorting ---
+// Every tab body that wants column sort registers through setTable(id,
+// rows, renderFn). The Devices tab has its own bespoke sort state
+// (_devSort) so we route based on data-sub vs data-tbl on the <th>.
+const _tblData = {};     // tbody id → raw rows[]
+const _tblRender = {};   // tbody id → renderFn(sortedRows)
+const _tblSort = {};     // tbody id → {key, dir}
+
+function _cmpRows(a, b, key, dir) {
+  const av = a[key], bv = b[key];
+  if (av == null && bv == null) return 0;
+  if (av == null) return 1;   // nulls always sink to the bottom
+  if (bv == null) return -1;
+  if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+  return String(av).localeCompare(String(bv)) * dir;
+}
+
+function _sortRows(rows, key, dirStr) {
+  const dir = dirStr === 'asc' ? 1 : -1;
+  return rows.slice().sort((a, b) => _cmpRows(a, b, key, dir));
+}
+
+function _updateTblSortIndicators(id) {
+  document.querySelectorAll('th.sortable[data-tbl="'+id+'"]').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    const s = _tblSort[id];
+    if (s && s.key === th.dataset.key) {
+      th.classList.add(s.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+  });
+}
+
+function setTable(id, rows, renderFn) {
+  _tblData[id] = rows;
+  _tblRender[id] = renderFn;
+  const s = _tblSort[id];
+  const out = s ? _sortRows(rows, s.key, s.dir) : rows;
+  renderFn(out);
+  _updateTblSortIndicators(id);
+}
+
+function tblSortBy(id, key) {
+  const s = _tblSort[id];
+  if (s && s.key === key) {
+    if (s.dir === 'desc') _tblSort[id] = {key, dir: 'asc'};
+    else delete _tblSort[id];    // third click clears → source order
+  } else {
+    _tblSort[id] = {key, dir: 'desc'};
+  }
+  const rows = _tblData[id] || [];
+  const render = _tblRender[id];
+  if (render) {
+    const s2 = _tblSort[id];
+    render(s2 ? _sortRows(rows, s2.key, s2.dir) : rows);
+  }
+  _updateTblSortIndicators(id);
+}
+
 // --- Config / Captures ---
 async function loadConfig() {
   const capEl = document.getElementById('captures');
@@ -228,6 +286,27 @@ async function loadConfig() {
 }
 
 // --- Live Tab ---
+function renderCategories(rows) {
+  const tbody = document.getElementById('categories');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">waiting for detections...</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(c => {
+    const typesStr = (c.types || []).map(t => {
+      const col = TYPE_COLORS[t] || '#ccc';
+      return '<span style="color:'+col+';margin-right:8px">'+esc(t)+'</span>';
+    }).join('');
+    return '<tr style="cursor:pointer" onclick="goToTab(\''+esc(c.id)+'\')">'
+      + '<td style="font-weight:600;color:#e0e0e0">'+esc(c.label)+'</td>'
+      + '<td class="num">'+c.count+'</td>'
+      + '<td class="num">'+(c.uniques>0?c.uniques:'-')+'</td>'
+      + '<td>'+(c.last_seen||'-')+'</td>'
+      + '<td style="font-size:11px">'+typesStr+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
 function updateOverview(state) {
   document.getElementById('h-time').textContent = state.time || '-';
   document.getElementById('h-uptime').textContent = state.uptime || '-';
@@ -270,24 +349,7 @@ function updateOverview(state) {
   // (Config is in its own tab)
 
   // Categories table (Live tab overview)
-  const tbody = document.getElementById('categories');
-  if (state.categories && state.categories.length) {
-    tbody.innerHTML = state.categories.map(c => {
-      const typesStr = c.types.map(t => {
-        const col = TYPE_COLORS[t] || '#ccc';
-        return '<span style="color:'+col+';margin-right:8px">'+esc(t)+'</span>';
-      }).join('');
-      return '<tr style="cursor:pointer" onclick="goToTab(\''+esc(c.id)+'\')">'
-        + '<td style="font-weight:600;color:#e0e0e0">'+esc(c.label)+'</td>'
-        + '<td class="num">'+c.count+'</td>'
-        + '<td class="num">'+(c.uniques>0?c.uniques:'-')+'</td>'
-        + '<td>'+(c.last_seen||'-')+'</td>'
-        + '<td style="font-size:11px">'+typesStr+'</td>'
-        + '</tr>';
-    }).join('');
-  } else {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">waiting for detections...</td></tr>';
-  }
+  setTable('categories', state.categories || [], renderCategories);
 
   // Recent events
   const recEl = document.getElementById('recent');
@@ -312,6 +374,7 @@ function updateOverview(state) {
 let detOffset = 0;
 let detectionsLoaded = false;
 let filterPopulated = false;
+let _logRows = [];
 
 function populateFilter(signals) {
   if (filterPopulated || !signals || !signals.length) return;
@@ -325,37 +388,43 @@ function populateFilter(signals) {
   filterPopulated = true;
 }
 
+function renderLogRows(rows) {
+  const tbody = document.getElementById('det-body');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">no detections</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(d => {
+    const ts = d.timestamp ? d.timestamp.split('T')[1].split('.')[0] : '-';
+    const color = TYPE_COLORS[d.signal_type] || '#ccc';
+    const hasTx = !!d.transcript;
+    const detailText = hasTx ? '\u201c' + d.transcript + '\u201d' : (d.detail || '');
+    const audioBtn = d.audio_file
+      ? '<button class="play-btn" onclick="playAudio(this,\''+esc(d.audio_file)+'\')">&#9654;</button>'
+      : '';
+    const freq = (d.frequency_mhz != null) ? d.frequency_mhz.toFixed(3) : '-';
+    return '<tr>'
+      + '<td>'+ts+'</td>'
+      + '<td class="sig-type" style="color:'+color+'">'+esc(d.signal_type)+'</td>'
+      + '<td>'+esc(d.channel)+'</td>'
+      + '<td>'+freq+'</td>'
+      + '<td class="num">'+(d.snr_db!=null?d.snr_db+' dB':'-')+'</td>'
+      + '<td class="detail'+(hasTx?' transcript':'')+'">'+esc(detailText)+'</td>'
+      + '<td>'+audioBtn+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
 async function loadDetections(append) {
-  if (!append) detOffset = 0;
+  if (!append) { detOffset = 0; _logRows = []; }
   const filter = document.getElementById('det-filter').value;
   const url = '/api/detections?limit=50&offset=' + detOffset
     + (filter ? '&type=' + encodeURIComponent(filter) : '');
   try {
     const r = await fetch(url);
     const data = await r.json();
-    const tbody = document.getElementById('det-body');
-    if (!append) tbody.innerHTML = '';
-
-    data.forEach(d => {
-      const tr = document.createElement('tr');
-      const ts = d.timestamp ? d.timestamp.split('T')[1].split('.')[0] : '-';
-      const color = TYPE_COLORS[d.signal_type] || '#ccc';
-      const hasTx = !!d.transcript;
-      const detailText = hasTx ? '\u201c' + d.transcript + '\u201d' : (d.detail || '');
-      const audioBtn = d.audio_file
-        ? '<button class="play-btn" onclick="playAudio(this,\''+esc(d.audio_file)+'\')">&#9654;</button>'
-        : '';
-      tr.innerHTML =
-        '<td>'+ts+'</td>'
-        + '<td class="sig-type" style="color:'+color+'">'+esc(d.signal_type)+'</td>'
-        + '<td>'+esc(d.channel)+'</td>'
-        + '<td>'+d.frequency_mhz.toFixed(3)+'</td>'
-        + '<td class="num">'+(d.snr_db!=null?d.snr_db+' dB':'-')+'</td>'
-        + '<td class="detail'+(hasTx?' transcript':'')+'">'+esc(detailText)+'</td>'
-        + '<td>'+audioBtn+'</td>';
-      tbody.appendChild(tr);
-    });
-
+    _logRows = append ? _logRows.concat(data) : data.slice();
+    setTable('det-body', _logRows, renderLogRows);
     detOffset += data.length;
     detectionsLoaded = true;
     document.getElementById('det-more').style.display = data.length < 50 ? 'none' : '';
@@ -678,7 +747,10 @@ document.querySelectorAll('.dev-subtab-btn').forEach(btn => {
   btn.addEventListener('click', () => switchDevSubtab(btn.dataset.sub));
 });
 document.querySelectorAll('th.sortable').forEach(th => {
-  th.addEventListener('click', () => devSortBy(th.dataset.sub, th.dataset.key));
+  th.addEventListener('click', () => {
+    if (th.dataset.sub) devSortBy(th.dataset.sub, th.dataset.key);
+    else if (th.dataset.tbl) tblSortBy(th.dataset.tbl, th.dataset.key);
+  });
 });
 document.getElementById('dev-active-only').addEventListener('change', () => renderDevices());
 
@@ -733,6 +805,16 @@ function onSessionChange() {
 }
 
 // --- Category Tabs (Voice / Drones / Aircraft / Vessels / Vehicles / Cellular / Other) ---
+const _CATEGORY_BODY_IDS = {
+  voice:    'voice-body',
+  drones:   'drones-body',
+  aircraft: 'aircraft-body',
+  vessels:  'vessels-body',
+  vehicles: 'vehicles-body',
+  cellular: 'cellular-body',
+  other:    'other-body',
+};
+
 async function loadCategory(name) {
   try {
     let url = '/api/cat/' + encodeURIComponent(name);
@@ -743,7 +825,8 @@ async function loadCategory(name) {
     const data = await r.json();
     const rows = data.rows || [];
     const fn = _CATEGORY_RENDERERS[name];
-    if (fn) fn(rows);
+    const bodyId = _CATEGORY_BODY_IDS[name];
+    if (fn && bodyId) setTable(bodyId, rows, fn);
   } catch(e) {}
 }
 
@@ -1028,6 +1111,33 @@ async function loadCorrelations() {
   } catch (e) {}
 }
 
+let _corrEmptyNote = '';
+
+function renderCorrPairs(pairs) {
+  const tbody = document.getElementById('corr-body');
+  if (!pairs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">'
+      + esc(_corrEmptyNote || 'no correlated pairs yet — run the server for a few minutes to accumulate co-occurrences')
+      + '</td></tr>';
+    return;
+  }
+  tbody.innerHTML = pairs.map(p => {
+    const ratioColor = p.ratio >= 0.9 ? '#4caf50' : p.ratio >= 0.7 ? '#ffeb3b' : '#e0e0e0';
+    const xBadge = p.cross_transport
+      ? '<span style="background:#0f3460;color:#9ecbff;padding:0 5px;border-radius:3px;font-size:10px" title="Correlated across different signal types (e.g. WiFi + BLE)">cross</span>'
+      : '';
+    return '<tr>'
+      + '<td style="font-family:monospace;font-size:11px">' + esc(p.device_a) + '</td>'
+      + '<td style="font-family:monospace;font-size:11px">' + esc(p.device_b) + '</td>'
+      + '<td class="num">' + p.co_occurrences + '</td>'
+      + '<td class="num">' + p.total_a + '</td>'
+      + '<td class="num">' + p.total_b + '</td>'
+      + '<td class="num" style="color:' + ratioColor + '">' + (p.ratio * 100).toFixed(0) + '%</td>'
+      + '<td>' + xBadge + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
 function renderCorrelations(data) {
   const pairs = data.correlated_pairs || [];
   const clusters = data.clusters || [];
@@ -1041,28 +1151,8 @@ function renderCorrelations(data) {
       + `${total} device${total === 1 ? '' : 's'} · last ${ts}`;
   }
 
-  const tbody = document.getElementById('corr-body');
-  if (!pairs.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">'
-      + esc(data.note || 'no correlated pairs yet — run the server for a few minutes to accumulate co-occurrences')
-      + '</td></tr>';
-  } else {
-    tbody.innerHTML = pairs.map(p => {
-      const ratioColor = p.ratio >= 0.9 ? '#4caf50' : p.ratio >= 0.7 ? '#ffeb3b' : '#e0e0e0';
-      const xBadge = p.cross_transport
-        ? '<span style="background:#0f3460;color:#9ecbff;padding:0 5px;border-radius:3px;font-size:10px" title="Correlated across different signal types (e.g. WiFi + BLE)">cross</span>'
-        : '';
-      return '<tr>'
-        + '<td style="font-family:monospace;font-size:11px">' + esc(p.device_a) + '</td>'
-        + '<td style="font-family:monospace;font-size:11px">' + esc(p.device_b) + '</td>'
-        + '<td class="num">' + p.co_occurrences + '</td>'
-        + '<td class="num">' + p.total_a + '</td>'
-        + '<td class="num">' + p.total_b + '</td>'
-        + '<td class="num" style="color:' + ratioColor + '">' + (p.ratio * 100).toFixed(0) + '%</td>'
-        + '<td>' + xBadge + '</td>'
-        + '</tr>';
-    }).join('');
-  }
+  _corrEmptyNote = data.note || '';
+  setTable('corr-body', pairs, renderCorrPairs);
 
   const clustEl = document.getElementById('corr-clusters');
   if (!clusters.length) {

@@ -57,8 +57,11 @@
     <div class="section-title">Categories</div>
     <table>
       <thead><tr>
-        <th>Category</th><th class="num">Count</th><th class="num">Unique</th>
-        <th>Last</th><th>Signal Types</th>
+        <th class="sortable" data-tbl="categories" data-key="label">Category</th>
+        <th class="sortable num" data-tbl="categories" data-key="count">Count</th>
+        <th class="sortable num" data-tbl="categories" data-key="uniques">Unique</th>
+        <th class="sortable" data-tbl="categories" data-key="last_seen">Last</th>
+        <th>Signal Types</th>
       </tr></thead>
       <tbody id="categories">
         <tr><td colspan="5" class="empty">waiting for detections...</td></tr>
@@ -104,8 +107,14 @@
     </div>
     <table>
       <thead><tr>
-        <th>Time</th><th>Type</th><th>Channel</th><th class="num">Freq (MHz)</th>
-        <th class="num">Dur</th><th class="num">SNR</th><th>Transcript</th><th></th>
+        <th class="sortable" data-tbl="voice-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="voice-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="voice-body" data-key="channel">Channel</th>
+        <th class="sortable num" data-tbl="voice-body" data-key="frequency_mhz">Freq (MHz)</th>
+        <th class="sortable num" data-tbl="voice-body" data-key="duration_s">Dur</th>
+        <th class="sortable num" data-tbl="voice-body" data-key="snr_db">SNR</th>
+        <th class="sortable" data-tbl="voice-body" data-key="transcript">Transcript</th>
+        <th></th>
       </tr></thead>
       <tbody id="voice-body">
         <tr><td colspan="8" class="empty">select tab to load...</td></tr>
@@ -125,9 +134,15 @@
     </div>
     <table>
       <thead><tr>
-        <th>Type</th><th>Serial / ID</th><th>UA Type</th><th>Protocol</th>
-        <th>Position</th><th class="num">Alt</th><th class="num">Speed</th>
-        <th>Operator</th><th>Last Seen</th>
+        <th class="sortable" data-tbl="drones-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="drones-body" data-key="serial">Serial / ID</th>
+        <th class="sortable" data-tbl="drones-body" data-key="ua_type">UA Type</th>
+        <th class="sortable" data-tbl="drones-body" data-key="protocol">Protocol</th>
+        <th class="sortable" data-tbl="drones-body" data-key="last_lat">Position</th>
+        <th class="sortable num" data-tbl="drones-body" data-key="altitude_m">Alt</th>
+        <th class="sortable num" data-tbl="drones-body" data-key="speed_ms">Speed</th>
+        <th class="sortable" data-tbl="drones-body" data-key="op_lat">Operator</th>
+        <th class="sortable" data-tbl="drones-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="drones-body">
         <tr><td colspan="9" class="empty">select tab to load...</td></tr>
@@ -147,9 +162,14 @@
     </div>
     <table>
       <thead><tr>
-        <th>ICAO</th><th>Callsign</th><th class="num">Altitude</th>
-        <th class="num">Speed</th><th class="num">Heading</th>
-        <th>Position</th><th class="num">Msgs</th><th>Last Seen</th>
+        <th class="sortable" data-tbl="aircraft-body" data-key="icao">ICAO</th>
+        <th class="sortable" data-tbl="aircraft-body" data-key="callsign">Callsign</th>
+        <th class="sortable num" data-tbl="aircraft-body" data-key="altitude_ft">Altitude</th>
+        <th class="sortable num" data-tbl="aircraft-body" data-key="speed_kt">Speed</th>
+        <th class="sortable num" data-tbl="aircraft-body" data-key="heading">Heading</th>
+        <th class="sortable" data-tbl="aircraft-body" data-key="latitude">Position</th>
+        <th class="sortable num" data-tbl="aircraft-body" data-key="count">Msgs</th>
+        <th class="sortable" data-tbl="aircraft-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="aircraft-body">
         <tr><td colspan="8" class="empty">select tab to load...</td></tr>
@@ -169,9 +189,15 @@
     </div>
     <table>
       <thead><tr>
-        <th>MMSI</th><th>Name</th><th>Type</th><th>Nav Status</th>
-        <th class="num">Speed</th><th class="num">Course</th>
-        <th>Position</th><th class="num">Msgs</th><th>Last Seen</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="mmsi">MMSI</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="name">Name</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="ship_type">Type</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="nav_status">Nav Status</th>
+        <th class="sortable num" data-tbl="vessels-body" data-key="speed_kn">Speed</th>
+        <th class="sortable num" data-tbl="vessels-body" data-key="course">Course</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="latitude">Position</th>
+        <th class="sortable num" data-tbl="vessels-body" data-key="count">Msgs</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="vessels-body">
         <tr><td colspan="9" class="empty">select tab to load...</td></tr>
@@ -191,9 +217,14 @@
     </div>
     <table>
       <thead><tr>
-        <th>Kind</th><th>ID</th><th>Protocol</th><th class="num">Freq</th>
-        <th class="num">Pressure</th><th class="num">Temp</th>
-        <th class="num">Count</th><th>Last Seen</th>
+        <th class="sortable" data-tbl="vehicles-body" data-key="kind">Kind</th>
+        <th class="sortable" data-tbl="vehicles-body" data-key="id">ID</th>
+        <th class="sortable" data-tbl="vehicles-body" data-key="protocol">Protocol</th>
+        <th class="sortable num" data-tbl="vehicles-body" data-key="frequency_mhz">Freq</th>
+        <th class="sortable num" data-tbl="vehicles-body" data-key="pressure_kpa">Pressure</th>
+        <th class="sortable num" data-tbl="vehicles-body" data-key="temperature_c">Temp</th>
+        <th class="sortable num" data-tbl="vehicles-body" data-key="count">Count</th>
+        <th class="sortable" data-tbl="vehicles-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="vehicles-body">
         <tr><td colspan="8" class="empty">select tab to load...</td></tr>
@@ -213,8 +244,13 @@
     </div>
     <table>
       <thead><tr>
-        <th>Technology</th><th>Band</th><th>Channel</th><th class="num">Freq (MHz)</th>
-        <th class="num">Hits</th><th class="num">Last SNR</th><th>Last Seen</th>
+        <th class="sortable" data-tbl="cellular-body" data-key="technology">Technology</th>
+        <th class="sortable" data-tbl="cellular-body" data-key="band">Band</th>
+        <th class="sortable" data-tbl="cellular-body" data-key="channel">Channel</th>
+        <th class="sortable num" data-tbl="cellular-body" data-key="frequency_mhz">Freq (MHz)</th>
+        <th class="sortable num" data-tbl="cellular-body" data-key="count">Hits</th>
+        <th class="sortable num" data-tbl="cellular-body" data-key="last_snr">Last SNR</th>
+        <th class="sortable" data-tbl="cellular-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="cellular-body">
         <tr><td colspan="7" class="empty">select tab to load...</td></tr>
@@ -235,9 +271,13 @@
     </div>
     <table>
       <thead><tr>
-        <th>Device A</th><th>Device B</th>
-        <th class="num">Overlap</th><th class="num">Total A</th><th class="num">Total B</th>
-        <th class="num">Ratio</th><th>Cross-Transport</th>
+        <th class="sortable" data-tbl="corr-body" data-key="device_a">Device A</th>
+        <th class="sortable" data-tbl="corr-body" data-key="device_b">Device B</th>
+        <th class="sortable num" data-tbl="corr-body" data-key="co_occurrences">Overlap</th>
+        <th class="sortable num" data-tbl="corr-body" data-key="total_a">Total A</th>
+        <th class="sortable num" data-tbl="corr-body" data-key="total_b">Total B</th>
+        <th class="sortable num" data-tbl="corr-body" data-key="ratio">Ratio</th>
+        <th class="sortable" data-tbl="corr-body" data-key="cross_transport">Cross-Transport</th>
       </tr></thead>
       <tbody id="corr-body">
         <tr><td colspan="7" class="empty">select tab to load...</td></tr>
@@ -263,8 +303,13 @@
     </div>
     <table>
       <thead><tr>
-        <th>Time</th><th>Type</th><th>Channel</th><th class="num">Freq (MHz)</th>
-        <th class="num">SNR</th><th>Model / Protocol</th><th>Detail</th>
+        <th class="sortable" data-tbl="other-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="other-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="other-body" data-key="channel">Channel</th>
+        <th class="sortable num" data-tbl="other-body" data-key="frequency_mhz">Freq (MHz)</th>
+        <th class="sortable num" data-tbl="other-body" data-key="snr_db">SNR</th>
+        <th class="sortable" data-tbl="other-body" data-key="model">Model / Protocol</th>
+        <th class="sortable" data-tbl="other-body" data-key="detail">Detail</th>
       </tr></thead>
       <tbody id="other-body">
         <tr><td colspan="7" class="empty">select tab to load...</td></tr>
@@ -285,8 +330,13 @@
     </div>
     <table>
       <thead><tr>
-        <th>Time</th><th>Type</th><th>Ch</th><th>Freq (MHz)</th>
-        <th class="num">SNR</th><th>Details</th><th></th>
+        <th class="sortable" data-tbl="det-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="det-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="det-body" data-key="channel">Ch</th>
+        <th class="sortable num" data-tbl="det-body" data-key="frequency_mhz">Freq (MHz)</th>
+        <th class="sortable num" data-tbl="det-body" data-key="snr_db">SNR</th>
+        <th class="sortable" data-tbl="det-body" data-key="detail">Details</th>
+        <th></th>
       </tr></thead>
       <tbody id="det-body">
         <tr><td colspan="7" class="empty">select tab to load...</td></tr>
