@@ -980,6 +980,20 @@ setInterval(() => {
   if (cfgTab && cfgTab.classList.contains('active')) loadConfig();
 }, 3000);
 
+// Auto-refresh the active category tab every 3s. Skips when a historical
+// session is selected from the dropdown (that data never changes) and
+// skips when the document is hidden (background tab in the browser).
+const _CATEGORY_TAB_NAMES = ['voice','drones','aircraft','vessels','vehicles','cellular','other'];
+setInterval(() => {
+  if (_selectedSession) return;
+  if (document.hidden) return;
+  const activeBtn = document.querySelector('.tab-btn.active');
+  const tab = activeBtn ? activeBtn.dataset.tab : null;
+  if (tab && _CATEGORY_TAB_NAMES.includes(tab)) {
+    loadCategory(tab);
+  }
+}, 3000);
+
 // Session dropdown: initial load + change handler + periodic refresh so
 // new sessions on disk show up without a full page reload.
 loadSessions();
@@ -1010,7 +1024,9 @@ function connectSSE() {
     try {
       const state = JSON.parse(ev.data);
       updateOverview(state);
-      if (document.getElementById('tab-detections').classList.contains('active')) {
+      // Auto-refresh the Log tab when new state arrives (2s SSE cadence)
+      const logTab = document.getElementById('tab-log');
+      if (logTab && logTab.classList.contains('active') && !_selectedSession) {
         loadDetections();
       }
     } catch(e) {}
