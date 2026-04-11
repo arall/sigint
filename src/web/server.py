@@ -28,6 +28,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 from .categories import CATEGORY_LABELS
+from .fetch import fetch_detections_for_category
 from .loaders import (
     CATEGORY_LOADERS,
     _load_ble_devices,
@@ -166,15 +167,46 @@ class WebHandler(BaseHTTPRequestHandler):
         if loader is None:
             self.send_error(404, f"Unknown category: {name}")
             return
+
         tailer = self.server.tailer
-        with tailer._lock:
-            detections = list(tailer._detections)
+
+        # Time window for SQL fetch, in hours; default 6h, capped at 168 (1wk).
+        try:
+            window_hours = float(qs.get("window", [6])[0])
+        except (ValueError, TypeError):
+            window_hours = 6
+        window_hours = max(0.1, min(window_hours, 168))
+        window_seconds = int(window_hours * 3600)
+
+        # Prefer SQL fetch against the currently-tailed .db so category
+        # history isn't capped at the 50k in-memory deque. Fall back to
+        # the deque if no DB has been opened yet (e.g. web started before
+        # the server wrote its first detection).
+        detections = None
+        db_path = getattr(tailer, "_tailing_db", None)
+        if db_path:
+            try:
+                detections = fetch_detections_for_category(
+                    db_path, name,
+                    window_seconds=window_seconds,
+                )
+            except Exception:
+                detections = None
+
+        source = "db"
+        if detections is None:
+            source = "deque"
+            with tailer._lock:
+                detections = list(tailer._detections)
+
         rows = loader(detections)
         self._send_json({
             "category": name,
             "label": CATEGORY_LABELS.get(name, name),
             "rows": rows,
             "total": len(rows),
+            "source": source,
+            "window_hours": window_hours,
         })
 
     def _serve_devices(self, qs):
