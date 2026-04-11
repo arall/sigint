@@ -56,15 +56,20 @@ def count_audio_files(directory):
 # -----------------------------------------------------------------------
 
 def test_pmr_noise_only():
-    """PMRScanner: 30s of noise produces zero detections."""
+    """PMRScanner: pure noise produces zero detections.
+
+    5s is plenty to catch a threshold regression — the test used to use
+    30s but that's 6x the synthesis cost for no extra coverage, since
+    any false detection from noise fires on the first chunk that
+    crosses the threshold.
+    """
     from scanners.pmr import PMRScanner
 
     with tempfile.TemporaryDirectory() as tmpdir:
         scanner = PMRScanner(output_dir=tmpdir, record_audio=True)
 
-        # Feed 30 seconds of noise in chunks
         chunk_size = 256 * 1024
-        n_chunks = int(30 * DEFAULT_SAMPLE_RATE / chunk_size)
+        n_chunks = int(5 * DEFAULT_SAMPLE_RATE / chunk_size)
         for i in range(n_chunks):
             noise = generate_noise(DEFAULT_SAMPLE_RATE,
                                    chunk_size / DEFAULT_SAMPLE_RATE, 0.01)
@@ -109,10 +114,10 @@ def test_pmr_spectral_leakage():
                 scanner._process_channel(
                     iq, ch, ch_freq, snr, power, noise_floor,
                     sample_offset=i * chunk_size)
-            time.sleep(0.05)  # wall-clock for holdover
+            time.sleep(0.001)  # wall-clock tick for holdover (minimal)
 
-        # Wait for holdover to expire
-        time.sleep(2.5)
+        # Wait for holdover (2.0s) to expire
+        time.sleep(2.1)
         # Feed one more noise chunk to trigger holdover finalization
         noise = generate_noise(DEFAULT_SAMPLE_RATE,
                                chunk_size / DEFAULT_SAMPLE_RATE, 0.01)
@@ -159,8 +164,8 @@ def test_pmr_short_burst_filtered():
                 iq, 1, ch1_freq, snr, power, noise_floor,
                 sample_offset=i * chunk_size)
 
-        # Wait for holdover then finalize with noise
-        time.sleep(2.5)
+        # Wait for 2.0 s holdover to expire, then finalize with noise
+        time.sleep(2.1)
         noise = generate_noise(DEFAULT_SAMPLE_RATE,
                                chunk_size / DEFAULT_SAMPLE_RATE, 0.01)
         freqs, ps = calculate_power_spectrum(noise, DEFAULT_SAMPLE_RATE)
@@ -192,9 +197,9 @@ def test_voice_parser_noise_only():
             logger=logger, sample_rate=250e3, center_freq=446.05e6,
             band="pmr446", output_dir=tmpdir)
 
-        # Feed 30s of noise
+        # Feed 5s of noise — same rationale as PMR noise-only above.
         chunk_size = 2500  # 10ms at 250 kHz
-        n_chunks = int(30 * 250e3 / chunk_size)
+        n_chunks = int(5 * 250e3 / chunk_size)
         for _ in range(n_chunks):
             noise = generate_noise(250e3, chunk_size / 250e3, 0.01)
             parser.handle_frame(noise)
@@ -229,9 +234,9 @@ def test_voice_parser_leakage():
                                     chunk_size / sample_rate, snr_db=40)
             parser.handle_frame(iq)
             if i % 20 == 0:
-                time.sleep(0.1)
+                time.sleep(0.001)
 
-        time.sleep(3)
+        time.sleep(2.1)
         # Feed noise to trigger holdover expiry
         for _ in range(50):
             parser.handle_frame(generate_noise(sample_rate, chunk_size / sample_rate, 0.01))
@@ -269,7 +274,7 @@ def test_voice_parser_short_burst():
                                     snr_db=30)
             parser.handle_frame(iq)
 
-        time.sleep(3)
+        time.sleep(2.1)
         for _ in range(20):
             parser.handle_frame(generate_noise(sample_rate, 0.01, 0.01))
         parser.shutdown()

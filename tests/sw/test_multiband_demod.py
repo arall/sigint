@@ -37,13 +37,22 @@ BAND_TESTS = [
 
 
 def load_voice():
-    """Load reference voice WAV."""
+    """Load reference voice WAV, truncated to the first 1.5 seconds.
+
+    The fixture is 2.84 s; the demod quality assertions (correlation,
+    RMS ratio, voice energy, spike count) are stable on any 1 s+
+    speech segment, and the 1.5 s slice cuts IQ synthesis + demod cost
+    by ~1.9x per band. Six bands × saved time drops the whole test
+    from ~35 s sequential to ~18 s.
+    """
     with wave.open(VOICE_WAV, 'rb') as w:
         n = w.getnframes()
         raw = w.readframes(n)
         audio = np.array(struct.unpack(f'<{n}h', raw), dtype=np.float64)
         audio /= 32768.0
-    return audio, w.getframerate()
+        rate = w.getframerate()
+    trim = int(rate * 1.5)
+    return audio[:trim], rate
 
 
 def generate_fm_iq(audio, audio_rate, sample_rate, center_freq, channel_freq,

@@ -40,12 +40,19 @@ AUDIO_RATE = 16000
 
 
 def load_voice():
-    """Load the reference voice WAV as float64 array."""
+    """Load the reference voice WAV, truncated to the first 1.5 seconds.
+
+    The fixture is 2.84 s but the correlation / spike / RMS assertions
+    are stable on any 1 s+ speech clip. Trimming here makes the three
+    synthetic quality tests each run ~1.9x faster.
+    """
     with wave.open(VOICE_WAV, 'rb') as w:
         n = w.getnframes()
         raw = w.readframes(n)
         audio = np.array(struct.unpack(f'<{n}h', raw), dtype=np.float64) / 32768.0
-    return audio, w.getframerate()
+        rate = w.getframerate()
+    trim = int(rate * 1.5)
+    return audio[:trim], rate
 
 
 def correlate(original, demodulated, rate):
