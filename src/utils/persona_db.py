@@ -96,7 +96,7 @@ class PersonaDB:
         return None, None
 
     def update_persona(self, dev_sig, ssids, macs, manufacturer, randomized,
-                       probe_count):
+                       probe_count, apple_device=None):
         """
         Update or create a persona in the database.
 
@@ -107,6 +107,9 @@ class PersonaDB:
             manufacturer: Manufacturer name or None
             randomized: Whether the MAC(s) are randomized
             probe_count: Number of probes this session
+            apple_device: Decoded Apple device type (e.g. "Apple Watch",
+                          "AirPods Pro") — persisted so the Devices tab
+                          keeps the label after a server restart.
         """
         key, existing = self.find(dev_sig, ssids)
 
@@ -119,6 +122,8 @@ class PersonaDB:
             existing["total_probes"] += probe_count
             if manufacturer and not existing.get("manufacturer"):
                 existing["manufacturer"] = manufacturer
+            if apple_device and not existing.get("apple_device"):
+                existing["apple_device"] = apple_device
 
             # Re-key if SSIDs expanded
             new_key = self._make_key(dev_sig, existing["ssids"])
@@ -133,6 +138,7 @@ class PersonaDB:
                 "ssids": sorted(ssids),
                 "macs_seen": sorted(macs),
                 "manufacturer": manufacturer,
+                "apple_device": apple_device,
                 "randomized": randomized,
                 "sessions": 1,
                 "first_session": datetime.now().isoformat(),

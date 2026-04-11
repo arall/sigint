@@ -85,6 +85,38 @@ APPLE_DEVICE_TYPES = {
     0x14: "Apple Vision Pro",
 }
 
+# Apple Proximity Pairing model IDs (msg type 0x07). AirPods and Beats
+# headphones advertise these when out of the case / in pairing mode. The
+# upper byte distinguishes product families; we only need a coarse label.
+APPLE_PROXIMITY_MODELS = {
+    0x0220: "AirPods",
+    0x0320: "PowerBeats3",
+    0x0520: "BeatsX",
+    0x0620: "Beats Solo3",
+    0x0720: "Beats Studio3",
+    0x0920: "Beats Studio3",
+    0x0A20: "AirPods",                 # 1st gen (alt)
+    0x0B20: "Powerbeats Pro",
+    0x0C20: "Beats Solo Pro",
+    0x0D20: "Powerbeats Pro",
+    0x0E20: "AirPods Pro",
+    0x0F20: "AirPods 2",
+    0x1020: "AirPods Pro",
+    0x1120: "AirPods 3",
+    0x1220: "AirPods Max",
+    0x1320: "Beats Flex",
+    0x1420: "Beats Studio Buds",
+    0x1520: "Beats Fit Pro",
+    0x1620: "AirPods Pro 2",
+    0x1720: "Beats Studio Pro",
+    0x1820: "Beats Solo 4",
+    0x1920: "Beats Studio Buds+",
+    0x1A20: "AirPods Pro 2 (USB-C)",
+    0x1B20: "AirPods 4",
+    0x1C20: "AirPods 4 (ANC)",
+    0x1D20: "AirPods Max (USB-C)",
+}
+
 # Detection parameters
 DEDUP_WINDOW = 30  # seconds before re-logging same persona
 
@@ -115,8 +147,13 @@ def parse_apple_continuity(data):
         result["handoff_hash"] = payload[:14].hex()
 
     elif msg_type == 0x07 and len(payload) >= 3:
-        device_model = struct.unpack("<H", payload[:2])[0]
+        # Proximity Pairing — payload is big-endian, not little-endian.
+        # First 2 bytes = product model (e.g. 0x0E20 = AirPods Pro).
+        device_model = (payload[0] << 8) | payload[1]
         result["model_id"] = f"0x{device_model:04x}"
+        name = APPLE_PROXIMITY_MODELS.get(device_model)
+        if name:
+            result["device_type"] = name
         if len(payload) >= 6:
             result["battery_right"] = (payload[4] >> 4) * 10
             result["battery_left"] = (payload[4] & 0x0F) * 10
@@ -356,6 +393,7 @@ class AppleContinuityParser(BaseParser):
                     manufacturer=p["mfr_name"],
                     randomized=p["randomized"],
                     probe_count=p["count"],
+                    apple_device=p.get("apple_device"),
                 )
         self._persona_db.save()
 
