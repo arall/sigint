@@ -446,7 +446,12 @@ class DBTailer:
         return active
 
     def get_active_sigs(self, minutes=5):
-        """Return dict of dev_sig → info for devices seen in the last N minutes."""
+        """Return dict of dev_sig → info for devices seen in the last N minutes.
+
+        `rssi` is the real dBm RSSI from power_db (BLE HCI, WiFi scapy),
+        not snr_db — for BLE the noise floor is a nominal -100 dB so
+        snr_db = rssi + 100, which is not what the UI wants to show.
+        """
         cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
         active = {}
         with self._lock:
@@ -458,7 +463,7 @@ class DBTailer:
                     continue
                 if sig not in active:
                     active[sig] = {
-                        "rssi": d.get("snr_db"),
+                        "rssi": d.get("power_db"),
                         "apple_device": d.get("apple_device", ""),
                     }
         return active

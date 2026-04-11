@@ -315,6 +315,7 @@
           <th style="width:20px"></th>
           <th class="sortable" data-sub="wifi_clients" data-key="label">Device</th>
           <th class="sortable" data-sub="wifi_clients" data-key="manufacturer">Vendor</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="last_rssi" title="Most recent RSSI (dBm). Only populated while the client has been seen in the last 5 minutes; idle clients show a dash.">RSSI</th>
           <th class="sortable num" data-sub="wifi_clients" data-key="mac_count">MACs</th>
           <th class="sortable num" data-sub="wifi_clients" data-key="ssid_count">SSIDs</th>
           <th class="sortable num" data-sub="wifi_clients" data-key="sessions">Sessions</th>
@@ -322,7 +323,7 @@
           <th class="sortable" data-sub="wifi_clients" data-key="last_session">Last Seen</th>
         </tr></thead>
         <tbody id="wc-body">
-          <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+          <tr><td colspan="9" class="empty">select tab to load...</td></tr>
         </tbody>
       </table>
     </div>
@@ -337,13 +338,14 @@
           <th class="sortable" data-sub="ble" data-key="label">Device</th>
           <th class="sortable" data-sub="ble" data-key="manufacturer">Vendor</th>
           <th class="sortable" data-sub="ble" data-key="apple_device">Apple</th>
+          <th class="sortable num" data-sub="ble" data-key="last_rssi" title="Most recent RSSI (dBm) from the Bluetooth HCI advertising report. Only populated while the device has been seen in the last 5 minutes; idle devices show a dash. Closer = higher (less negative) value; -30 dBm is almost touching the adapter, -90 dBm is barely audible.">RSSI</th>
           <th class="sortable num" data-sub="ble" data-key="mac_count">MACs</th>
           <th class="sortable num" data-sub="ble" data-key="sessions">Sessions</th>
           <th class="sortable num" data-sub="ble" data-key="total_probes">Probes</th>
           <th class="sortable" data-sub="ble" data-key="last_session">Last Seen</th>
         </tr></thead>
         <tbody id="ble-body">
-          <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+          <tr><td colspan="9" class="empty">select tab to load...</td></tr>
         </tbody>
       </table>
     </div>

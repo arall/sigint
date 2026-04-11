@@ -400,6 +400,10 @@ function _devSortValue(row, key) {
     return chs.length ? chs[0] : 0;
   }
   const v = row[key];
+  // RSSI: idle devices have null last_rssi. Treat null as very weak so
+  // DESC sort (strongest first) puts them at the bottom instead of
+  // interleaving them randomly via string comparison.
+  if (key === 'last_rssi' && v == null) return -999;
   if (v == null) return '';
   return v;
 }
@@ -549,12 +553,23 @@ function renderWifiAps(activeOnly) {
   tbody.innerHTML = rows.join('');
 }
 
+function _fmtRssi(v) {
+  if (v == null) return '<span style="color:#555">\u2014</span>';
+  // Stronger = higher (less negative). Color-code: near/far visual bucket.
+  const n = Math.round(v);
+  const color = n >= -55 ? '#4caf50'
+              : n >= -70 ? '#ffeb3b'
+              : n >= -85 ? '#ffb74d'
+              : '#f44336';
+  return '<span style="color:'+color+'">'+n+' dBm</span>';
+}
+
 function renderWifiClients(activeOnly) {
   const items = _devApplySort('wifi_clients',
     (_devCache.wifi_clients || []).filter(c => !activeOnly || c.active));
   const tbody = document.getElementById('wc-body');
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">no clients found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">no clients found</td></tr>';
     return;
   }
   const rows = [];
@@ -576,6 +591,7 @@ function renderWifiClients(activeOnly) {
       + '<td>'+activeDot(c.active)+'</td>'
       + '<td>'+labelHtml+'</td>'
       + '<td style="color:#888;font-size:12px">'+esc(c.manufacturer||'')+'</td>'
+      + '<td class="num">'+_fmtRssi(c.last_rssi)+'</td>'
       + '<td class="num">'+c.mac_count+'</td>'
       + '<td class="num">'+c.ssid_count+'</td>'
       + '<td class="num" style="color:'+sessColor+'">'+c.sessions+'</td>'
@@ -589,7 +605,7 @@ function renderWifiClients(activeOnly) {
       detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">Probed SSIDs ('+c.ssid_count+')</div><div style="color:#9ecbff">'+(c.ssids||[]).map(esc).join('<br>')+'</div></div>';
       detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">Fingerprint</div><div style="font-family:monospace;color:#888">'+esc(c.dev_sig||'')+'</div></div>';
       detail += '</div>';
-      rows.push('<tr><td colspan="8" style="padding:0">'+detail+'</td></tr>');
+      rows.push('<tr><td colspan="9" style="padding:0">'+detail+'</td></tr>');
     }
   });
   tbody.innerHTML = rows.join('');
@@ -600,7 +616,7 @@ function renderBle(activeOnly) {
     (_devCache.ble || []).filter(d => !activeOnly || d.active));
   const tbody = document.getElementById('ble-body');
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">no BLE devices found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">no BLE devices found</td></tr>';
     return;
   }
   const rows = [];
@@ -620,6 +636,7 @@ function renderBle(activeOnly) {
       + '<td>'+labelHtml+'</td>'
       + '<td style="color:#888;font-size:12px">'+esc(d.manufacturer||'')+'</td>'
       + '<td style="color:#aaa;font-size:11px">'+esc(d.apple_device||'')+'</td>'
+      + '<td class="num">'+_fmtRssi(d.last_rssi)+'</td>'
       + '<td class="num">'+d.mac_count+'</td>'
       + '<td class="num" style="color:'+sessColor+'">'+d.sessions+'</td>'
       + '<td class="num">'+(d.total_probes||0).toLocaleString()+'</td>'
@@ -634,7 +651,7 @@ function renderBle(activeOnly) {
       }
       detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">Fingerprint</div><div style="font-family:monospace;color:#888">'+esc(d.dev_sig||'')+'</div></div>';
       detail += '</div>';
-      rows.push('<tr><td colspan="8" style="padding:0">'+detail+'</td></tr>');
+      rows.push('<tr><td colspan="9" style="padding:0">'+detail+'</td></tr>');
     }
   });
   tbody.innerHTML = rows.join('');
