@@ -53,7 +53,7 @@
       "name": "wifi",
       "type": "wifi",
       "interface": "wlan1",
-      "parsers": ["probe_request", "remoteid_wifi"]
+      "parsers": ["probe_request", "beacon", "remoteid_wifi"]
     }
   ]
 }

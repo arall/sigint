@@ -433,7 +433,6 @@ Wideband OFDM video downlink detection in `dsp/drone_video.py`. Uses HackRF 20 M
 ## Known Limitations
 
 - BLE scanner requires `sudo` and `hcitool`/`hcidump` (bluez); adapter may need reset between runs (`hciconfig hciX down/up`)
-- Recorder module is partially implemented
 - macOS-only library paths in loader.py (Homebrew Intel + Apple Silicon)
 - RTL-SDR frequency offset (~16 ppm) may assign transmissions to adjacent PMR channel
 - HackRF One has ~17 ppm crystal error and lower sensitivity than RTL-SDR for narrowband FM. The channelizer coalesces output blocks to compensate. For best results, increase lna_gain/vga_gain in server config or enable amp.

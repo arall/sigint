@@ -52,6 +52,20 @@ The web dashboard can run in two modes:
 - **Standalone**: `python3 sdr.py web` — reads detection `.db` files from the output directory and serves a web UI on port 8080. Use `-p` for a custom port, `-d` for a custom output directory.
 - **Embedded in server**: `sudo python3 sdr.py server --web` or `--web-port 3000` — starts the web UI alongside the server. Also configurable via `"web_port"` in the server JSON config.
 
+Detections are grouped into real-world category tabs rather than a flat signal-type list:
+
+- **Live** — per-category overview grid (total count, unique count, last-seen) + recent events feed
+- **Voice** — PMR446 / dPMR / 70cm / MarineVHF / 2m / FRS / FM_voice transmissions with inline transcript + audio playback
+- **Drones** — RemoteID, RemoteID-operator, DroneCtrl, DroneVideo grouped by drone serial or frequency with GPS + operator position
+- **Aircraft** — ADS-B flights by ICAO with callsign, altitude, speed, heading, position
+- **Vessels** — AIS by MMSI with name, nav status, speed, course, position
+- **Vehicles** — TPMS by sensor_id (pressure/temperature), keyfob by data_hex
+- **Cellular** — GSM / LTE uplink activity per channel (wildcard-matched, so new LTE subtypes appear automatically)
+- **Devices** — WiFi APs (physical-AP grouping across 2.4/5 GHz radios + associated clients), WiFi Clients, BLE
+- **Other** — ISM, LoRa, POCSAG, and anything unclassified
+
+Each category tab runs a SQL query against the currently-tailed `.db` with a configurable time window (default 6 h, capped at 7 days via `?window=<hours>`), and auto-refreshes every 3 s while visible. A **Session** dropdown in the header lets you switch category tabs to a historical `.db` for post-hoc browsing; Live / Log / Timeline / Devices always reflect the active session.
+
 ## Test Notes
 
 ### Test Setup

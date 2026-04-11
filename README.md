@@ -101,6 +101,9 @@ sudo python3 sdr.py --tak --gps server configs/server_voice.json  # Voice record
 sudo python3 sdr.py server configs/server.json --web   # Server with web dashboard
 
 # Web dashboard (standalone, reads from output directory)
+# Category tabs: Voice / Drones / Aircraft / Vessels / Vehicles /
+# Cellular / Devices / Other — each with domain-specific columns.
+# Session dropdown in the header lets you browse historical .db files.
 python3 sdr.py web                                     # Default port 8080
 python3 sdr.py web -p 3000                             # Custom port
 python3 sdr.py web -d /path/to/output                  # Custom output directory
