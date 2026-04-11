@@ -29,7 +29,7 @@
 | **WiFi** | `sdr.py wifi` | 2.4 GHz | Probe request sniffing, persona fingerprinting, drone RemoteID (cross-transport dedup) | Tested |
 | **Bluetooth** | `sdr.py bt` | 2.4 GHz | BLE advertisements, Apple Continuity, persona DB, drone RemoteID (cross-transport dedup) | Tested |
 | **Wideband Scan** | `sdr.py scan` | Configurable | Energy detection scanner with optional AMC (`--classify`) | Tested |
-| **Triangulate** | `sdr.py tri` | — | RSSI multilateration from multi-node CSV logs | New |
+| **Triangulate** | `sdr.py tri` | — | RSSI multilateration from multi-node .db logs | New |
 | **Heatmap** | `sdr.py heatmap` | — | RF activity density heatmap (KML + PNG for ATAK) | New |
 | **Correlate** | `sdr.py correlate` | — | Device co-occurrence analysis across signal types | New |
 | **FM Voice Parser** | via `sdr.py server` | Configurable | Channelizer FM voice demod — PMR, 70cm, Marine, 2m, FRS from HackRF | Tested |
@@ -49,7 +49,7 @@ The FM voice parser runs through the channelizer, so HackRF can simultaneously d
 
 The web dashboard can run in two modes:
 
-- **Standalone**: `python3 sdr.py web` — reads detection CSVs from the output directory and serves a web UI on port 8080. Use `-p` for a custom port, `-d` for a custom output directory.
+- **Standalone**: `python3 sdr.py web` — reads detection `.db` files from the output directory and serves a web UI on port 8080. Use `-p` for a custom port, `-d` for a custom output directory.
 - **Embedded in server**: `sudo python3 sdr.py server --web` or `--web-port 3000` — starts the web UI alongside the server. Also configurable via `"web_port"` in the server JSON config.
 
 ## Test Notes
@@ -62,7 +62,7 @@ The web dashboard can run in two modes:
 
 ### Keyfob
 
-Tested with HackRF TX (OOK bursts at 433.92 MHz) and ambient ISM signals. OOK detection, transmission state tracking, holdover expiry, CSV logging, and pattern analysis confirmed working.
+Tested with HackRF TX (OOK bursts at 433.92 MHz) and ambient ISM signals. OOK detection, transmission state tracking, holdover expiry, detection logging, and pattern analysis confirmed working.
 
 **Known limitations:**
 - The 433 MHz ISM band is noisy. Ambient signals from nearby devices will trigger detections. Burst count filtering (2-500 valid bursts) helps but some false positives remain.
@@ -125,12 +125,12 @@ Tested with multimon-ng decoder on EU frequencies (466.075 MHz). Pipeline works,
 
 ### Heatmap
 
-Generates RF activity density heatmaps from detection CSV logs. Output is a KML GroundOverlay with a PNG tile, loadable in ATAK or Google Earth.
+Generates RF activity density heatmaps from detection logs. Output is a KML GroundOverlay with a PNG tile, loadable in ATAK or Google Earth.
 
 ```sh
-python3 sdr.py heatmap output/server_*.csv              # All signal types
-python3 sdr.py heatmap output/*.csv -s PMR446 -s keyfob  # Filter by type
-python3 sdr.py heatmap output/*.csv -r 0.0005            # Higher resolution grid
+python3 sdr.py heatmap output/server_*.db              # All signal types
+python3 sdr.py heatmap output/*.db -s PMR446 -s keyfob  # Filter by type
+python3 sdr.py heatmap output/*.db -r 0.0005            # Higher resolution grid
 ```
 
 The central server also generates live heatmaps during capture (configurable via `heatmap_interval_s` in server config JSON, default 60s). Output KML is written to the output directory.
@@ -142,9 +142,9 @@ No dependencies beyond numpy — PNG is written with a self-contained encoder (n
 Analyzes detection logs to find co-occurring devices across signal types. Uses time-binned co-occurrence with union-find clustering.
 
 ```sh
-python3 sdr.py correlate output/server_*.csv              # Default: 30s window, 50% threshold
-python3 sdr.py corr output/*.csv -w 60 -t 0.7             # 60s window, 70% threshold
-python3 sdr.py corr output/*.csv --json correlations.json  # Export to JSON
+python3 sdr.py correlate output/server_*.db              # Default: 30s window, 50% threshold
+python3 sdr.py corr output/*.db -w 60 -t 0.7             # 60s window, 70% threshold
+python3 sdr.py corr output/*.db --json correlations.json  # Export to JSON
 ```
 
 Example output: "WiFi persona X and BLE persona Y co-occur in 90% of time windows" → likely same person. "TPMS sensor A and keyfob B always appear together" → same vehicle.

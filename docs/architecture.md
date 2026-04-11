@@ -48,21 +48,21 @@ Node → Server (commanded RSSI measurement):
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| **1. Single-node PoC** | Scan bands, detect signals, measure RSSI, log to CSV | Done |
+| **1. Single-node PoC** | Scan bands, detect signals, measure RSSI, log to per-session SQLite DB | Done |
 | **2. Generic FM scanner** | Configurable band profiles (PMR, FRS, Marine, etc.), reuse demod pipeline | Done |
 | **3. Central server** | Wideband detection with HackRF, channelizer, multi-protocol decoding | In progress |
 | **4. Node measure mode** | Lightweight tune → RSSI → report daemon for sensor nodes | Planned |
 | **5. Comms layer** | LoRa/Meshtastic task protocol between server and nodes | Planned |
-| **6. Triangulation** | RSSI multilateration from 2+ node CSV logs (post-hoc) | Done (offline) |
+| **6. Triangulation** | RSSI multilateration from 2+ node .db logs (post-hoc) | Done (offline) |
 | **7. ATAK integration** | CoT messages, map overlay, real-time tracking | Done |
 | **8. Analysis layer** | Heatmaps, movement trails, device correlation, AMC, RF fingerprinting | Done |
 
 ## Analysis Layer
 
-The analysis layer operates on detection data (CSV logs or real-time `_on_detection` callbacks) and provides intelligence beyond raw detections:
+The analysis layer operates on detection data (SQLite logs or real-time `_on_detection` callbacks) and provides intelligence beyond raw detections:
 
 ```
-  Detections (CSV / real-time)
+  Detections (SQLite / real-time)
          │
          ├── Heatmap Generator ──→ KML GroundOverlay for ATAK
          │     Spatial binning of detections, log-scale color gradient
@@ -79,7 +79,7 @@ The analysis layer operates on detection data (CSV logs or real-time `_on_detect
                └── RF Fingerprint ──→ Transmitter hardware identification
 ```
 
-In the central server, heatmap/trails/correlator are hooked into the shared logger's `on_detection` callback and run automatically. For post-hoc analysis, `sdr.py heatmap` and `sdr.py correlate` subcommands process CSV files directly.
+In the central server, heatmap/trails/correlator are hooked into the shared logger's `on_detection` callback and run automatically. For post-hoc analysis, `sdr.py heatmap` and `sdr.py correlate` subcommands query `.db` files directly.
 
 ## Design Principles
 

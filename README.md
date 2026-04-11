@@ -87,13 +87,13 @@ sudo python3 sdr.py bt                       # BLE advertisements + drone Remote
 # Wideband scan with modulation classification
 python3 sdr.py scan --classify               # Auto-classify detected signals (FM, OOK, FSK, PSK...)
 
-# Triangulate from multi-node CSV logs
-python3 sdr.py tri node_a.csv node_b.csv node_c.csv
-python3 sdr.py tri a.csv b.csv --use-snr    # Different gains across nodes
+# Triangulate from multi-node detection logs
+python3 sdr.py tri node_a.db node_b.db node_c.db
+python3 sdr.py tri a.db b.db --use-snr       # Different gains across nodes
 
 # Post-hoc analysis
-python3 sdr.py heatmap output/*.csv          # Generate RF activity heatmap (KML for ATAK)
-python3 sdr.py correlate output/*.csv        # Find co-occurring devices across signal types
+python3 sdr.py heatmap output/*.db           # Generate RF activity heatmap (KML for ATAK)
+python3 sdr.py correlate output/*.db         # Find co-occurring devices across signal types
 
 # Central server (all captures in parallel)
 sudo python3 sdr.py server configs/server.json         # Default config
@@ -124,7 +124,7 @@ python3 tests/hw/tx_pmr_loopback.py          # Full TX/RX loopback
 
 | Feature | Description |
 |---------|-------------|
-| **Heatmap** | RF activity density overlay for ATAK maps (KML + PNG). Live export from server or post-hoc from CSV. |
+| **Heatmap** | RF activity density overlay for ATAK maps (KML + PNG). Live export from server or post-hoc from `.db` logs. |
 | **Movement Trails** | Per-device position history as CoT polylines on ATAK. Automatic for mobile emitters (TPMS, BLE, WiFi, drones). |
 | **Device Correlation** | Cross-signal-type co-occurrence analysis. Finds clusters of devices that always appear together. |
 | **Modulation Classification** | Heuristic AMC from IQ statistics: FM, OOK, FSK, PSK, QAM, OFDM, FHSS, CW. No ML/GPU needed. |

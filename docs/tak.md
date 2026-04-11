@@ -62,4 +62,4 @@ The server hooks this automatically — no configuration needed beyond `--tak --
 
 The `LiveHeatmap` class periodically exports a KML GroundOverlay to the output directory. Load the KML file into ATAK (Import Manager → Local) to see RF activity density as a colored overlay on the map.
 
-For post-hoc analysis, use `python3 sdr.py heatmap output/*.csv` to generate the KML from CSV logs.
+For post-hoc analysis, use `python3 sdr.py heatmap output/*.db` to generate the KML from detection logs.

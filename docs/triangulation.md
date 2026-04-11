@@ -1,6 +1,6 @@
 # Triangulation
 
-Post-hoc RSSI multilateration from multi-node CSV logs. Run 2+ sensor nodes at different GPS positions scanning the same band, then feed their CSV logs to estimate emitter position.
+Post-hoc RSSI multilateration from multi-node detection logs. Run 2+ sensor nodes at different GPS positions scanning the same band, then feed their `.db` logs to estimate emitter position.
 
 ## How It Works
 
@@ -39,5 +39,5 @@ These are uncalibrated defaults. Real-world accuracy (typically 10-50 m outdoors
 
 - RSSI is noisy in practice (multipath, obstructions, antenna orientation). Expect room-level accuracy at best.
 - 2-node solutions are inherently ambiguous. 3+ nodes strongly recommended.
-- CSV `power_db` is in dBFS (relative to SDR ADC), not dBm. All nodes must use the same gain, or use `--use-snr` to normalize.
+- `power_db` is in dBFS (relative to SDR ADC), not dBm. All nodes must use the same gain, or use `--use-snr` to normalize.
 - ADS-B and AIS targets self-report position — triangulation is not needed.
