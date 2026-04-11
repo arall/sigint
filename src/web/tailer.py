@@ -93,6 +93,7 @@ class DBTailer:
         self._loaded_dbs = set()
         self._tailing_db = None
         self._tail_last_id = 0
+        self._read_errors = set()   # paths we've already warned about
 
         # Transcript sidecar — lets detections appear immediately and get
         # text back-filled later when the async transcriber finishes.
@@ -120,18 +121,38 @@ class DBTailer:
         except OSError:
             return []
 
+    def _warn_read_error(self, path, err):
+        """Print a single warning per .db path when we can't read it. The
+        usual cause is the output dir being owned by root with mode 0o755
+        while the web UI runs as a normal user — SQLite's WAL reader
+        needs to create a -shm sidecar which requires dir write access.
+        The fix is `chmod 777 output/` or (better) run the server with
+        the umask fix that landed in server.py.
+        """
+        if path in self._read_errors:
+            return
+        self._read_errors.add(path)
+        import os
+        name = os.path.basename(path)
+        print(f"[WEB] cannot read {name}: {err}")
+        print(f"[WEB]   usual cause: output dir not writable by the web user "
+              f"(SQLite WAL needs to create {name}-shm)")
+        print(f"[WEB]   fix: sudo chmod 777 {os.path.dirname(path) or '.'}  "
+              "or restart the server so it re-applies the umask patch")
+
     def _read_full_db(self, path):
         """Read every row from a historical DB file once."""
         try:
             from utils import db as _db
             conn = _db.connect(path, readonly=True)
-        except Exception:
+        except Exception as e:
+            self._warn_read_error(path, e)
             return
         try:
             for row in _db.iter_detections(conn):
                 self._process_row(_db.row_to_dict(row))
-        except Exception:
-            pass
+        except Exception as e:
+            self._warn_read_error(path, e)
         finally:
             try:
                 conn.close()
@@ -143,7 +164,8 @@ class DBTailer:
         try:
             from utils import db as _db
             conn = _db.connect(path, readonly=True)
-        except Exception:
+        except Exception as e:
+            self._warn_read_error(path, e)
             return
         try:
             rows = list(_db.iter_detections(conn, since_rowid=self._tail_last_id))
@@ -151,8 +173,8 @@ class DBTailer:
                 self._process_row(_db.row_to_dict(row))
                 if row["id"] > self._tail_last_id:
                     self._tail_last_id = row["id"]
-        except Exception:
-            pass
+        except Exception as e:
+            self._warn_read_error(path, e)
         finally:
             try:
                 conn.close()

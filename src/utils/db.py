@@ -48,14 +48,40 @@ def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     the connection itself was opened from the server main thread. The logger
     holds a mutex around writes, so the connection is never used concurrently.
     Readers (web tailer, triangulate/heatmap/correlator CLIs) pass
-    readonly=True to open in URI mode.
+    readonly=True.
+
+    Readonly path has a fallback: `?mode=ro` alone still requires write
+    access to the directory containing the .db so SQLite can create the
+    `-shm` file for WAL coordination. If the server runs as root but the
+    dashboard runs as a normal user, the dir isn't writable and every
+    readonly open fails with "attempt to write a readonly database". The
+    fallback re-tries with `immutable=1` which tells SQLite "this file
+    won't change, skip all WAL coordination". That gives a best-effort
+    snapshot of the main DB file (missing any rows still buffered in the
+    active WAL) — good enough for historical browsing, and better than
+    the zero-rows silent failure we had before.
     """
     if readonly:
-        uri = f"file:{os.path.abspath(path)}?mode=ro"
-        conn = sqlite3.connect(
-            uri, uri=True, timeout=5.0, isolation_level=None,
-            check_same_thread=False,
-        )
+        abs_path = os.path.abspath(path)
+        try:
+            conn = sqlite3.connect(
+                f"file:{abs_path}?mode=ro",
+                uri=True, timeout=5.0, isolation_level=None,
+                check_same_thread=False,
+            )
+            # Probe the connection — mode=ro errors surface on the first
+            # query, not on open(), so we need to actually touch the DB.
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        except sqlite3.OperationalError:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = sqlite3.connect(
+                f"file:{abs_path}?mode=ro&immutable=1",
+                uri=True, timeout=5.0, isolation_level=None,
+                check_same_thread=False,
+            )
     else:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         conn = sqlite3.connect(

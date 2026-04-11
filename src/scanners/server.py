@@ -1032,6 +1032,24 @@ class ServerOrchestrator:
             print(f"\nKill them first: sudo kill -9 {' '.join(p.split()[0] for _, p in conflicts)}")
             print(f"Or run: sudo pkill -f 'sdr.py.*server'")
             sys.exit(1)
+
+        # When the server runs as root (it has to, for WiFi monitor mode /
+        # BLE HCI), the output directory and every file in it end up owned
+        # by root with mode 0o644 / 0o755. A non-root user trying to read
+        # those files from the web UI can read the main .db bytes but
+        # can't create the `-shm` sidecar SQLite needs for WAL reader
+        # coordination — every readonly open fails with "attempt to write
+        # a readonly database". Unblock that by making the output dir
+        # world-writable and setting a permissive umask so new files land
+        # 0o666. Use umask instead of per-file chmods so it covers audio
+        # WAVs, JSON sidecars, and files created by standalone subprocesses.
+        try:
+            os.umask(0o002)
+            os.makedirs(str(self.logger.output_dir), exist_ok=True)
+            os.chmod(str(self.logger.output_dir), 0o777)
+        except OSError as e:
+            print(f"  [WARN] Could not chmod output dir: {e}")
+
         db_path = self.logger.start()
 
         print(f"\n{_col('bold', '[SERVER]')} Logging to: {_col('dim', db_path)}")
