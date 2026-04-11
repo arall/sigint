@@ -43,15 +43,25 @@ def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     """Open a SQLite connection with WAL mode and pragmatic tuning.
 
     Writers get a single connection that the caller serializes with a lock.
+    `check_same_thread=False` is required: parsers and captures call the
+    logger from many threads (scapy sniff, HCI reader, RTL-SDR async) while
+    the connection itself was opened from the server main thread. The logger
+    holds a mutex around writes, so the connection is never used concurrently.
     Readers (web tailer, triangulate/heatmap/correlator CLIs) pass
     readonly=True to open in URI mode.
     """
     if readonly:
         uri = f"file:{os.path.abspath(path)}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None)
+        conn = sqlite3.connect(
+            uri, uri=True, timeout=5.0, isolation_level=None,
+            check_same_thread=False,
+        )
     else:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        conn = sqlite3.connect(path, timeout=5.0, isolation_level=None)
+        conn = sqlite3.connect(
+            path, timeout=5.0, isolation_level=None,
+            check_same_thread=False,
+        )
         conn.executescript("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         conn.executescript(SCHEMA)
     conn.row_factory = sqlite3.Row
