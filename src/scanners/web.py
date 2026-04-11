@@ -1,9 +1,9 @@
 """
 Standalone web UI for the SDR server dashboard.
 
-Reads detection data from CSV files in the output directory and serves
-a live dashboard via HTTP. Runs independently of the SDR server — works
-while captures are running or for reviewing historical data.
+Reads detection data from SQLite DB files in the output directory and
+serves a live dashboard via HTTP. Runs independently of the SDR server —
+works while captures are running or for reviewing historical data.
 
 Usage:
     python3 sdr.py web                    # serve output/ on :8080
@@ -19,7 +19,6 @@ Routes:
     GET /audio/<filename>  — Serve recorded WAV files
 """
 
-import csv
 import json
 import os
 import re
@@ -82,89 +81,236 @@ def _get_system_stats():
 
 
 # ---------------------------------------------------------------------------
-# Persona loader — reads persona JSON databases from the output directory
+# Device loaders — read persona / AP JSON databases and shape them for the
+# Devices tab. Three categories: WiFi APs, WiFi Clients, BLE.
 # ---------------------------------------------------------------------------
 
-def _load_personas(output_dir, active_sigs=None):
-    """Load and merge BLE + WiFi persona databases into a unified list.
+def _load_wifi_clients(output_dir, active_sigs=None):
+    """Read personas.json and return WiFi client device records.
 
-    Args:
-        output_dir: Path to the output directory containing persona JSON files.
-        active_sigs: Optional dict of {dev_sig: {"rssi": float, "apple_device": str}}
-                     from recent detections, used to mark active devices.
+    A WiFi client is a phone/laptop that emits probe requests. The label is
+    manufacturer+fingerprint (NOT the SSID — that's what the client is probing
+    FOR, not its identity).
     """
     active_sigs = active_sigs or {}
-    personas = []
+    path = os.path.join(output_dir, "personas.json")
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
 
-    for filename, transport in [
-        ("personas_bt.json", "BLE"),
-        ("personas.json", "WiFi"),
-    ]:
-        path = os.path.join(output_dir, filename)
-        try:
-            with open(path, 'r') as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            continue
+    clients = []
+    for key, p in data.get("personas", {}).items():
+        dev_sig = p.get("dev_sig", key.split(":")[0])
+        persona_key = key
+        macs = p.get("macs_seen", []) or []
+        ssids = p.get("ssids", []) or []
+        manufacturer = p.get("manufacturer") or ""
+        randomized = p.get("randomized", False)
 
-        for key, p in data.get("personas", {}).items():
-            macs = p.get("macs_seen", [])
-            names = p.get("ssids", [])
-            dev_sig = p.get("dev_sig", key.split(":")[0])
-            manufacturer = p.get("manufacturer") or ""
-            randomized = p.get("randomized", False)
+        active_info = active_sigs.get(dev_sig, {})
 
-            # Active state from recent detections
-            active_info = active_sigs.get(dev_sig, {})
-            apple_device = active_info.get("apple_device", "")
+        if manufacturer:
+            label = manufacturer
+        elif macs and not randomized:
+            label = macs[0]
+        else:
+            label = f"anon:{dev_sig[:8]}" if dev_sig else "anon"
 
-            # Build best human-readable label
-            label = ""
-            if names:
-                label = ", ".join(names[:3])
-            elif apple_device:
-                label = apple_device
-            elif manufacturer:
-                label = manufacturer
-            elif macs and not randomized:
-                label = macs[0]
-            else:
-                # Anonymous device — show short sig hash
-                label = dev_sig[:8] if dev_sig else ""
+        clients.append({
+            "persona_key": persona_key,
+            "dev_sig": dev_sig,
+            "label": label,
+            "manufacturer": manufacturer,
+            "randomized": randomized,
+            "macs": macs,
+            "mac_count": len(macs),
+            "ssids": ssids,
+            "ssid_count": len(ssids),
+            "sessions": p.get("sessions", 0),
+            "total_probes": p.get("total_probes", 0),
+            "first_session": p.get("first_session", ""),
+            "last_session": p.get("last_session", ""),
+            "active": bool(active_info),
+            "last_rssi": active_info.get("rssi"),
+        })
 
-            personas.append({
-                "transport": transport,
-                "dev_sig": dev_sig,
-                "label": label,
-                "manufacturer": manufacturer,
-                "apple_device": apple_device,
-                "names": names,
-                "macs": macs,
-                "mac_count": len(macs),
-                "randomized": randomized,
-                "sessions": p.get("sessions", 0),
-                "total_probes": p.get("total_probes", 0),
-                "first_session": p.get("first_session", ""),
-                "last_session": p.get("last_session", ""),
-                "active": bool(active_info),
-                "last_rssi": active_info.get("rssi"),
-            })
-
-    # Sort: active first, then by last_session, then by probes
-    personas.sort(key=lambda p: (
-        p["active"],
-        p["last_session"],
-        p["total_probes"],
+    clients.sort(key=lambda c: (
+        c["active"], c["last_session"], c["total_probes"],
     ), reverse=True)
-    return personas
+    return clients
+
+
+def _load_ble_devices(output_dir, active_sigs=None):
+    """Read personas_bt.json and return BLE device records."""
+    active_sigs = active_sigs or {}
+    path = os.path.join(output_dir, "personas_bt.json")
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    devices = []
+    for key, p in data.get("personas", {}).items():
+        dev_sig = p.get("dev_sig", key.split(":")[0])
+        persona_key = key
+        macs = p.get("macs_seen", []) or []
+        names = p.get("ssids", []) or []  # BLE advertised names reuse "ssids"
+        manufacturer = p.get("manufacturer") or ""
+        randomized = p.get("randomized", False)
+
+        active_info = active_sigs.get(dev_sig, {})
+        # Prefer the persisted apple_device (survives restart); fall back to
+        # the value captured from recent live detections.
+        apple_device = p.get("apple_device") or active_info.get("apple_device", "")
+
+        if apple_device:
+            label = apple_device
+        elif names:
+            label = names[0]
+        elif manufacturer:
+            label = manufacturer
+        elif macs and not randomized:
+            label = macs[0]
+        else:
+            label = f"anon:{dev_sig[:8]}" if dev_sig else "anon"
+
+        devices.append({
+            "persona_key": persona_key,
+            "dev_sig": dev_sig,
+            "label": label,
+            "manufacturer": manufacturer,
+            "apple_device": apple_device,
+            "randomized": randomized,
+            "macs": macs,
+            "mac_count": len(macs),
+            "names": names,
+            "sessions": p.get("sessions", 0),
+            "total_probes": p.get("total_probes", 0),
+            "first_session": p.get("first_session", ""),
+            "last_session": p.get("last_session", ""),
+            "active": bool(active_info),
+            "last_rssi": active_info.get("rssi"),
+        })
+
+    devices.sort(key=lambda d: (
+        d["active"], d["last_session"], d["total_probes"],
+    ), reverse=True)
+    return devices
+
+
+def _load_wifi_aps(output_dir, active_bssids=None):
+    """Read aps.json and return WiFi AP records grouped by physical AP.
+
+    Conservative grouping heuristic: two BSSIDs are merged into the same
+    physical AP row if they share a non-empty SSID AND their first 5 MAC
+    octets match (covers the common 2.4/5 GHz radio pattern where vendors
+    increment only the last octet). Anything else stays ungrouped.
+    """
+    active_bssids = active_bssids or {}
+    path = os.path.join(output_dir, "aps.json")
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    ap_map = data.get("aps", {})
+    groups = []  # list of dicts with {"group_key", "bssids": [...]}
+
+    def group_key(rec):
+        ssids = rec.get("ssids", []) or []
+        bssid = (rec.get("bssid") or "").lower()
+        if not ssids or not bssid or rec.get("hidden"):
+            return ("bssid", bssid)
+        prefix = ":".join(bssid.split(":")[:5])
+        primary_ssid = ssids[0]
+        return ("grp", primary_ssid, prefix)
+
+    buckets = {}
+    for bssid, rec in ap_map.items():
+        rec = dict(rec)
+        rec["bssid"] = bssid
+        active = active_bssids.get(bssid, {})
+        rec["active"] = bool(active)
+        if active.get("rssi") is not None:
+            rec["last_rssi"] = active["rssi"]
+        k = group_key(rec)
+        buckets.setdefault(k, []).append(rec)
+
+    for k, members in buckets.items():
+        members.sort(key=lambda r: r.get("bssid", ""))
+        ssids_union = []
+        channels_union = []
+        clients_union = set()
+        for m in members:
+            for s in m.get("ssids", []) or []:
+                if s not in ssids_union:
+                    ssids_union.append(s)
+            for c in m.get("channels", []) or []:
+                if c not in channels_union:
+                    channels_union.append(c)
+            for cl in m.get("clients", []) or []:
+                clients_union.add(cl)
+        channels_union.sort()
+
+        any_24 = any(c <= 14 for c in channels_union)
+        any_5 = any(c >= 32 for c in channels_union)
+        bands = []
+        if any_24:
+            bands.append("2.4")
+        if any_5:
+            bands.append("5")
+
+        label = ssids_union[0] if ssids_union else "(hidden)"
+        manufacturers = [m.get("manufacturer") for m in members if m.get("manufacturer")]
+        manufacturer = manufacturers[0] if manufacturers else ""
+        crypto = next((m.get("crypto") for m in members if m.get("crypto")), "")
+        total_beacons = sum(int(m.get("total_beacons", 0)) for m in members)
+        sessions = max(int(m.get("sessions", 0)) for m in members)
+        rssis = [m.get("last_rssi") for m in members if m.get("last_rssi") is not None]
+        last_rssi = max(rssis) if rssis else None
+        first_seen = min((m.get("first_seen", "") for m in members if m.get("first_seen")), default="")
+        last_seen = max((m.get("last_seen", "") for m in members if m.get("last_seen")), default="")
+        hidden = all(m.get("hidden") for m in members)
+        active = any(m.get("active") for m in members)
+
+        groups.append({
+            "group_key": "|".join(str(x) for x in k),
+            "label": label,
+            "ssids": ssids_union,
+            "bssids": members,
+            "bssid_count": len(members),
+            "channels": channels_union,
+            "bands": bands,
+            "crypto": crypto,
+            "manufacturer": manufacturer,
+            "hidden": hidden,
+            "total_beacons": total_beacons,
+            "sessions": sessions,
+            "last_rssi": last_rssi,
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "active": active,
+            "clients": sorted(clients_union),
+            "client_count": len(clients_union),
+        })
+
+    groups.sort(key=lambda g: (
+        g["active"], g["last_seen"], g["total_beacons"],
+    ), reverse=True)
+    return groups
 
 
 # ---------------------------------------------------------------------------
-# CSV tailer — watches the output directory for the latest CSV and tails it
+# DB tailer — watches the output directory for the latest .db and tails it
 # ---------------------------------------------------------------------------
 
-class CSVTailer:
-    """Watches the output directory, tails the latest CSV, builds live state."""
+class DBTailer:
+    """Watches the output directory for .db files, tails the latest by
+    rowid, and builds the live dashboard state."""
 
     def __init__(self, output_dir):
         self.output_dir = output_dir
@@ -173,6 +319,7 @@ class CSVTailer:
 
         # State
         self._detections = deque(maxlen=50000)
+        self._recent_bssids = {}  # bssid -> {"rssi": float, "last_seen": iso}
         self._type_counts = Counter()
         self._type_last_seen = {}
         self._type_last_snr = {}
@@ -180,14 +327,14 @@ class CSVTailer:
         self._type_uniques = {}
         self._recent_events = deque(maxlen=20)
         self._activity_minutes = {}
-        self._csv_name = ""
+        self._db_name = ""
         self._start_time = time.time()
 
-        # File tracking
-        self._loaded_csvs = set()   # fully-read CSV paths
-        self._tailing_csv = None    # currently tailing (latest) CSV path
-        self._file_handle = None
-        self._file_pos = 0
+        # DB tracking — which files we've already fully loaded, and the
+        # rowid cursor for the currently tailing file.
+        self._loaded_dbs = set()
+        self._tailing_db = None
+        self._tail_last_id = 0
 
         # Transcript sidecar — lets detections appear immediately and get
         # text back-filled later when the async transcriber finishes.
@@ -195,101 +342,92 @@ class CSVTailer:
         self._transcripts_mtime = 0
 
     def start(self):
-        """Start background thread that tails CSV files."""
-        t = threading.Thread(target=self._run, daemon=True, name="csv-tailer")
+        """Start background thread that tails DB files."""
+        t = threading.Thread(target=self._run, daemon=True, name="db-tailer")
         t.start()
         return t
 
     def stop(self):
         self._stop.set()
-        try:
-            if self._file_handle:
-                self._file_handle.close()
-        except Exception:
-            pass
 
-    def _find_all_csvs(self):
-        """Find all CSV files in output_dir, sorted by mtime."""
+    def _find_all_dbs(self):
+        """Find all .db files in output_dir, sorted by mtime."""
         try:
-            csvs = [
+            dbs = [
                 os.path.join(self.output_dir, f)
                 for f in os.listdir(self.output_dir)
-                if f.endswith('.csv')
+                if f.endswith('.db') and not f.endswith('-wal') and not f.endswith('-shm')
             ]
-            return sorted(csvs, key=os.path.getmtime)
+            return sorted(dbs, key=os.path.getmtime)
         except OSError:
             return []
 
-    def _read_full_csv(self, path):
-        """Read all rows from a CSV file."""
+    def _read_full_db(self, path):
+        """Read every row from a historical DB file once."""
         try:
-            with open(path, 'r', newline='') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    self._process_row(row)
+            from utils import db as _db
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            return
+        try:
+            for row in _db.iter_detections(conn):
+                self._process_row(_db.row_to_dict(row))
         except Exception:
             pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _tail_db(self, path):
+        """Poll the latest DB for rows with id > last seen and feed them."""
+        try:
+            from utils import db as _db
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            return
+        try:
+            rows = list(_db.iter_detections(conn, since_rowid=self._tail_last_id))
+            for row in rows:
+                self._process_row(_db.row_to_dict(row))
+                if row["id"] > self._tail_last_id:
+                    self._tail_last_id = row["id"]
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _run(self):
-        """Background loop: read all CSVs, tail the latest for new rows."""
-        # Preload existing transcripts so the first CSV replay sees them
+        """Background loop: read any new DB files, tail the latest for new rows."""
+        # Preload existing transcripts so the first replay sees them
         self._poll_transcripts()
         while not self._stop.is_set():
-            all_csvs = self._find_all_csvs()
+            all_dbs = self._find_all_dbs()
 
-            # Read any new CSV files we haven't seen yet
-            for csv_path in all_csvs:
-                if csv_path in self._loaded_csvs:
+            # Read any historical DB files we haven't seen yet, EXCEPT the
+            # latest one (which we'll tail instead to pick up live writes).
+            latest = all_dbs[-1] if all_dbs else None
+            for db_path in all_dbs:
+                if db_path in self._loaded_dbs:
                     continue
-                # If we're already tailing a file, close it
-                if self._file_handle:
-                    self._file_handle.close()
-                    self._file_handle = None
+                if db_path == latest:
+                    continue  # will tail from rowid 0 below
+                self._read_full_db(db_path)
+                self._loaded_dbs.add(db_path)
 
-                self._read_full_csv(csv_path)
-                self._loaded_csvs.add(csv_path)
-                self._csv_name = os.path.basename(csv_path)
-
-            # Tail the latest CSV for new rows
-            latest = all_csvs[-1] if all_csvs else None
+            # Tail the latest DB for new rows
             if latest:
-                if self._tailing_csv != latest or self._file_handle is None:
-                    # (Re)open the file for tailing
-                    if self._file_handle:
-                        self._file_handle.close()
-                    self._tailing_csv = latest
-                    self._file_handle = open(latest, 'r', newline='')
-                    self._file_handle.seek(0, 2)  # seek to end
-                    self._file_pos = self._file_handle.tell()
+                if self._tailing_db != latest:
+                    self._tailing_db = latest
+                    self._tail_last_id = 0  # start from beginning of the new file
+                    self._db_name = os.path.basename(latest)
+                self._tail_db(latest)
 
-                # Check for new lines
-                self._file_handle.seek(self._file_pos)
-                for line in self._file_handle:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        import io
-                        rdr = csv.DictReader(
-                            io.StringIO(line),
-                            fieldnames=[
-                                "timestamp", "signal_type", "frequency_hz",
-                                "power_db", "noise_floor_db", "snr_db",
-                                "channel", "latitude", "longitude",
-                                "device_id", "audio_file", "metadata",
-                            ],
-                        )
-                        row = next(rdr)
-                        if row.get("timestamp") == "timestamp":
-                            continue
-                        self._process_row(row)
-                    except Exception:
-                        pass
-                self._file_pos = self._file_handle.tell()
-
-            # Poll transcripts.json for new/updated entries and back-fill
             self._poll_transcripts()
-
             self._stop.wait(1.0)
 
     def _poll_transcripts(self):
@@ -333,7 +471,7 @@ class CSVTailer:
                         self._type_last_detail[sig] = d["detail"]
 
     def _process_row(self, row):
-        """Process a single CSV row into internal state."""
+        """Process a single detection row into internal state."""
         sig = row.get("signal_type", "")
         if not sig:
             return
@@ -342,6 +480,10 @@ class CSVTailer:
             snr = float(row.get("snr_db", 0))
         except (ValueError, TypeError):
             snr = 0
+        try:
+            power_db = float(row.get("power_db", 0))
+        except (ValueError, TypeError):
+            power_db = 0
         try:
             freq = float(row.get("frequency_hz", 0))
         except (ValueError, TypeError):
@@ -375,6 +517,15 @@ class CSVTailer:
                 self._type_last_snr[sig] = snr
             if detail:
                 self._type_last_detail[sig] = detail
+
+            # Track active WiFi APs by BSSID
+            if sig == "WiFi-AP":
+                bssid = meta.get("bssid") or row.get("device_id", "")
+                if bssid:
+                    self._recent_bssids[bssid] = {
+                        "rssi": power_db if power_db else None,
+                        "last_seen": ts,
+                    }
 
             # Track unique IDs
             uid = _extract_uid(sig, row, meta)
@@ -464,7 +615,7 @@ class CSVTailer:
             "uptime": str(uptime),
             "detection_count": total,
             "gps": None,
-            "csv": self._csv_name,
+            "db": self._db_name,
             "captures": [],
             "signals": signals,
             "recent": recent,
@@ -494,6 +645,16 @@ class CSVTailer:
                     "total": sum(counts.values()),
                 })
         return result
+
+    def get_active_bssids(self, minutes=5):
+        """Return dict of bssid → info for APs seen in the last N minutes."""
+        cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
+        active = {}
+        with self._lock:
+            for bssid, info in self._recent_bssids.items():
+                if info.get("last_seen", "") >= cutoff:
+                    active[bssid] = dict(info)
+        return active
 
     def get_active_sigs(self, minutes=5):
         """Return dict of dev_sig → info for devices seen in the last N minutes."""
@@ -615,7 +776,7 @@ def _extract_detail(sig, channel, meta):
 
 
 def _extract_uid(sig, row, meta):
-    """Extract unique device ID from a CSV row."""
+    """Extract unique device ID from a detection row."""
     if sig == "BLE-Adv":
         return meta.get("persona_id") or row.get("channel", "")
     elif sig == "WiFi-Probe":
@@ -665,8 +826,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_activity(qs)
         elif path == '/api/config':
             self._serve_config()
-        elif path == '/api/personas':
-            self._serve_personas(qs)
+        elif path == '/api/devices':
+            self._serve_devices(qs)
         elif path.startswith('/audio/'):
             self._serve_audio(path[7:])
         else:
@@ -727,13 +888,26 @@ class WebHandler(BaseHTTPRequestHandler):
         except (FileNotFoundError, json.JSONDecodeError):
             self._send_json({"captures": []})
 
-    def _serve_personas(self, qs):
-        transport = qs.get("transport", [None])[0]
-        active_sigs = self.server.tailer.get_active_sigs(minutes=5)
-        personas = _load_personas(self.server.output_dir, active_sigs)
-        if transport:
-            personas = [p for p in personas if p["transport"] == transport]
-        self._send_json(personas)
+    def _serve_devices(self, qs):
+        tailer = self.server.tailer
+        active_sigs = tailer.get_active_sigs(minutes=5)
+        active_bssids = tailer.get_active_bssids(minutes=5)
+        out_dir = self.server.output_dir
+        wifi_aps = _load_wifi_aps(out_dir, active_bssids)
+        wifi_clients = _load_wifi_clients(out_dir, active_sigs)
+        ble = _load_ble_devices(out_dir, active_sigs)
+        summary = {
+            "wifi_aps": len(wifi_aps),
+            "wifi_clients": len(wifi_clients),
+            "ble": len(ble),
+            "active": sum(1 for x in wifi_aps + wifi_clients + ble if x.get("active")),
+        }
+        self._send_json({
+            "wifi_aps": wifi_aps,
+            "wifi_clients": wifi_clients,
+            "ble": ble,
+            "summary": summary,
+        })
 
     def _serve_audio(self, filename):
         if not _SAFE_FILENAME_RE.match(filename):
@@ -775,7 +949,7 @@ def run_web_server(output_dir, port=8080):
     output_dir = str(output_dir)
     stop_event = threading.Event()
 
-    tailer = CSVTailer(output_dir)
+    tailer = DBTailer(output_dir)
     tailer.start()
 
     server = ThreadingHTTPServer(('0.0.0.0', port), WebHandler)
@@ -803,7 +977,7 @@ def start_web_server_background(output_dir, port=8080):
     output_dir = str(output_dir)
     stop_event = threading.Event()
 
-    tailer = CSVTailer(output_dir)
+    tailer = DBTailer(output_dir)
     tailer.start()
 
     try:
@@ -891,6 +1065,16 @@ h1 { font-size: 18px; font-weight: 600; }
   font-family: inherit; font-size: 13px;
 }
 .tab-btn.active { color: #e0e0e0; background: #1a1a2e; }
+.dev-subtab-btn {
+  background: #0f1930; color: #888; border: 1px solid #0f3460;
+  border-radius: 4px; padding: 6px 14px; cursor: pointer;
+  font-family: inherit; font-size: 12px;
+}
+.dev-subtab-btn.active { color: #e0e0e0; background: #1a2a4e; border-color: #4fc3f7; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: #4fc3f7; }
+th.sortable.sort-asc::after { content: " \25b2"; color: #4fc3f7; font-size: 9px; }
+th.sortable.sort-desc::after { content: " \25bc"; color: #4fc3f7; font-size: 9px; }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
 
@@ -987,7 +1171,7 @@ tr:last-child td { border-bottom: none; }
   <div><span class="label">Up </span><span class="value" id="h-uptime">-</span></div>
   <div><span class="label">Detections </span><span class="value highlight" id="h-count">0</span></div>
   <div><span class="label">GPS </span><span class="value" id="h-gps">no fix</span></div>
-  <div><span class="label">CSV </span><span class="value" id="h-csv" style="color:#888">-</span></div>
+  <div><span class="label">DB </span><span class="value" id="h-db" style="color:#888">-</span></div>
 </div>
 
 <!-- System stats bar -->
@@ -1002,7 +1186,7 @@ tr:last-child td { border-bottom: none; }
 <div class="tabs">
   <button class="tab-btn active" data-tab="live">Live</button>
   <button class="tab-btn" data-tab="log">Log</button>
-  <button class="tab-btn" data-tab="personas">Personas</button>
+  <button class="tab-btn" data-tab="devices">Devices</button>
   <button class="tab-btn" data-tab="config">Config</button>
   <button class="tab-btn" data-tab="timeline">Timeline</button>
 </div>
@@ -1053,42 +1237,85 @@ tr:last-child td { border-bottom: none; }
   </div>
 </div>
 
-<!-- Tab: Personas -->
-<div id="tab-personas" class="tab-content">
+<!-- Tab: Devices -->
+<div id="tab-devices" class="tab-content">
   <!-- Summary cards -->
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap" id="dev-stats"></div>
 
-  <div class="section">
-    <div class="section-title">
-      <span>Known Devices</span>
-      <div class="filter-bar">
-        <select id="dev-transport">
-          <option value="">All</option>
-          <option value="BLE">BLE</option>
-          <option value="WiFi">WiFi</option>
-        </select>
-        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;text-transform:none;letter-spacing:0">
-          <input type="checkbox" id="dev-active-only"> Active only
-        </label>
-        <select id="dev-sort">
-          <option value="default">Sort: Active + Recent</option>
-          <option value="sessions">Sort: Sessions</option>
-          <option value="probes">Sort: Probes</option>
-          <option value="name">Sort: Name</option>
-        </select>
-        <button onclick="loadPersonas()">Refresh</button>
-      </div>
+  <!-- Sub-tabs -->
+  <div class="tabs" style="margin-bottom:8px">
+    <button class="dev-subtab-btn active" data-sub="wifi_aps">WiFi APs</button>
+    <button class="dev-subtab-btn" data-sub="wifi_clients">WiFi Clients</button>
+    <button class="dev-subtab-btn" data-sub="ble">BLE</button>
+    <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;text-transform:none;letter-spacing:0;margin-left:auto;padding-right:12px">
+      <input type="checkbox" id="dev-active-only"> Active only
+    </label>
+    <button onclick="loadDevices()" style="margin-right:8px">Refresh</button>
+  </div>
+
+  <!-- WiFi APs sub-pane -->
+  <div class="dev-subpane" data-sub="wifi_aps">
+    <div class="section">
+      <table>
+        <thead><tr>
+          <th style="width:20px"></th>
+          <th class="sortable" data-sub="wifi_aps" data-key="label">SSID</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="bssid_count">BSSID(s)</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="channel">Band / Ch</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="crypto">Crypto</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="manufacturer">Vendor</th>
+          <th class="sortable num" data-sub="wifi_aps" data-key="last_rssi">RSSI</th>
+          <th class="sortable num" data-sub="wifi_aps" data-key="client_count" title="Distinct client MACs seen communicating with this AP. Only populated while the scanner is tuned to the AP's channel, so counts grow slowly with channel hopping.">Clients</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="first_seen">First Seen</th>
+          <th class="sortable" data-sub="wifi_aps" data-key="last_seen">Last Seen</th>
+        </tr></thead>
+        <tbody id="ap-body">
+          <tr><td colspan="10" class="empty">select tab to load...</td></tr>
+        </tbody>
+      </table>
     </div>
-    <table>
-      <thead><tr>
-        <th style="width:20px"></th><th>Type</th><th>Device</th><th>Manufacturer</th>
-        <th class="num">MACs</th><th class="num">Sessions</th>
-        <th class="num">Probes</th><th>Last Seen</th>
-      </tr></thead>
-      <tbody id="dev-body">
-        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
-      </tbody>
-    </table>
+  </div>
+
+  <!-- WiFi Clients sub-pane -->
+  <div class="dev-subpane" data-sub="wifi_clients" style="display:none">
+    <div class="section">
+      <table>
+        <thead><tr>
+          <th style="width:20px"></th>
+          <th class="sortable" data-sub="wifi_clients" data-key="label">Device</th>
+          <th class="sortable" data-sub="wifi_clients" data-key="manufacturer">Vendor</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="mac_count">MACs</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="ssid_count">SSIDs</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="sessions">Sessions</th>
+          <th class="sortable num" data-sub="wifi_clients" data-key="total_probes">Probes</th>
+          <th class="sortable" data-sub="wifi_clients" data-key="last_session">Last Seen</th>
+        </tr></thead>
+        <tbody id="wc-body">
+          <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- BLE sub-pane -->
+  <div class="dev-subpane" data-sub="ble" style="display:none">
+    <div class="section">
+      <table>
+        <thead><tr>
+          <th style="width:20px"></th>
+          <th class="sortable" data-sub="ble" data-key="label">Device</th>
+          <th class="sortable" data-sub="ble" data-key="manufacturer">Vendor</th>
+          <th class="sortable" data-sub="ble" data-key="apple_device">Apple</th>
+          <th class="sortable num" data-sub="ble" data-key="mac_count">MACs</th>
+          <th class="sortable num" data-sub="ble" data-key="sessions">Sessions</th>
+          <th class="sortable num" data-sub="ble" data-key="total_probes">Probes</th>
+          <th class="sortable" data-sub="ble" data-key="last_session">Last Seen</th>
+        </tr></thead>
+        <tbody id="ble-body">
+          <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -1131,6 +1358,57 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// Central tooltip dictionary — human-readable explanations shown on hover
+// for every short tag/badge in the UI. Lookups are case-insensitive and fall
+// back to prefix matches so dynamic values (e.g. "LNA 24") resolve.
+const TAG_TIPS = {
+  // Device flags
+  'rand':        'Device advertises with rotating random MAC addresses. Modern phones/watches/earbuds use this as a privacy feature to prevent tracking — the fingerprint groups all rotated MACs back into one device.',
+  // Capture status
+  'running':     'Capture source is running and producing samples.',
+  'pending':     'Capture source has not started yet.',
+  'degraded':    'Capture is running but the pipeline cannot keep up — samples are being dropped. Consider lowering sample rate or gain.',
+  'failed':      'Capture source exited with an error. Check the status message or server logs for details.',
+  // Bands
+  '2.4 ghz':     'AP observed broadcasting on the 2.4 GHz band (channels 1-14).',
+  '5 ghz':       'AP observed broadcasting on the 5 GHz band (channels 32+).',
+  '6 ghz':       'AP observed broadcasting on the 6 GHz band (Wi-Fi 6E).',
+  // Config/capture tags
+  'transcribe':  'Audio is transcribed to text using Whisper (local model or OpenAI API).',
+  'digital':     'Digital voice modes enabled (dPMR/DMR detection on PMR446).',
+  'no audio':    'Audio recording is disabled — only detection events are logged.',
+  // Crypto (shown as plain cell text but good to cover)
+  'wpa2-psk':    'WPA2 Personal — pre-shared key authentication (standard home network).',
+  'wpa3-sae':    'WPA3 Personal — SAE (Simultaneous Authentication of Equals), more secure than WPA2-PSK.',
+  'wpa2-eap':    'WPA2 Enterprise — 802.1X authentication (corporate networks).',
+  'owe':         'Opportunistic Wireless Encryption — encrypted but unauthenticated (open networks with WPA3 encryption).',
+  'open':        'No encryption — plaintext network.',
+  'wep':         'WEP — legacy, broken encryption. Treat as open.',
+};
+const TAG_TIP_PREFIXES = [
+  ['lna ',     'HackRF LNA (Low-Noise Amplifier) gain in dB. Boosts RF signal at the front end; too high causes overload.'],
+  ['vga ',     'HackRF VGA (Variable-Gain Amplifier) baseband gain in dB. Applied after downconversion.'],
+  ['lang: ',   'Forced Whisper transcription language (ISO 639-1 code). Otherwise auto-detected.'],
+  ['whisper: ','Whisper model used for transcription. Larger = more accurate but slower.'],
+  ['ppm ',     'RTL-SDR / HackRF crystal frequency correction in parts-per-million. Corrects cheap SDR clock drift.'],
+  ['probing: ','Network name(s) this client device is searching for. Clients reveal saved networks in their probe requests.'],
+];
+
+function tipFor(tag) {
+  if (!tag) return '';
+  const k = String(tag).toLowerCase().trim();
+  if (TAG_TIPS[k]) return TAG_TIPS[k];
+  for (const [prefix, tip] of TAG_TIP_PREFIXES) {
+    if (k.startsWith(prefix)) return tip;
+  }
+  return '';
+}
+
+function tipAttr(tag) {
+  const t = tipFor(tag);
+  return t ? ' title="' + esc(t) + '"' : '';
+}
+
 // --- Config / Captures ---
 async function loadConfig() {
   const capEl = document.getElementById('captures');
@@ -1154,7 +1432,7 @@ async function loadConfig() {
       const statusColor = STATUS_COLORS[status] || '#888';
       let line = '<div style="margin-bottom:8px;border-left:3px solid ' + statusColor + ';padding-left:8px">';
       line += '<div><span style="color:#4fc3f7;font-weight:600">' + esc(cap.name) + '</span>';
-      line += ' <span style="background:' + statusColor + ';color:#000;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-left:6px">' + esc(status.toUpperCase()) + '</span>';
+      line += ' <span' + tipAttr(status) + ' style="background:' + statusColor + ';color:#000;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-left:6px;cursor:help">' + esc(status.toUpperCase()) + '</span>';
       line += ' <span style="color:#888">' + esc(cap.device || '') + '</span></div>';
       if (cap.status_message) {
         line += '<div style="font-size:11px;color:' + statusColor + ';margin-left:12px">\u26a0 ' + esc(cap.status_message) + '</div>';
@@ -1226,7 +1504,12 @@ async function loadConfig() {
         if (extras.length) tags.push(extras.join(' '));
       }
       if (tags.length) {
-        line += '<div style="font-size:12px;color:#aaa;margin-left:12px">' + tags.map(t => '<span style="background:#0f3460;padding:1px 6px;border-radius:3px;margin-right:4px;display:inline-block;margin-top:2px">' + esc(t) + '</span>').join('') + '</div>';
+        line += '<div style="font-size:12px;color:#aaa;margin-left:12px">' + tags.map(t => {
+          const tip = tipFor(t);
+          const cur = tip ? ';cursor:help' : '';
+          const attr = tip ? ' title="' + esc(tip) + '"' : '';
+          return '<span' + attr + ' style="background:#0f3460;padding:1px 6px;border-radius:3px;margin-right:4px;display:inline-block;margin-top:2px' + cur + '">' + esc(t) + '</span>';
+        }).join('') + '</div>';
       }
 
       // --- Sub-channel list (HackRF + WiFi use the same tree-style rendering) ---
@@ -1280,7 +1563,7 @@ function updateOverview(state) {
   document.getElementById('h-time').textContent = state.time || '-';
   document.getElementById('h-uptime').textContent = state.uptime || '-';
   document.getElementById('h-count').textContent = state.detection_count || 0;
-  document.getElementById('h-csv').textContent = state.csv || '-';
+  document.getElementById('h-db').textContent = state.db || '-';
 
   const gps = state.gps;
   const gpsEl = document.getElementById('h-gps');
@@ -1435,93 +1718,282 @@ function playAudio(btn, filename) {
 }
 
 // --- Devices Tab ---
-let _personaCache = [];
+let _devCache = { wifi_aps: [], wifi_clients: [], ble: [], summary: {} };
+let _devSubtab = 'wifi_aps';
+let _devExpanded = { wifi_aps: new Set(), wifi_clients: new Set(), ble: new Set() };
+// null = server-default sort; otherwise {key, dir: 'asc'|'desc'}
+let _devSort = { wifi_aps: null, wifi_clients: null, ble: null };
 
-async function loadPersonas() {
-  const transport = document.getElementById('dev-transport').value;
-  const url = '/api/personas' + (transport ? '?transport=' + transport : '');
+function _devSortValue(row, key) {
+  if (key === 'channel') {
+    const chs = row.channels || [];
+    return chs.length ? chs[0] : 0;
+  }
+  const v = row[key];
+  if (v == null) return '';
+  return v;
+}
+
+function _devApplySort(sub, rows) {
+  const s = _devSort[sub];
+  if (!s) return rows;
+  const dir = s.dir === 'asc' ? 1 : -1;
+  const out = rows.slice();
+  out.sort((a, b) => {
+    const av = _devSortValue(a, s.key);
+    const bv = _devSortValue(b, s.key);
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av).localeCompare(String(bv)) * dir;
+  });
+  return out;
+}
+
+function _devUpdateSortIndicators() {
+  document.querySelectorAll('th.sortable').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    const sub = th.dataset.sub;
+    const s = _devSort[sub];
+    if (s && s.key === th.dataset.key) {
+      th.classList.add(s.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+  });
+}
+
+function devSortBy(sub, key) {
+  const s = _devSort[sub];
+  if (s && s.key === key) {
+    if (s.dir === 'desc') _devSort[sub] = { key, dir: 'asc' };
+    else _devSort[sub] = null;  // third click clears → server default
+  } else {
+    _devSort[sub] = { key, dir: 'desc' };
+  }
+  _devUpdateSortIndicators();
+  renderDevices();
+}
+
+async function loadDevices() {
   try {
-    const r = await fetch(url);
-    _personaCache = await r.json();
-    renderPersonas();
+    const r = await fetch('/api/devices');
+    _devCache = await r.json();
+    renderDevices();
   } catch(e) {}
 }
 
-function renderPersonas() {
-  const data = _personaCache;
-  const activeOnly = document.getElementById('dev-active-only').checked;
-  const sortBy = document.getElementById('dev-sort').value;
-
-  let filtered = activeOnly ? data.filter(p => p.active) : data;
-
-  if (sortBy === 'sessions') filtered.sort((a,b) => b.sessions - a.sessions);
-  else if (sortBy === 'probes') filtered.sort((a,b) => b.total_probes - a.total_probes);
-  else if (sortBy === 'name') filtered.sort((a,b) => (a.label||'zzz').localeCompare(b.label||'zzz'));
-  // default sort is from server (active + recent)
-
-  // Summary cards
-  const totalBle = data.filter(p => p.transport === 'BLE').length;
-  const totalWifi = data.filter(p => p.transport === 'WiFi').length;
-  const activeCount = data.filter(p => p.active).length;
-  const returning = data.filter(p => p.sessions >= 5).length;
-  const cardStyle = 'background:#16213e;border:1px solid #0f3460;border-radius:6px;padding:8px 14px;font-size:12px;text-align:center;min-width:80px';
-  document.getElementById('dev-stats').innerHTML =
-    '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#e0e0e0">'+data.length+'</div>Total</div>'
-    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#4caf50">'+activeCount+'</div>Active</div>'
-    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#00bcd4">'+totalBle+'</div>BLE</div>'
-    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#2196f3">'+totalWifi+'</div>WiFi</div>'
-    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#ffeb3b">'+returning+'</div>Returning</div>';
-
-  // Table
-  const tbody = document.getElementById('dev-body');
-  if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">no devices found</td></tr>';
-    return;
-  }
-  tbody.innerHTML = filtered.map(p => {
-    const tColor = p.transport === 'BLE' ? '#00bcd4' : '#2196f3';
-    const lastSeen = p.last_session ? p.last_session.split('T')[0].slice(5) + ' ' + p.last_session.split('T')[1].split('.')[0] : '-';
-    const sessColor = p.sessions >= 20 ? '#f44336' : p.sessions >= 5 ? '#ffeb3b' : '#e0e0e0';
-    const macList = p.macs.map(m => esc(m)).join('\n');
-
-    // Build label cell
-    let labelHtml = '';
-    if (p.label) {
-      labelHtml = '<span style="color:#e0e0e0">' + esc(p.label) + '</span>';
-    } else {
-      labelHtml = '<span style="color:#555">unknown</span>';
-    }
-    // Badges
-    const badges = [];
-    if (p.apple_device) badges.push('<span style="background:#333;color:#aaa;padding:0 5px;border-radius:3px;font-size:10px">' + esc(p.apple_device) + '</span>');
-    if (p.randomized) badges.push('<span style="background:#333;color:#888;padding:0 5px;border-radius:3px;font-size:10px">rand</span>');
-    if (badges.length) labelHtml += ' ' + badges.join(' ');
-
-    // Active dot
-    const dot = p.active
-      ? '<span class="status-dot" title="Active now"></span>'
-      : '<span class="status-dot off" style="opacity:0.2"></span>';
-
-    // Row style
-    const rowStyle = p.sessions <= 1 ? 'opacity:0.5' : '';
-    const borderStyle = p.active ? 'border-left:3px solid #4caf50' : '';
-
-    return '<tr style="'+rowStyle+';'+borderStyle+'">'
-      + '<td>'+dot+'</td>'
-      + '<td style="color:'+tColor+';font-size:11px;white-space:nowrap">'+esc(p.transport)+'</td>'
-      + '<td>'+labelHtml+'</td>'
-      + '<td style="color:#888;font-size:12px">'+esc(p.manufacturer || '')+'</td>'
-      + '<td class="num" title="'+esc(macList)+'" style="cursor:help">'+p.mac_count+'</td>'
-      + '<td class="num" style="color:'+sessColor+'">'+p.sessions+'</td>'
-      + '<td class="num">'+p.total_probes.toLocaleString()+'</td>'
-      + '<td style="font-size:12px;white-space:nowrap">'+lastSeen+'</td>'
-      + '</tr>';
-  }).join('');
+function fmtTs(ts) {
+  if (!ts) return '-';
+  const parts = ts.split('T');
+  if (parts.length < 2) return ts;
+  return parts[0].slice(5) + ' ' + parts[1].split('.')[0];
 }
 
-document.getElementById('dev-transport').addEventListener('change', () => loadPersonas());
-document.getElementById('dev-active-only').addEventListener('change', () => renderPersonas());
-document.getElementById('dev-sort').addEventListener('change', () => renderPersonas());
+function activeDot(active) {
+  return active
+    ? '<span class="status-dot" title="Active now"></span>'
+    : '<span class="status-dot off" style="opacity:0.2"></span>';
+}
+
+function renderDevices() {
+  const activeOnly = document.getElementById('dev-active-only').checked;
+  const s = _devCache.summary || {};
+
+  const cardStyle = 'background:#16213e;border:1px solid #0f3460;border-radius:6px;padding:8px 14px;font-size:12px;text-align:center;min-width:80px';
+  document.getElementById('dev-stats').innerHTML =
+    '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#2196f3">'+(s.wifi_aps||0)+'</div>WiFi APs</div>'
+    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#64b5f6">'+(s.wifi_clients||0)+'</div>WiFi Clients</div>'
+    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#00bcd4">'+(s.ble||0)+'</div>BLE</div>'
+    + '<div style="'+cardStyle+'"><div style="font-size:20px;font-weight:600;color:#4caf50">'+(s.active||0)+'</div>Active</div>';
+
+  renderWifiAps(activeOnly);
+  renderWifiClients(activeOnly);
+  renderBle(activeOnly);
+}
+
+function renderWifiAps(activeOnly) {
+  const aps = _devApplySort('wifi_aps',
+    (_devCache.wifi_aps || []).filter(a => !activeOnly || a.active));
+  const tbody = document.getElementById('ap-body');
+  if (!aps.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">no APs found — run sdr.py server to collect beacon data</td></tr>';
+    return;
+  }
+  const rows = [];
+  aps.forEach((a, i) => {
+    const key = a.group_key || i;
+    const isExp = _devExpanded.wifi_aps.has(String(key));
+    const label = a.hidden ? '<span style="color:#888">(hidden)</span>' : esc(a.label || '');
+    const bssidCell = a.bssid_count > 1
+      ? '<span style="color:#4fc3f7">'+a.bssid_count+' radios</span>'
+      : (a.bssids[0] ? esc(a.bssids[0].bssid) : '-');
+    const bands = (a.bands || []).map(b => '<span title="'+esc(tipFor(b+' GHz'))+'" style="background:#0f3460;color:#9ecbff;padding:0 5px;border-radius:3px;font-size:10px;margin-right:2px;cursor:help">'+b+' GHz</span>').join('');
+    const chs = (a.channels || []).join(',');
+    const rssi = (a.last_rssi != null) ? a.last_rssi.toFixed(0)+' dBm' : '-';
+    const borderStyle = a.active ? 'border-left:3px solid #4caf50' : '';
+    const clientCount = a.client_count || 0;
+    const noClientsTip = 'No associated clients observed yet. Client detection requires capturing data/mgmt frames while tuned to the AP channel — with channel hopping this can be slow. Dwelling longer on a channel surfaces more clients.';
+    const clientCell = clientCount > 0
+      ? '<span style="color:#4fc3f7;cursor:help" title="'+esc((a.clients||[]).join('\n'))+'">'+clientCount+'</span>'
+      : '<span style="color:#555;cursor:help" title="'+esc(noClientsTip)+'">\u2014</span>';
+    rows.push(
+      '<tr style="cursor:pointer;'+borderStyle+'" onclick="toggleDevRow(\'wifi_aps\',\''+encodeURIComponent(String(key))+'\')">'
+      + '<td>'+activeDot(a.active)+'</td>'
+      + '<td>'+label+'</td>'
+      + '<td style="font-family:monospace;font-size:11px">'+bssidCell+'</td>'
+      + '<td>'+bands+' <span style="color:#888;font-size:11px">'+esc(chs)+'</span></td>'
+      + '<td'+tipAttr(a.crypto)+' style="font-size:11px'+(tipFor(a.crypto)?';cursor:help':'')+'">'+esc(a.crypto||'')+'</td>'
+      + '<td style="color:#888;font-size:11px">'+esc(a.manufacturer||'')+'</td>'
+      + '<td class="num">'+rssi+'</td>'
+      + '<td class="num">'+clientCell+'</td>'
+      + '<td style="font-size:11px;white-space:nowrap">'+fmtTs(a.first_seen)+'</td>'
+      + '<td style="font-size:11px;white-space:nowrap">'+fmtTs(a.last_seen)+'</td>'
+      + '</tr>'
+    );
+    if (isExp) {
+      let detail = '<div style="padding:8px 12px;background:#0a1020;font-size:11px">';
+      detail += '<div style="color:#888;margin-bottom:4px">SSIDs: ' + (a.ssids||[]).map(esc).join(', ') + '</div>';
+      detail += '<table style="width:100%;margin-top:4px"><thead><tr>'
+        + '<th>BSSID</th><th>SSID</th><th class="num">Ch</th><th>Crypto</th><th>Vendor</th>'
+        + '<th class="num">RSSI</th><th class="num">Clients</th><th class="num">Beacons</th><th>Last Seen</th>'
+        + '</tr></thead><tbody>';
+      (a.bssids||[]).forEach(b => {
+        detail += '<tr><td style="font-family:monospace">'+esc(b.bssid)+'</td>'
+          + '<td>'+esc((b.ssids||[]).join(',')||'(hidden)')+'</td>'
+          + '<td class="num">'+esc((b.channels||[]).join(','))+'</td>'
+          + '<td>'+esc(b.crypto||'')+'</td>'
+          + '<td style="color:#888">'+esc(b.manufacturer||'')+'</td>'
+          + '<td class="num">'+(b.last_rssi!=null?b.last_rssi.toFixed(0):'-')+'</td>'
+          + '<td class="num">'+((b.client_count||0) > 0 ? b.client_count : '<span style="color:#555">\u2014</span>')+'</td>'
+          + '<td class="num">'+(b.total_beacons||0)+'</td>'
+          + '<td style="font-size:11px">'+fmtTs(b.last_seen)+'</td></tr>';
+      });
+      detail += '</tbody></table>';
+      if ((a.clients||[]).length) {
+        detail += '<div style="margin-top:8px"><div style="color:#4fc3f7;margin-bottom:2px">Associated clients ('+a.client_count+')</div>'
+          + '<div style="font-family:monospace;color:#ccc;column-count:3">'
+          + a.clients.map(esc).join('<br>')
+          + '</div></div>';
+      }
+      detail += '</div>';
+      rows.push('<tr><td colspan="10" style="padding:0">'+detail+'</td></tr>');
+    }
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+function renderWifiClients(activeOnly) {
+  const items = _devApplySort('wifi_clients',
+    (_devCache.wifi_clients || []).filter(c => !activeOnly || c.active));
+  const tbody = document.getElementById('wc-body');
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">no clients found</td></tr>';
+    return;
+  }
+  const rows = [];
+  items.forEach((c, i) => {
+    const key = c.persona_key || c.dev_sig || String(i);
+    const isExp = _devExpanded.wifi_clients.has(key);
+    const sessColor = c.sessions >= 20 ? '#f44336' : c.sessions >= 5 ? '#ffeb3b' : '#e0e0e0';
+    const borderStyle = c.active ? 'border-left:3px solid #4caf50' : '';
+    const rowStyle = c.sessions <= 1 ? 'opacity:0.5' : '';
+
+    let labelHtml = '<span style="color:#e0e0e0">' + esc(c.label || 'unknown') + '</span>';
+    if (c.randomized) labelHtml += ' <span title="'+esc(tipFor('rand'))+'" style="background:#333;color:#888;padding:0 5px;border-radius:3px;font-size:10px;cursor:help">rand</span>';
+    if (c.ssids && c.ssids.length) {
+      labelHtml += ' <span style="background:#1a1a2e;color:#9ecbff;padding:0 5px;border-radius:3px;font-size:10px;cursor:help" title="'+esc(tipFor('probing: x'))+'\n\n'+esc(c.ssids.join(', '))+'">probing: '+esc(c.ssids[0])+(c.ssids.length>1?' +'+(c.ssids.length-1):'')+'</span>';
+    }
+
+    rows.push(
+      '<tr style="cursor:pointer;'+rowStyle+';'+borderStyle+'" onclick="toggleDevRow(\'wifi_clients\',\''+encodeURIComponent(key)+'\')">'
+      + '<td>'+activeDot(c.active)+'</td>'
+      + '<td>'+labelHtml+'</td>'
+      + '<td style="color:#888;font-size:12px">'+esc(c.manufacturer||'')+'</td>'
+      + '<td class="num">'+c.mac_count+'</td>'
+      + '<td class="num">'+c.ssid_count+'</td>'
+      + '<td class="num" style="color:'+sessColor+'">'+c.sessions+'</td>'
+      + '<td class="num">'+(c.total_probes||0).toLocaleString()+'</td>'
+      + '<td style="font-size:11px;white-space:nowrap">'+fmtTs(c.last_session)+'</td>'
+      + '</tr>'
+    );
+    if (isExp) {
+      let detail = '<div style="padding:8px 12px;background:#0a1020;font-size:11px;display:flex;gap:24px;flex-wrap:wrap">';
+      detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">MACs ('+c.mac_count+')</div><div style="font-family:monospace;color:#ccc">'+(c.macs||[]).map(esc).join('<br>')+'</div></div>';
+      detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">Probed SSIDs ('+c.ssid_count+')</div><div style="color:#9ecbff">'+(c.ssids||[]).map(esc).join('<br>')+'</div></div>';
+      detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">Fingerprint</div><div style="font-family:monospace;color:#888">'+esc(c.dev_sig||'')+'</div></div>';
+      detail += '</div>';
+      rows.push('<tr><td colspan="8" style="padding:0">'+detail+'</td></tr>');
+    }
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+function renderBle(activeOnly) {
+  const items = _devApplySort('ble',
+    (_devCache.ble || []).filter(d => !activeOnly || d.active));
+  const tbody = document.getElementById('ble-body');
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">no BLE devices found</td></tr>';
+    return;
+  }
+  const rows = [];
+  items.forEach((d, i) => {
+    const key = d.persona_key || d.dev_sig || String(i);
+    const isExp = _devExpanded.ble.has(key);
+    const sessColor = d.sessions >= 20 ? '#f44336' : d.sessions >= 5 ? '#ffeb3b' : '#e0e0e0';
+    const borderStyle = d.active ? 'border-left:3px solid #4caf50' : '';
+    const rowStyle = d.sessions <= 1 ? 'opacity:0.5' : '';
+
+    let labelHtml = '<span style="color:#e0e0e0">' + esc(d.label || 'unknown') + '</span>';
+    if (d.randomized) labelHtml += ' <span title="'+esc(tipFor('rand'))+'" style="background:#333;color:#888;padding:0 5px;border-radius:3px;font-size:10px;cursor:help">rand</span>';
+
+    rows.push(
+      '<tr style="cursor:pointer;'+rowStyle+';'+borderStyle+'" onclick="toggleDevRow(\'ble\',\''+encodeURIComponent(key)+'\')">'
+      + '<td>'+activeDot(d.active)+'</td>'
+      + '<td>'+labelHtml+'</td>'
+      + '<td style="color:#888;font-size:12px">'+esc(d.manufacturer||'')+'</td>'
+      + '<td style="color:#aaa;font-size:11px">'+esc(d.apple_device||'')+'</td>'
+      + '<td class="num">'+d.mac_count+'</td>'
+      + '<td class="num" style="color:'+sessColor+'">'+d.sessions+'</td>'
+      + '<td class="num">'+(d.total_probes||0).toLocaleString()+'</td>'
+      + '<td style="font-size:11px;white-space:nowrap">'+fmtTs(d.last_session)+'</td>'
+      + '</tr>'
+    );
+    if (isExp) {
+      let detail = '<div style="padding:8px 12px;background:#0a1020;font-size:11px;display:flex;gap:24px;flex-wrap:wrap">';
+      detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">MACs ('+d.mac_count+')</div><div style="font-family:monospace;color:#ccc">'+(d.macs||[]).map(esc).join('<br>')+'</div></div>';
+      if (d.names && d.names.length) {
+        detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">Names</div><div style="color:#9ecbff">'+(d.names||[]).map(esc).join('<br>')+'</div></div>';
+      }
+      detail += '<div><div style="color:#4fc3f7;margin-bottom:2px">Fingerprint</div><div style="font-family:monospace;color:#888">'+esc(d.dev_sig||'')+'</div></div>';
+      detail += '</div>';
+      rows.push('<tr><td colspan="8" style="padding:0">'+detail+'</td></tr>');
+    }
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+function toggleDevRow(sub, encKey) {
+  const key = decodeURIComponent(encKey);
+  const s = _devExpanded[sub];
+  if (s.has(key)) s.delete(key); else s.add(key);
+  renderDevices();
+}
+
+function switchDevSubtab(name) {
+  _devSubtab = name;
+  document.querySelectorAll('.dev-subtab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.sub === name);
+  });
+  document.querySelectorAll('.dev-subpane').forEach(p => {
+    p.style.display = p.dataset.sub === name ? 'block' : 'none';
+  });
+}
+
+document.querySelectorAll('.dev-subtab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchDevSubtab(btn.dataset.sub));
+});
+document.querySelectorAll('th.sortable').forEach(th => {
+  th.addEventListener('click', () => devSortBy(th.dataset.sub, th.dataset.key));
+});
+document.getElementById('dev-active-only').addEventListener('change', () => renderDevices());
 
 // --- Activity Tab ---
 async function loadActivity() {
@@ -1590,7 +2062,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     panel.style.display = 'block';
     location.hash = btn.dataset.tab;
     if (btn.dataset.tab === 'log') loadDetections();
-    if (btn.dataset.tab === 'personas') loadPersonas();
+    if (btn.dataset.tab === 'devices') loadDevices();
     if (btn.dataset.tab === 'config') loadConfig();
     if (btn.dataset.tab === 'timeline') loadActivity();
   });

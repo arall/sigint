@@ -3,8 +3,8 @@ WiFi Beacon Parser
 
 Logs nearby WiFi access points from 802.11 Beacon frames. Extracts BSSID,
 SSID, channel, crypto suite (WPA2/WPA3/OWE/open), and vendor OUI. Tracks
-each BSSID across repeated beacons with a dedup window so the CSV isn't
-flooded — one log line per AP every N seconds while it's seen.
+each BSSID across repeated beacons with a dedup window so the log isn't
+flooded — one row per AP every N seconds while it's seen.
 """
 
 import json
@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 
 from parsers.base import BaseParser
+from utils.ap_db import ApDB
 from utils.logger import SignalDetection
 from utils.oui import lookup_manufacturer
 
@@ -111,20 +112,31 @@ def _extract_crypto(packet):
 class BeaconParser(BaseParser):
     """Parses 802.11 Beacon frames to catalog nearby WiFi APs."""
 
-    def __init__(self, logger, min_rssi=-90):
+    def __init__(self, logger, min_rssi=-90, ap_db_path=None):
         super().__init__(logger)
         self.min_rssi = min_rssi
         self._lock = threading.Lock()
         # bssid -> {ssid, channel, crypto, manufacturer, rssi, first_seen,
         #          last_seen, last_logged, count}
         self._aps = {}
+        self._ap_db = ApDB(ap_db_path) if ap_db_path else None
 
     def handle_frame(self, frame):
-        """Process a WiFi frame: (packet, channel). Only acts on beacons."""
+        """Process a WiFi frame: (packet, channel).
+
+        Beacons are used to catalog APs. Any other frame (data / mgmt / ctrl)
+        whose addr1 or addr2 matches a known BSSID is mined for a client MAC
+        — that's how we count associated clients per AP.
+        """
         from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11Elt
 
         packet, channel = frame
+        if not packet.haslayer(Dot11):
+            return
+
+        # Client association tracking (any non-beacon frame referencing a known BSSID)
         if not packet.haslayer(Dot11Beacon):
+            self._observe_client(packet)
             return
 
         bssid = packet.addr3 or packet.addr2
@@ -192,6 +204,7 @@ class BeaconParser(BaseParser):
                     "last_seen": datetime.now().isoformat(),
                     "last_logged": 0,
                     "count": 0,
+                    "clients": set(),
                 }
                 self._aps[bssid] = ap
                 should_log = True
@@ -217,6 +230,8 @@ class BeaconParser(BaseParser):
                 ap["last_logged"] = now
                 snapshot = dict(ap)
                 snapshot.pop("last_logged", None)
+                snapshot["clients"] = sorted(ap["clients"])
+                snapshot["client_count"] = len(ap["clients"])
 
         if should_log and rssi is not None:
             try:
@@ -235,9 +250,79 @@ class BeaconParser(BaseParser):
             )
             self.logger.log(detection)
 
+    def _observe_client(self, packet):
+        """Inspect a non-beacon frame for a (BSSID, client) association.
+
+        802.11 addresses:
+          ToDS=1, FromDS=0: addr1=BSSID, addr2=client, addr3=dest
+          ToDS=0, FromDS=1: addr1=client, addr2=BSSID, addr3=src
+          ToDS=0, FromDS=0: mgmt/ctrl — addr1 is receiver, addr3 may be BSSID
+        Strategy: for any frame where addr1 or addr2 is a BSSID we already
+        know from its beacon, the *other* unicast address is a client.
+        """
+        from scapy.layers.dot11 import Dot11
+        try:
+            dot11 = packet[Dot11]
+        except Exception:
+            return
+        a1 = (dot11.addr1 or "").lower()
+        a2 = (dot11.addr2 or "").lower()
+        if not a1 and not a2:
+            return
+
+        def is_unicast(mac):
+            if not mac or mac == "ff:ff:ff:ff:ff:ff":
+                return False
+            try:
+                first = int(mac.split(":")[0], 16)
+            except (ValueError, IndexError):
+                return False
+            return (first & 0x01) == 0  # multicast bit clear
+
+        with self._lock:
+            aps_lower = {b.lower(): b for b in self._aps}
+            bssid_orig = None
+            client = None
+            if a1 in aps_lower and is_unicast(a2) and a2 != a1:
+                bssid_orig = aps_lower[a1]
+                client = a2
+            elif a2 in aps_lower and is_unicast(a1) and a1 != a2:
+                bssid_orig = aps_lower[a2]
+                client = a1
+            if bssid_orig and client:
+                self._aps[bssid_orig]["clients"].add(client)
+
+    def flush(self):
+        """Persist in-memory AP records to the sidecar DB."""
+        if not self._ap_db:
+            return
+        with self._lock:
+            snapshot = []
+            for ap in self._aps.values():
+                d = dict(ap)
+                d["clients"] = sorted(ap["clients"])
+                d["client_count"] = len(ap["clients"])
+                snapshot.append(d)
+        for ap in snapshot:
+            self._ap_db.update_ap(
+                bssid=ap["bssid"],
+                ssid=ap.get("ssid") or "",
+                channel=ap.get("channel"),
+                crypto=ap.get("crypto") or "",
+                manufacturer=ap.get("manufacturer") or "",
+                rssi=ap.get("rssi"),
+                hidden=ap.get("hidden", False),
+                beacon_interval=ap.get("beacon_interval"),
+                total_beacons=ap.get("count", 0),
+                first_seen=ap.get("first_seen"),
+                last_seen=ap.get("last_seen"),
+                clients=ap.get("clients", []),
+            )
+        self._ap_db.save()
+
     def shutdown(self):
-        """Nothing to persist — BSSIDs are in the CSV log."""
-        pass
+        """Persist AP records to database."""
+        self.flush()
 
     @property
     def detection_count(self):

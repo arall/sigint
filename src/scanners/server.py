@@ -317,7 +317,8 @@ def _create_parser(name, logger, channel_cfg=None, capture_cfg=None):
 
     elif name == "beacon":
         from parsers.wifi.beacon import BeaconParser
-        return BeaconParser(logger=logger)
+        ap_db_path = os.path.join(str(logger.output_dir), "aps.json")
+        return BeaconParser(logger=logger, ap_db_path=ap_db_path)
 
     elif name == "remoteid_wifi":
         from parsers.wifi.remote_id import WiFiRemoteIDParser
@@ -1031,9 +1032,9 @@ class ServerOrchestrator:
             print(f"\nKill them first: sudo kill -9 {' '.join(p.split()[0] for _, p in conflicts)}")
             print(f"Or run: sudo pkill -f 'sdr.py.*server'")
             sys.exit(1)
-        csv_path = self.logger.start()
+        db_path = self.logger.start()
 
-        print(f"\n{_col('bold', '[SERVER]')} Logging to: {_col('dim', csv_path)}")
+        print(f"\n{_col('bold', '[SERVER]')} Logging to: {_col('dim', db_path)}")
         print(f"{_col('bold', '[SERVER]')} Starting {len(self._captures)} capture sources...\n")
 
         # Redirect parser/capture stdout to log file to keep terminal clean
@@ -1343,8 +1344,8 @@ class ServerOrchestrator:
             if lat and lon:
                 gps_str = f"{lat:.4f}, {lon:.4f}"
 
-        # CSV path
-        csv_name = os.path.basename(str(self.logger._csv_path or ""))
+        # DB path
+        db_name = os.path.basename(str(self.logger.db_path or ""))
 
         # Determine active signal types — show configured + any with detections
         # Order: voice first (red), then rf (yellow/magenta/green), then wireless (cyan/blue)
@@ -1412,7 +1413,7 @@ class ServerOrchestrator:
               f"up {_col('bold', str(uptime))}  |  "
               f"{_col('bold', str(total))} detections  |  "
               f"GPS: {gps_str}")
-            w(f"  {_col('dim', csv_name)}")
+            w(f"  {_col('dim', db_name)}")
             w(sep)
 
             # Configured captures
