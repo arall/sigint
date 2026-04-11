@@ -287,8 +287,9 @@ class ProbeRequestParser(BaseParser):
         }
         return pid
 
-    def shutdown(self):
-        """Persist personas to database."""
+    def flush(self):
+        """Persist in-memory personas to the sidecar DB (safe to call
+        repeatedly while running)."""
         if not self._persona_db:
             return
         with self._lock:
@@ -302,6 +303,10 @@ class ProbeRequestParser(BaseParser):
                     probe_count=p["count"],
                 )
         self._persona_db.save()
+
+    def shutdown(self):
+        """Persist personas to database."""
+        self.flush()
 
     @property
     def detection_count(self):

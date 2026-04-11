@@ -145,6 +145,12 @@ Examples:
         action="store_true",
         help="Enable digital PMR (dPMR/DMR) energy detection on channels D1-D16",
     )
+    pmr_parser.add_argument(
+        "--ppm",
+        type=int,
+        default=0,
+        help="RTL-SDR frequency correction in ppm (e.g. -28, default: 0)",
+    )
 
     # Keyfob scanner
     keyfob_parser = subparsers.add_parser(
@@ -1015,6 +1021,7 @@ def _dispatch_scanner(args):
             whisper_model=args.whisper_model,
             language=args.language,
             digital=args.digital,
+            ppm=args.ppm,
         )
         if gps:
             scanner.logger.gps = gps

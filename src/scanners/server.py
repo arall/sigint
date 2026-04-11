@@ -30,6 +30,57 @@ TASKABLE_SIGNALS = {
     "lora", "ISM", "pocsag", "DroneCtrl",
 }
 
+# Friendly display names for parser/scanner module identifiers.
+# Used by _write_server_info() so the UI never shows raw Python names.
+DISPLAY_NAMES = {
+    # BLE
+    # `apple_continuity` is misnamed in code — it actually tracks ALL BLE
+    # devices (phones, watches, IoT, etc.) and just has extra decoding for
+    # Apple Continuity messages on top. Surface it as "BLE Devices" in the UI.
+    "apple_continuity": "BLE Devices",
+    "remoteid_ble":     "Drone RemoteID",
+    # WiFi
+    "probe_request":    "WiFi Probes",
+    "beacon":           "WiFi APs",
+    "remoteid_wifi":    "Drone RemoteID",
+    # Sub-GHz / ISM
+    "keyfob":           "Keyfobs",
+    "tpms":             "TPMS",
+    "lora":             "LoRa",
+    "elrs":             "ELRS",
+    # Voice / FM
+    "fm_voice":         "FM Voice",
+    # Cellular
+    "gsm":              "GSM uplink",
+    "lte":              "LTE uplink",
+    # Standalone scanner types (sdr.py subcommand names)
+    "pmr":              "PMR446",
+    "adsb":             "ADS-B",
+    "ais":              "AIS",
+    "ism":              "ISM (rtl_433)",
+    "pocsag":           "POCSAG",
+    "fm":               "FM scanner",
+    "drone-video":      "Drone video",
+    "scan":             "Wideband scan",
+    "bluetooth":        "BLE adv",
+    "bt":               "BLE adv",
+    "wifi":             "WiFi probes",
+    "record":           "IQ recorder",
+}
+
+
+def _display(name):
+    """Map an internal module/scanner name to a human-readable label."""
+    if not name:
+        return ""
+    return DISPLAY_NAMES.get(name, name)
+
+
+def _display_list(names):
+    """Map a list of internal names to friendly labels (in place)."""
+    return [_display(n) for n in (names or [])]
+
+
 # Coverage description for known standalone scanner types.
 # Maps scanner_type -> (human-readable range, mode).
 _STANDALONE_COVERAGE = {
@@ -109,16 +160,53 @@ def _extract_details(detection):
         meta = {}
 
     if sig == "BLE-Adv":
-        return meta.get("device_type", "") or meta.get("manufacturer", "") or ""
+        parts = []
+        pid = meta.get("persona_id")
+        if pid:
+            parts.append(pid)
+        name = meta.get("name")
+        if name:
+            parts.append(f'"{name[:20]}"')
+        apple = meta.get("apple_device")
+        mfr = meta.get("manufacturer")
+        if apple:
+            parts.append(f"[{apple}]")
+        elif mfr:
+            parts.append(f"[{mfr[:16]}]")
+        if meta.get("randomized"):
+            parts.append("rand")
+        return " ".join(parts)
     elif sig == "WiFi-Probe":
-        ssid = meta.get("ssid", "")
-        if ssid and ssid != "(broadcast)":
-            return ssid[:28]
-        return meta.get("manufacturer", "")[:28]
+        parts = []
+        pid = meta.get("persona_id")
+        if pid:
+            parts.append(pid)
+        ssids = meta.get("ssids") or []
+        if isinstance(ssids, list) and ssids:
+            s = ", ".join(ssids[:2])
+            if len(ssids) > 2:
+                s += f" +{len(ssids) - 2}"
+            parts.append(f'"{s[:28]}"')
+        else:
+            ssid = meta.get("ssid")
+            if ssid:
+                parts.append(f'"{ssid[:20]}"')
+        mfr = meta.get("manufacturer")
+        if mfr:
+            parts.append(f"[{mfr[:16]}]")
+        if meta.get("randomized"):
+            parts.append("rand")
+        return " ".join(parts)
     elif sig == "WiFi-AP":
-        ssid = meta.get("ssid", "") or "(hidden)"
+        ssid = meta.get("ssid") or "(hidden)"
         crypto = meta.get("crypto", "")
-        return f"{ssid[:20]} {crypto}".strip()
+        bssid = meta.get("bssid", "")
+        parts = [ssid[:20]]
+        if bssid:
+            parts.append(bssid)
+        if crypto:
+            parts.append(crypto)
+        return " ".join(parts)
     elif sig == "ADS-B":
         cs = meta.get("callsign", "").strip()
         alt = meta.get("altitude", "")
@@ -311,6 +399,12 @@ class ServerOrchestrator:
             window_s=config.get("correlator_window_s", 30.0),
             threshold=config.get("correlator_threshold", 0.5),
         )
+        self._correlator_export_interval = config.get(
+            "correlator_export_interval_s", 30.0)
+        self._last_correlator_export = 0.0
+        self._persona_flush_interval = config.get(
+            "persona_flush_interval_s", 30.0)
+        self._last_persona_flush = 0.0
 
         self.logger.on_detection = self._on_detection
 
@@ -560,7 +654,7 @@ class ServerOrchestrator:
                         "freq_mhz": ch.get("freq_mhz"),
                         "bandwidth_mhz": ch.get("bandwidth_mhz"),
                         "band": ch.get("band"),
-                        "parsers": ch.get("parsers", []),
+                        "parsers": _display_list(ch.get("parsers", [])),
                         "transcribe": ch.get("transcribe", False),
                     })
             elif cap_type == "rtlsdr":
@@ -569,19 +663,19 @@ class ServerOrchestrator:
                 sr = entry.get("sample_rate_mhz", 2.4)
                 cap["center_freq_mhz"] = center
                 cap["sample_rate_mhz"] = sr
-                cap["parsers"] = entry.get("parsers", [])
-                cap["coverage"] = f"{center - sr/2:.2f}\u2013{center + sr/2:.2f} MHz"
+                cap["parsers"] = _display_list(entry.get("parsers", []))
+                cap["coverage"] = f"{center - sr/2:.4f}\u2013{center + sr/2:.4f} MHz"
                 cap["mode"] = "continuous"
             elif cap_type == "rtlsdr_sweep":
                 cap["device"] = f"RTL-SDR #{entry.get('device_index', 0)}"
                 cap["band_start_mhz"] = entry.get("band_start_mhz", 0)
                 cap["band_end_mhz"] = entry.get("band_end_mhz", 0)
                 cap["mode"] = "hopping"
-                cap["parsers"] = entry.get("parsers", [])
+                cap["parsers"] = _display_list(entry.get("parsers", []))
                 cap["coverage"] = f"{cap['band_start_mhz']}\u2013{cap['band_end_mhz']} MHz"
             elif cap_type == "ble":
                 cap["device"] = entry.get("adapter", "hci1")
-                cap["parsers"] = entry.get("parsers", [])
+                cap["parsers"] = _display_list(entry.get("parsers", []))
                 # BLE adv listens on all 3 primary advertising channels simultaneously
                 cap["coverage"] = "2402 / 2426 / 2480 MHz (adv ch 37/38/39)"
                 cap["mode"] = "passive"
@@ -611,7 +705,12 @@ class ServerOrchestrator:
                         chs = CHANNELS_DEFAULT
                 cap["channels"] = chs
                 cap["band"] = band
-                cap["parsers"] = entry.get("parsers", [])
+                cap["parsers"] = _display_list(entry.get("parsers", []))
+                # Per-channel sub-list with MHz so the UI can render uniformly
+                cap["channel_list"] = [
+                    {"name": str(c), "freq_mhz": channel_to_freq(c)}
+                    for c in chs
+                ]
                 # Build coverage string: channel count + freq sample
                 freqs = [channel_to_freq(c) for c in chs]
                 freqs = [f for f in freqs if f]
@@ -624,10 +723,10 @@ class ServerOrchestrator:
                 cap["mode"] = "hopping" if len(chs) > 1 else "continuous"
             elif cap_type == "standalone":
                 cap["device"] = f"RTL-SDR #{entry.get('device_index', '')}" if entry.get("device_index") is not None else ""
-                cap["scanner_type"] = entry.get("scanner_type", "")
+                scanner = entry.get("scanner_type", "")
+                cap["scanner_type"] = scanner
+                cap["scanner_label"] = _display(scanner)
                 cap["args"] = entry.get("args", [])
-                # Known scanner type → coverage lookup
-                scanner = cap["scanner_type"]
                 info = _STANDALONE_COVERAGE.get(scanner)
                 if info:
                     cap["coverage"] = info[0]
@@ -993,9 +1092,43 @@ class ServerOrchestrator:
         try:
             while not self._stop_event.is_set():
                 self._poll_capture_health()
+                self._export_correlations_if_due()
+                self._flush_personas_if_due()
                 self._print_dashboard()
                 self._stop_event.wait(2.0)
         except KeyboardInterrupt:
+            pass
+
+    def _flush_personas_if_due(self):
+        """Periodically persist BLE/WiFi personas so the web UI can load them."""
+        if self._persona_flush_interval <= 0:
+            return
+        now = time.time()
+        if now - self._last_persona_flush < self._persona_flush_interval:
+            return
+        self._last_persona_flush = now
+        for parser in self._parsers.values():
+            flush = getattr(parser, "flush", None)
+            if callable(flush):
+                try:
+                    flush()
+                except Exception:
+                    pass
+
+    def _export_correlations_if_due(self):
+        """Periodically publish correlations.json during runtime."""
+        if self._correlator_export_interval <= 0:
+            return
+        now = time.time()
+        if now - self._last_correlator_export < self._correlator_export_interval:
+            return
+        self._last_correlator_export = now
+        try:
+            if self._correlator.device_count >= 2:
+                corr_path = os.path.join(
+                    str(self._output_dir), "correlations.json")
+                self._correlator.export_json(corr_path)
+        except Exception:
             pass
 
     def _poll_capture_health(self):
@@ -1117,18 +1250,67 @@ class ServerOrchestrator:
             print(f"  [standalone] {name}: pid {proc.pid}, cmd: {' '.join(cmd)}")
             self._set_status(name, "running", f"pid {proc.pid}")
 
+            # Drain stdout/stderr in background threads. If we don't,
+            # the subprocess will block on print() once its 64KB pipe
+            # buffer fills, freezing the SDR pipeline.
+            stderr_tail = []   # rolling buffer of last few stderr lines
+            log_dir = self._output_dir or "."
+            try:
+                stdout_log = open(
+                    os.path.join(str(log_dir), f"standalone_{name}.log"),
+                    "ab", buffering=0)
+            except Exception:
+                stdout_log = None
+
+            def _drain(stream, tail=None):
+                try:
+                    for chunk in iter(lambda: stream.read(4096), b""):
+                        if not chunk:
+                            break
+                        if stdout_log is not None:
+                            try:
+                                stdout_log.write(chunk)
+                            except Exception:
+                                pass
+                        if tail is not None:
+                            try:
+                                text = chunk.decode("utf-8", errors="replace")
+                                for line in text.splitlines():
+                                    line = line.strip()
+                                    if line:
+                                        tail.append(line)
+                                if len(tail) > 20:
+                                    del tail[:-20]
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            threading.Thread(
+                target=_drain, args=(proc.stdout,), daemon=True,
+                name=f"drain-{name}-out").start()
+            threading.Thread(
+                target=_drain, args=(proc.stderr, stderr_tail), daemon=True,
+                name=f"drain-{name}-err").start()
+
             while not self._stop_event.is_set():
                 if proc.poll() is not None:
-                    # Process exited — check for errors
-                    stderr = proc.stderr.read().decode().strip()
+                    # Process exited — drain threads will catch any final output
+                    err = "\n".join(stderr_tail).strip()
                     if proc.returncode != 0:
-                        err = stderr.splitlines()[-1] if stderr else f"exit {proc.returncode}"
-                        print(f"\n  [ERROR] standalone {name} exited ({proc.returncode}): {stderr[:200]}")
-                        self._set_status(name, "failed", err[:200])
+                        last = stderr_tail[-1] if stderr_tail else f"exit {proc.returncode}"
+                        print(f"\n  [ERROR] standalone {name} exited ({proc.returncode}): {err[:200]}")
+                        self._set_status(name, "failed", last[:200])
                     else:
                         self._set_status(name, "failed", "exited cleanly")
                     break
                 self._stop_event.wait(1.0)
+
+            if stdout_log is not None:
+                try:
+                    stdout_log.close()
+                except Exception:
+                    pass
 
             if proc.poll() is None:
                 proc.terminate()

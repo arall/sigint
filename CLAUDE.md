@@ -34,10 +34,11 @@ src/
     base.py               # BaseParser ABC (handle_frame, shutdown)
     ble/
       ad_parser.py        # Shared BLE AD structure parser
-      apple_continuity.py # Apple Continuity parsing + persona fingerprinting
+      apple_continuity.py # All-BLE persona tracking + Apple Continuity decoding
       remote_id.py        # Open Drone ID (ASTM F3411) BLE parser
     wifi/
       probe_request.py    # WiFi probe request parsing + persona fingerprinting
+      beacon.py           # WiFi AP beacon parser (BSSID, SSID, crypto, vendor)
       remote_id.py        # Open Drone ID WiFi NaN/beacon parser
     drone/
       video_link.py       # Drone video downlink OFDM detection (DJI O4, OcuSync)
@@ -60,6 +61,8 @@ src/
     oui.py                # MAC address OUI manufacturer lookup (IEEE database)
     persona_db.py         # Persistent persona fingerprint database (JSON)
     transcriber.py        # Whisper speech-to-text for recorded audio
+    transcript_store.py   # Atomic JSON sidecar (audio_file -> transcript)
+    async_transcriber.py  # Background Whisper worker (non-blocking pipeline)
     triangulate.py        # RSSI multilateration from multi-node CSV logs
     heatmap.py            # RF activity density heatmap (KML/PNG for ATAK)
     correlator.py         # Device co-occurrence analysis across signal types
@@ -107,6 +110,9 @@ tests/
     tx_tpms.py            # TPMS Manchester OOK transmission
 configs/
   server_voice.json       # Multi-HackRF + standalone RTL-SDR PMR voice config
+tools/
+  hackrf_survey.py        # Wideband spectrum survey via hackrf_sweep
+  tx_wav_pmr.py           # Transmit a WAV as FM voice on PMR446 (HackRF, for testing)
 output/                   # CSV logs and audio recordings
 ```
 
@@ -239,8 +245,9 @@ The PMR scanner uses a multi-stage audio pipeline for recording voice transmissi
 2. **Per-chunk FM demodulation** — each IQ chunk is frequency-shifted, resampled via `scipy.signal.resample_poly` with rational up/down factors (GCD-reduced for exact 16 kHz output at any input sample rate), then FM-demodulated with a polar discriminator
 3. **Phase continuity** — the last decimated IQ sample from each chunk is carried to the next for smooth FM demod at boundaries
 4. **De-click filter** — median filter + spike interpolation removes crackling from USB buffer boundary artifacts
-5. **Transcription** — optional Whisper speech-to-text (OpenAI API via `.env` or local), stored in CSV metadata as JSON. Hallucination filter in `utils/transcriber.py` detects and suppresses common Whisper false outputs on noisy audio (e.g., "Subtítulos realizados por...")
+5. **Async transcription** — Whisper runs in a background worker thread (`utils/async_transcriber.py`). The detection is logged to CSV *immediately* when TX ends (no waiting on Whisper). When the transcript is ready, it's written to `output/transcripts.json` keyed by audio filename. The web tailer polls that sidecar and back-fills already-displayed rows. Net effect: real-time detection visibility, transcripts arrive 1–10s later. Hallucination filter in `utils/transcriber.py` suppresses common Whisper false outputs on noisy audio (e.g., "Subtítulos realizados por...")
 6. **False detection prevention** — `DETECTION_SNR_DB = 15.0` rejects adjacent-channel leakage from strong signals. `MIN_TX_DURATION = 0.5s` (sample-based, not wall-clock) filters sub-second noise spikes that holdover would otherwise let through.
+7. **PPM correction** — `--ppm <int>` flag corrects RTL-SDR crystal error so transmissions land in the correct PMR channel (cheap RTL-SDRs run ~30 ppm offset, which equals 12.5 kHz at 446 MHz — exactly one channel of error).
 
 ### FM Voice Parser (Channelizer)
 
@@ -260,25 +267,43 @@ The FM voice parser (`parsers/fm/voice.py`) enables voice demodulation and recor
 
 Standalone scanners in server config (`"type": "standalone"`) run as child `sdr.py` processes. The server passes through `--gps`, `--tak`, `--output` flags automatically. Scanner-specific args go in the `"args"` list:
 ```json
-{"type": "standalone", "scanner_type": "pmr", "args": ["--digital", "--transcribe"]}
+{"type": "standalone", "scanner_type": "pmr", "args": ["--digital", "--transcribe", "--ppm", "28"]}
 {"type": "standalone", "scanner_type": "fm", "args": ["marine", "--transcribe"]}
 ```
 
+The server **drains the subprocess's stdout/stderr in background threads** and mirrors output to `output/standalone_<name>.log`. Without these drainers the subprocess would block on `print()` once its 64 KB pipe buffer fills (the PMR scanner's dashboard prints frequently), freezing the SDR pipeline.
+
+### Capture Health & Web Dashboard
+
+The server orchestrator (`scanners/server.py`) tracks per-capture status (`pending` / `running` / `degraded` / `failed`) and publishes it to `output/server_info.json` alongside coverage info (frequency range and `continuous` / `hopping` / `passive` mode). Status transitions are printed to the terminal with colored badges and surfaced on the web dashboard's Config tab, which auto-refreshes every 3 seconds.
+
+- **Standalone subprocess failures** (e.g. RTL-SDR claimed by DVB driver) mark the capture `failed` with the last stderr line
+- **HackRF queue drops** mark the HackRF capture `degraded` (the channelizer can't keep up with the sample rate)
+- **Persona DB** (`personas.json`, `personas_bt.json`) and **device correlation** (`correlations.json`) are exported every 30s during runtime, not just at shutdown — configurable via `persona_flush_interval_s` and `correlator_export_interval_s` in the server config
+- The Web UI uses `DISPLAY_NAMES` from `scanners/server.py` to render parser/scanner identifiers as friendly labels (`apple_continuity` → "BLE Devices", `pmr` → "PMR446", `beacon` → "WiFi APs", etc.) so the user-facing UI never shows raw Python module names
+
+### HackRF Queue & Latency
+
+The HackRF capture source (`capture/hackrf_iq.py`) uses a small (4-block) sample queue with **drop-oldest** semantics. When the channelizer can't keep up, the *oldest* queued block is evicted to make room for the newest — this guarantees the parser pipeline always processes fresh samples, preventing the multi-second lag that drop-newest semantics would cause. End-to-end real-time latency is bounded to ~130 ms regardless of channelizer throughput. If drops happen at all, the server marks the capture `degraded` so the operator knows to lower the sample rate.
+
 ### BLE Scanner + Drone Detection
 
-The BLE scanner (`sdr.py bt`) runs two parsers on one BLE adapter simultaneously:
+The BLE scanner (`sdr.py bt`) runs two parsers on one BLE adapter simultaneously. BLE listening is fully **passive** — it scans all 3 primary advertising channels (37/38/39 = 2402/2426/2480 MHz) via `hcitool lescan` + `hcidump --raw` and decodes every advertisement frame. Every discoverable device in range ends up in the capture stream: phones, watches, fitness trackers, headphones, IoT sensors, etc.
 
-1. **Apple Continuity parser** — persona fingerprinting via manufacturer ID, AD structure hash, Apple Continuity protocol (Nearby Info device type, Handoff hash for MAC de-anonymization). Persistent persona DB (`output/personas_bt.json`).
-2. **RemoteID parser** — automatic Open Drone ID (ASTM F3411) detection via BLE service UUID `0xFFFA` with application code `0x0D` validation. Decodes drone serial, GPS position, altitude, speed, operator location, and UA type. Logs as `signal_type="RemoteID"`.
+1. **`apple_continuity` parser** — despite the name, this is the **all-BLE persona tracker**. For *every* BLE adv frame it tracks persona fingerprinting via manufacturer ID, AD structure hash, advertised name, MAC rotation, and RSSI. When the manufacturer ID happens to be Apple (76), it *additionally* decodes the Apple Continuity protocol (Nearby Info device type, Handoff hash for MAC de-anonymization). Persistent persona DB (`output/personas_bt.json`). UI displays this as "BLE Devices" via the `DISPLAY_NAMES` map in `scanners/server.py`.
+2. **RemoteID parser** — Open Drone ID (ASTM F3411) detection via BLE service UUID `0xFFFA` with application code `0x0D` validation. Decodes drone serial, GPS position, altitude, speed, operator location, and UA type. Logs as `signal_type="RemoteID"`.
+
+The Bluetooth SIG company ID lookup table in `parsers/ble/apple_continuity.py` (`BT_COMPANIES` dict) uses **decimal** values, not hex — easy to confuse since IDs like 0x0087 (Garmin = 135) and 0x0407 (Fitbit = 1031) look like they could be parsed as their hex digits.
 
 No flag needed — drones are detected automatically alongside phones, watches, and IoT devices.
 
-### WiFi Probe Scanner + Drone Detection
+### WiFi Scanner + AP / Drone Detection
 
-The WiFi scanner (`sdr.py wifi`) runs two parsers on one WiFi adapter simultaneously:
+The WiFi scanner (`sdr.py wifi`) runs three parsers on one WiFi adapter simultaneously:
 
-1. **Probe request parser** — persona fingerprinting via 802.11 IE signature, SSID set, sequence number continuity. Persistent persona DB (`output/personas.json`).
-2. **RemoteID parser** — automatic Open Drone ID detection from WiFi Beacon/NaN (Neighbor Awareness Networking) frames with ASTM F3411 vendor-specific IE (OUI `FA:0B:BC`, vendor type `0x0D`). Logs as `signal_type="RemoteID"`.
+1. **Probe request parser** — `Dot11ProbeReq` frames (sent by client devices searching for known networks). Persona fingerprinting via 802.11 IE signature, SSID set, sequence number continuity. Persistent persona DB (`output/personas.json`).
+2. **Beacon parser** (`parsers/wifi/beacon.py`) — `Dot11Beacon` frames (broadcast by access points). Extracts BSSID, SSID (or "hidden"), channel, crypto suite (WPA2/WPA3/OWE/WEP/open via RSN IE parsing in `_parse_rsn`), beacon interval, and vendor OUI manufacturer. Logs as `signal_type="WiFi-AP"`. Per-BSSID dedup window (60s) to avoid CSV flooding.
+3. **RemoteID parser** — Open Drone ID detection from WiFi Beacon/NaN (Neighbor Awareness Networking) frames with ASTM F3411 vendor-specific IE (OUI `FA:0B:BC`, vendor type `0x0D`). Logs as `signal_type="RemoteID"`.
 
 Both parsers share the same ODID message decoders (`parsers/ble/remote_id.py` provides the protocol parsing, reused by the WiFi parser). A shared `DroneRegistry` deduplicates across BLE and WiFi — same drone seen on both transports only logs once per dedup window.
 

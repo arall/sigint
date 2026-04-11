@@ -22,25 +22,30 @@ from utils.persona_db import PersonaDB
 # BLE approximate center frequency for logging
 BLE_ADV_FREQ = 2440e6
 
-# BT SIG assigned company identifiers (common ones)
+# BT SIG assigned company identifiers (decimal values).
+# Reference: https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml
 BT_COMPANIES = {
-    2: "Intel",
-    6: "Microsoft",
-    13: "Texas Instruments",
-    48: "Logitech",
-    76: "Apple",
-    87: "Garmin",
-    89: "Nordic Semi",
-    117: "Samsung",
-    196: "Fitbit",
-    224: "Google",
-    301: "Bose",
-    305: "Cypress",
-    343: "Xiaomi",
-    741: "Sonos",
-    1042: "SEFAM",
-    1177: "Tile",
-    1530: "JBL",
+    2:    "Intel",                  # 0x0002
+    6:    "Microsoft",              # 0x0006
+    13:   "Texas Instruments",      # 0x000D
+    48:   "Logitech",               # 0x0030
+    76:   "Apple",                  # 0x004C
+    89:   "Nordic Semi",            # 0x0059
+    117:  "Samsung",                # 0x0075
+    135:  "Garmin",                 # 0x0087
+    224:  "Google",                 # 0x00E0
+    301:  "Bose",                   # 0x012D
+    305:  "Cypress",                # 0x0131
+    343:  "Xiaomi",                 # 0x0157
+    741:  "Sonos",                  # 0x02E5
+    957:  "GoPro",                  # 0x03BD
+    1031: "Fitbit",                 # 0x0407
+    1177: "Tile",                   # 0x0499
+    1452: "Polar Electro",          # 0x05AC
+    1530: "JBL",                    # 0x05FA
+    1957: "Sennheiser",             # 0x07A5
+    2257: "Bang & Olufsen",         # 0x08D1
+    2614: "Anker",                  # 0x0A36
 }
 
 # Apple Continuity message types
@@ -337,8 +342,9 @@ class AppleContinuityParser(BaseParser):
         self._macs[mac] = {"persona_id": pid, "last_seen": time.time()}
         return pid
 
-    def shutdown(self):
-        """Persist personas to database."""
+    def flush(self):
+        """Persist in-memory personas to the sidecar DB (safe to call
+        repeatedly while running)."""
         if not self._persona_db:
             return
         with self._lock:
@@ -352,6 +358,10 @@ class AppleContinuityParser(BaseParser):
                     probe_count=p["count"],
                 )
         self._persona_db.save()
+
+    def shutdown(self):
+        """Persist personas to database."""
+        self.flush()
 
     @property
     def detection_count(self):

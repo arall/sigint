@@ -395,6 +395,7 @@ class CSVTailer:
                 "transcript": transcript,
                 "dev_sig": meta.get("dev_sig", ""),
                 "apple_device": meta.get("apple_device", ""),
+                "device_id": row.get("device_id", "") or meta.get("bssid", ""),
             })
 
             # Recent events feed
@@ -516,12 +517,71 @@ class CSVTailer:
 def _extract_detail(sig, channel, meta):
     """Extract a short detail string from metadata (mirrors server.py logic)."""
     if sig == "BLE-Adv":
-        return meta.get("device_type", "") or meta.get("manufacturer", "") or ""
+        parts = []
+        pid = meta.get("persona_id")
+        if pid:
+            parts.append(pid)
+        name = meta.get("name")
+        if name:
+            parts.append(f'"{name[:24]}"')
+        apple = meta.get("apple_device")
+        mfr = meta.get("manufacturer")
+        if apple:
+            parts.append(f"[{apple}]")
+        elif mfr:
+            parts.append(f"[{mfr[:18]}]")
+        mac = meta.get("mac")
+        if mac:
+            parts.append(mac)
+        if meta.get("randomized"):
+            parts.append("rand")
+        prior = meta.get("prior_sessions", 0)
+        if prior:
+            parts.append(f"seen {prior}x")
+        return " ".join(parts)
     elif sig == "WiFi-Probe":
-        ssid = meta.get("ssid", "")
-        if ssid and ssid != "(broadcast)":
-            return ssid[:60]
-        return (meta.get("manufacturer", "") or "")[:60]
+        parts = []
+        pid = meta.get("persona_id")
+        if pid:
+            parts.append(pid)
+        ssids = meta.get("ssids") or []
+        if isinstance(ssids, list) and ssids:
+            s = ", ".join(ssids[:3])
+            if len(ssids) > 3:
+                s += f" +{len(ssids) - 3}"
+            parts.append(f'"{s[:40]}"')
+        else:
+            ssid = meta.get("ssid")
+            if ssid:
+                parts.append(f'"{ssid[:24]}"')
+        mfr = meta.get("manufacturer")
+        device = meta.get("device")
+        if device and device != mfr:
+            parts.append(f"[{device[:18]}]")
+        elif mfr:
+            parts.append(f"[{mfr[:18]}]")
+        mac = meta.get("mac")
+        if mac:
+            parts.append(mac)
+        if meta.get("randomized"):
+            parts.append("rand")
+        prior = meta.get("prior_sessions", 0)
+        if prior:
+            parts.append(f"seen {prior}x")
+        return " ".join(parts)
+    elif sig == "WiFi-AP":
+        ssid = meta.get("ssid") or "(hidden)"
+        crypto = meta.get("crypto", "")
+        mfr = meta.get("manufacturer", "")
+        bssid = meta.get("bssid", "")
+        parts = [ssid[:28]]
+        if bssid:
+            parts.append(bssid)
+        if crypto:
+            parts.append(crypto)
+        if mfr:
+            parts.append(f"[{mfr[:20]}]")
+        return " ".join(parts)
     elif sig == "ADS-B":
         cs = meta.get("callsign", "").strip()
         alt = meta.get("altitude", "")
@@ -560,6 +620,8 @@ def _extract_uid(sig, row, meta):
         return meta.get("persona_id") or row.get("channel", "")
     elif sig == "WiFi-Probe":
         return meta.get("persona_id") or row.get("device_id", "")
+    elif sig == "WiFi-AP":
+        return meta.get("bssid") or row.get("device_id", "")
     elif sig == "ADS-B":
         return meta.get("icao") or row.get("channel", "")
     elif sig == "keyfob":
@@ -771,6 +833,7 @@ def start_web_server_background(output_dir, port=8080):
 _TYPE_COLORS = {
     "BLE-Adv": "#00bcd4",
     "WiFi-Probe": "#2196f3",
+    "WiFi-AP": "#64b5f6",
     "keyfob": "#ffeb3b",
     "tpms": "#ffeb3b",
     "ISM": "#ffeb3b",
@@ -1112,53 +1175,94 @@ async function loadConfig() {
              + '</div>';
       }
 
+      // --- Tag row: only orthogonal info, no duplication of the coverage line ---
       const tags = [];
       if (t === 'hackrf') {
-        tags.push(cap.center_freq_mhz + ' MHz center');
-        tags.push(cap.sample_rate_mhz + ' MS/s BW');
         if (cap.lna_gain != null) tags.push('LNA ' + cap.lna_gain);
         if (cap.vga_gain != null) tags.push('VGA ' + cap.vga_gain);
         if (cap.transcribe) tags.push('\u2705 transcribe');
         if (cap.whisper_model && cap.whisper_model !== 'base') tags.push('whisper: ' + cap.whisper_model);
         if (cap.language) tags.push('lang: ' + cap.language);
-      } else if (t === 'rtlsdr') {
-        tags.push(cap.center_freq_mhz + ' MHz center');
-        if (cap.sample_rate_mhz) tags.push(cap.sample_rate_mhz + ' MS/s BW');
-        if (cap.parsers) tags.push(cap.parsers.join(', '));
-      } else if (t === 'rtlsdr_sweep') {
-        if (cap.parsers) tags.push(cap.parsers.join(', '));
+      } else if (t === 'rtlsdr' || t === 'rtlsdr_sweep') {
+        if (cap.parsers && cap.parsers.length) tags.push(cap.parsers.join(' \u00b7 '));
       } else if (t === 'ble') {
-        tags.push('Bluetooth LE');
-        if (cap.parsers) tags.push(cap.parsers.join(', '));
+        if (cap.parsers && cap.parsers.length) tags.push(cap.parsers.join(' \u00b7 '));
       } else if (t === 'wifi') {
-        tags.push('WiFi monitor');
-        if (cap.band) tags.push('band: ' + cap.band);
-        if (cap.channels && cap.channels.length) {
-          const ch = cap.channels;
-          const chStr = ch.length > 8 ? ch.slice(0, 6).join(',') + '\u2026(+' + (ch.length - 6) + ')' : ch.join(',');
-          tags.push('ch ' + chStr);
-        }
-        if (cap.parsers) tags.push(cap.parsers.join(', '));
+        if (cap.parsers && cap.parsers.length) tags.push(cap.parsers.join(' \u00b7 '));
       } else if (t === 'standalone') {
-        tags.push(esc(cap.scanner_type || ''));
-        if (cap.args && cap.args.length) tags.push(cap.args.join(' '));
+        if (cap.scanner_label || cap.scanner_type) {
+          tags.push(cap.scanner_label || cap.scanner_type);
+        }
+        // Pretty-print common args (mirrors HackRF flag rendering)
+        const args = cap.args || [];
+        if (args.includes('--transcribe')) tags.push('\u2705 transcribe');
+        if (args.includes('--digital')) tags.push('\u2705 digital');
+        if (args.includes('--no-audio')) tags.push('no audio');
+        const flagValue = (flag) => {
+          const i = args.indexOf(flag);
+          return (i >= 0 && i + 1 < args.length) ? args[i + 1] : null;
+        };
+        const lang = flagValue('--language');
+        if (lang) tags.push('lang: ' + lang);
+        const wm = flagValue('--whisper-model');
+        if (wm && wm !== 'base') tags.push('whisper: ' + wm);
+        const ppm = flagValue('--ppm');
+        if (ppm) tags.push('ppm ' + ppm);
+        // Anything else (positional band names, custom flags) — show as-is
+        const known = new Set([
+          '--transcribe', '--digital', '--no-audio',
+          '--language', '--whisper-model', '--ppm',
+        ]);
+        const skipNext = new Set(['--language', '--whisper-model', '--ppm']);
+        const extras = [];
+        for (let i = 0; i < args.length; i++) {
+          const a = args[i];
+          if (known.has(a)) {
+            if (skipNext.has(a)) i++;
+            continue;
+          }
+          extras.push(a);
+        }
+        if (extras.length) tags.push(extras.join(' '));
       }
       if (tags.length) {
         line += '<div style="font-size:12px;color:#aaa;margin-left:12px">' + tags.map(t => '<span style="background:#0f3460;padding:1px 6px;border-radius:3px;margin-right:4px;display:inline-block;margin-top:2px">' + esc(t) + '</span>').join('') + '</div>';
       }
 
-      // Show channels for HackRF
+      // --- Sub-channel list (HackRF + WiFi use the same tree-style rendering) ---
+      const fmtFreq = (mhz) => {
+        if (mhz == null) return '';
+        if (mhz >= 1000) return (mhz / 1000).toFixed(3) + ' GHz';
+        return Number(mhz).toFixed(4).replace(/0+$/, '').replace(/\.$/, '') + ' MHz';
+      };
+
       if (t === 'hackrf' && cap.channels && cap.channels.length) {
         cap.channels.forEach(ch => {
           const chTags = [];
           if (ch.band) chTags.push(ch.band);
-          chTags.push(ch.freq_mhz + ' MHz');
+          if (ch.name) chTags.push(ch.name);
+          chTags.push(fmtFreq(ch.freq_mhz));
           if (ch.bandwidth_mhz) chTags.push(ch.bandwidth_mhz + ' MHz BW');
-          if (ch.parsers) chTags.push(ch.parsers.join(', '));
+          if (ch.parsers && ch.parsers.length) chTags.push(ch.parsers.join(' \u00b7 '));
           if (ch.transcribe) chTags.push('\u2705 transcribe');
           line += '<div style="font-size:11px;color:#888;margin-left:24px;margin-top:2px">\u2514 ' + chTags.join(' \u00b7 ') + '</div>';
         });
       }
+
+      if (t === 'wifi' && cap.channel_list && cap.channel_list.length) {
+        const chList = cap.channel_list;
+        // Compact form for long lists: show first 6 + count
+        const shown = chList.length > 8 ? chList.slice(0, 6) : chList;
+        shown.forEach(ch => {
+          line += '<div style="font-size:11px;color:#888;margin-left:24px;margin-top:2px">'
+               + '\u2514 CH' + esc(ch.name) + ' \u00b7 ' + esc(fmtFreq(ch.freq_mhz)) + '</div>';
+        });
+        if (chList.length > shown.length) {
+          line += '<div style="font-size:11px;color:#666;margin-left:24px;margin-top:2px">'
+               + '\u2514 \u2026 +' + (chList.length - shown.length) + ' more</div>';
+        }
+      }
+
       line += '</div>';
       html += line;
     });

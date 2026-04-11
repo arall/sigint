@@ -93,8 +93,10 @@ class HackRFCaptureSource(BaseCaptureSource):
         stderr_thread.start()
 
         # Dedicated pipe reader thread — drains hackrf_transfer stdout into
-        # a queue as fast as possible to prevent pipe backpressure
-        sample_queue = queue.Queue(maxsize=32)
+        # a queue as fast as possible to prevent pipe backpressure.
+        # Small queue + drop-oldest semantics keeps consumers on fresh data;
+        # we'd rather drop stale samples than lag the parser pipeline.
+        sample_queue = queue.Queue(maxsize=4)
         reader_thread = threading.Thread(
             target=self._pipe_reader,
             args=(sample_queue,),
@@ -140,15 +142,27 @@ class HackRFCaptureSource(BaseCaptureSource):
                 try:
                     sample_queue.put_nowait(samples)
                 except queue.Full:
+                    # Drop the OLDEST queued block, then enqueue the new one.
+                    # This guarantees the consumer always processes the most
+                    # recent samples — better real-time latency than letting
+                    # the parser fall behind by many seconds.
+                    try:
+                        sample_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        sample_queue.put_nowait(samples)
+                    except queue.Full:
+                        pass
                     if not hasattr(self, '_drop_count'):
                         self._drop_count = 0
                         self._drop_first = time.time()
                     self._drop_count += 1
                     now = time.time()
-                    # Log every 10 drops to avoid spam
-                    if self._drop_count % 10 == 1:
-                        print(f"  [WARN] HackRF queue full — dropped {self._drop_count} blocks "
-                              f"({(now - self._drop_first):.1f}s since first drop)")
+                    # Log every 50 drops to avoid spam
+                    if self._drop_count % 50 == 1:
+                        print(f"  [WARN] HackRF can't keep up — dropped {self._drop_count} blocks "
+                              f"({(now - self._drop_first):.1f}s); reduce sample rate or move parsers off this capture")
             except Exception:
                 if not self._stop_event.is_set():
                     break

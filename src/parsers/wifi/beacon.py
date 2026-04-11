@@ -140,19 +140,23 @@ class BeaconParser(BaseParser):
         if rssi is not None and rssi < self.min_rssi:
             return
 
-        # SSID (first Dot11Elt with ID 0)
+        # SSID — walk the Dot11Elt chain looking for ID 0 (SSID IE).
+        # Usually first, but be defensive.
         ssid = ""
         hidden = False
         elt = packet.getlayer(Dot11Elt)
-        if elt and elt.ID == 0:
-            if elt.info:
-                try:
-                    ssid = elt.info.decode("utf-8", errors="replace")
-                except Exception:
+        while elt is not None:
+            if elt.ID == 0:
+                if elt.info:
+                    try:
+                        ssid = elt.info.decode("utf-8", errors="replace")
+                    except Exception:
+                        ssid = ""
+                if not ssid or all(c in ("\x00", " ") for c in ssid):
+                    hidden = True
                     ssid = ""
-            if not ssid or all(c == "\x00" for c in ssid):
-                hidden = True
-                ssid = ""
+                break
+            elt = elt.payload.getlayer(Dot11Elt) if elt.payload else None
 
         # Crypto
         try:

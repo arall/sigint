@@ -42,6 +42,12 @@ class TranscriptStore:
                 prefix=".transcripts.", suffix=".tmp", dir=directory)
             with os.fdopen(fd, "w") as f:
                 json.dump(self._data, f, indent=2)
+            # mkstemp creates the file mode 600 — make it world-readable so
+            # a non-root web UI can pick it up alongside the CSV log.
+            try:
+                os.chmod(tmp_path, 0o644)
+            except OSError:
+                pass
             os.replace(tmp_path, self.path)
         except Exception:
             # Non-fatal — we'll retry on the next update

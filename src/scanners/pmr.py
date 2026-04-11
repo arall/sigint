@@ -243,6 +243,7 @@ class PMRScanner:
         whisper_model: str = "base",
         language: str = None,
         digital: bool = False,
+        ppm: int = 0,
     ):
         # Default output to project_root/output
         if output_dir is None:
@@ -261,6 +262,7 @@ class PMRScanner:
         self.whisper_model = whisper_model
         self.language = language
         self.digital = digital
+        self.ppm = ppm
 
         # Create audio subdirectory
         self.audio_dir = os.path.join(output_dir, "audio")
@@ -687,6 +689,11 @@ class PMRScanner:
 
         try:
             self.sdr = RtlSdr(self.device_index)
+            if self.ppm:
+                try:
+                    self.sdr.freq_correction = int(self.ppm)
+                except Exception as e:
+                    print(f"  [WARN] failed to set ppm correction: {e}")
 
             # Configure SDR
             self.sdr.sample_rate = self.sample_rate
@@ -696,6 +703,8 @@ class PMRScanner:
             print(f"Sample Rate: {self.sdr.sample_rate / 1e6:.1f} MHz")
             print(f"Center Frequency: {self.sdr.center_freq / 1e6:.3f} MHz")
             print(f"Gain: {self.sdr.gain} dB")
+            if self.ppm:
+                print(f"PPM correction: {self.ppm}")
 
             # Start logging
             output_file = self.logger.start()
