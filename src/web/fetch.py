@@ -25,6 +25,25 @@ DEFAULT_WINDOW_SECONDS = 6 * 3600   # 6 hours
 DEFAULT_LIMIT = 5000
 
 
+def _load_transcripts(output_dir):
+    """Load output/transcripts.json, the async Whisper sidecar keyed by
+    audio filename. The transcriber writes here *after* the detection
+    row has been logged to the .db, so the transcript is NOT in the
+    row's metadata blob — we have to overlay it at read time.
+
+    Returns an empty dict when the file is missing or malformed.
+    """
+    path = os.path.join(output_dir, "transcripts.json")
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
 def _category_predicate(category):
     """Build a SQL WHERE clause + params that matches rows belonging
     to the given category. Handles two special cases:
@@ -63,10 +82,17 @@ def _category_predicate(category):
     return (f"signal_type IN ({placeholders})", list(sigs))
 
 
-def _row_to_detection_dict(row):
+def _row_to_detection_dict(row, transcripts=None):
     """Shape a sqlite3.Row (from the detections table) into the exact
     dict layout that DBTailer._process_row produces, so category
-    loaders don't care where the row came from."""
+    loaders don't care where the row came from.
+
+    `transcripts` is the parsed transcripts.json sidecar; if provided
+    and the row has an audio_file, the sidecar's text overrides
+    whatever was in the metadata blob. Matches DBTailer._process_row's
+    overlay behavior so the Voice tab shows transcripts no matter
+    which path a row took to the renderer.
+    """
     try:
         meta = json.loads(row["metadata"]) if row["metadata"] else {}
     except (json.JSONDecodeError, TypeError):
@@ -77,6 +103,13 @@ def _row_to_detection_dict(row):
     freq_hz = row["frequency_hz"] or 0
     snr = row["snr_db"]
     power = row["power_db"]
+    audio_file = row["audio_file"] or None
+    transcript = meta.get("transcript")
+    if audio_file and transcripts:
+        sidecar = transcripts.get(audio_file)
+        if sidecar:
+            transcript = sidecar
+            meta["transcript"] = sidecar
 
     return {
         "timestamp": row["timestamp"] or "",
@@ -86,9 +119,9 @@ def _row_to_detection_dict(row):
         "channel": ch,
         "snr_db": round(snr, 1) if snr else None,
         "power_db": power if power else None,
-        "audio_file": row["audio_file"] or None,
+        "audio_file": audio_file,
         "detail": _extract_detail(sig, ch, meta),
-        "transcript": meta.get("transcript"),
+        "transcript": transcript,
         "dev_sig": meta.get("dev_sig", ""),
         "apple_device": meta.get("apple_device", ""),
         "device_id": row["device_id"] or meta.get("bssid", ""),
@@ -104,6 +137,7 @@ def fetch_detections_for_category(
     window_seconds=DEFAULT_WINDOW_SECONDS,
     limit=DEFAULT_LIMIT,
     now=None,
+    transcripts=None,
 ):
     """Pull recent detections for a category from a SQLite DB and return
     them in the DBTailer deque shape (oldest first, newest last).
@@ -141,7 +175,12 @@ def fetch_detections_for_category(
         except Exception:
             pass
 
-    shaped = [_row_to_detection_dict(r) for r in rows]
+    # If the caller didn't pre-load transcripts (single-file/legacy path),
+    # load them from the .db's sibling transcripts.json. The union fetcher
+    # passes a pre-loaded dict so we don't re-read it N times.
+    if transcripts is None:
+        transcripts = _load_transcripts(os.path.dirname(db_path))
+    shaped = [_row_to_detection_dict(r, transcripts) for r in rows]
     # We pulled newest-first; the deque is oldest-first and the loaders
     # that use `reversed(detections)` assume that ordering. Flip.
     shaped.reverse()
@@ -155,6 +194,10 @@ def fetch_detections_for_category_all(
     limit=DEFAULT_LIMIT,
     now=None,
 ):
+    # Load transcripts once across all files in this directory so every
+    # voice row can overlay its Whisper text without re-reading the sidecar
+    # per .db file.
+    transcripts = _load_transcripts(output_dir)
     """Union the category fetch across *every* .db file in an output dir.
 
     The single-file fetcher above is scoped to one session — which breaks
@@ -185,6 +228,7 @@ def fetch_detections_for_category_all(
             window_seconds=window_seconds,
             limit=limit,
             now=now,
+            transcripts=transcripts,
         )
         merged.extend(rows)
 

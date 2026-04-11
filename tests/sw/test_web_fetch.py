@@ -236,6 +236,43 @@ def test_fetch_all_empty_dir():
     assert fetch_detections_for_category_all(tmp, "voice") == []
 
 
+def test_fetch_overlays_transcripts_sidecar():
+    """Regression: the SQL fetch must overlay transcripts.json onto voice
+    rows, matching the deque-path behavior in _process_row. Without this,
+    transcripts live in the sidecar but never reach the Voice tab."""
+    import json as _json
+    from web.fetch import fetch_detections_for_category, fetch_detections_for_category_all
+    from utils.logger import SignalLogger
+
+    tmp = tempfile.mkdtemp()
+    log = SignalLogger(output_dir=tmp, signal_type="sv", min_snr_db=0)
+    p = log.start()
+    # Voice detection logged BEFORE the transcriber writes the sidecar —
+    # this is the real-world timing of the async transcription pipeline.
+    log.log_signal(
+        "PMR446", 446e6, -50, -90, channel="CH7",
+        audio_file="pmr_ch7_20260411_150308.wav",
+        metadata='{}',  # no transcript yet
+    )
+    log.stop()
+
+    # Transcriber now writes its output keyed by audio filename
+    with open(os.path.join(tmp, "transcripts.json"), "w") as f:
+        _json.dump({
+            "pmr_ch7_20260411_150308.wav": "hola mundo",
+        }, f)
+
+    # Single-file path should pick up the sidecar transcript
+    rows = fetch_detections_for_category(p, "voice")
+    assert len(rows) == 1
+    assert rows[0]["transcript"] == "hola mundo"
+
+    # Union path should pick it up too
+    rows_all = fetch_detections_for_category_all(tmp, "voice")
+    assert len(rows_all) == 1
+    assert rows_all[0]["transcript"] == "hola mundo"
+
+
 def test_ordering_is_oldest_first():
     """Deque ordering is oldest first, newest last. _load_voice iterates
     reversed(detections) to get newest-first rows. Make sure the SQL
@@ -271,6 +308,7 @@ def run_tests():
         ("Oldest-first ordering",       test_ordering_is_oldest_first),
         ("Union across .db files",      test_fetch_all_unions_across_db_files),
         ("Union empty dir",             test_fetch_all_empty_dir),
+        ("Transcript sidecar overlay",  test_fetch_overlays_transcripts_sidecar),
     ]
 
     print("=" * 60)
