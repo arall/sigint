@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SDR Server</title>
+<link rel="stylesheet" href="/static/leaflet.css">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -35,6 +36,7 @@
 <!-- Tabs -->
 <div class="tabs">
   <button class="tab-btn active" data-tab="live">Live</button>
+  <button class="tab-btn" data-tab="map">Map</button>
   <button class="tab-btn" data-tab="voice">Voice</button>
   <button class="tab-btn" data-tab="drones">Drones</button>
   <button class="tab-btn" data-tab="aircraft">Aircraft</button>
@@ -66,6 +68,27 @@
   <div class="section">
     <div class="section-title">Recent</div>
     <div class="section-body" id="recent"><div class="empty">...</div></div>
+  </div>
+</div>
+
+<!-- Tab: Map -->
+<div id="tab-map" class="tab-content">
+  <div class="section">
+    <div class="section-title">
+      <span>Situational Awareness Map</span>
+      <div class="filter-bar" id="map-filters">
+        <label><input type="checkbox" id="map-show-aircraft" checked> <span style="color:#4caf50">Aircraft</span></label>
+        <label><input type="checkbox" id="map-show-vessels" checked> <span style="color:#2196f3">Vessels</span></label>
+        <label><input type="checkbox" id="map-show-drones" checked> <span style="color:#f44336">Drones</span></label>
+        <label><input type="checkbox" id="map-show-operators" checked> <span style="color:#ff9800">Operators</span></label>
+        <button onclick="loadMap()">Refresh</button>
+        <button onclick="mapFitAll()">Fit All</button>
+      </div>
+    </div>
+    <div id="map" style="height: 600px; width: 100%; background: #0a1020;"></div>
+    <div id="map-summary" style="padding: 8px 16px; font-size: 12px; color: #888">
+      loading map...
+    </div>
   </div>
 </div>
 
@@ -354,6 +377,7 @@
 
 <!-- Hidden audio element -->
 <audio id="audio-player" style="display:none"></audio>
+<script src="/static/leaflet.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

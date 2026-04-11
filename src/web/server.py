@@ -45,9 +45,11 @@ _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # Whitelist of static assets — only these are served, protecting against
 # path traversal and arbitrary disk read.
 _STATIC_WHITELIST = {
-    "index.html": "text/html; charset=utf-8",
-    "style.css":  "text/css; charset=utf-8",
-    "app.js":     "application/javascript; charset=utf-8",
+    "index.html":  "text/html; charset=utf-8",
+    "style.css":   "text/css; charset=utf-8",
+    "app.js":      "application/javascript; charset=utf-8",
+    "leaflet.js":  "application/javascript; charset=utf-8",
+    "leaflet.css": "text/css; charset=utf-8",
 }
 
 

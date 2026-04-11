@@ -964,6 +964,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (btn.dataset.tab === 'devices') loadDevices();
     if (btn.dataset.tab === 'config') loadConfig();
     if (btn.dataset.tab === 'timeline') loadActivity();
+    if (btn.dataset.tab === 'map') {
+      initMap();
+      loadMap();
+    }
     if (['voice','drones','aircraft','vessels','vehicles','cellular','other']
         .includes(btn.dataset.tab)) loadCategory(btn.dataset.tab);
   });
@@ -992,6 +996,164 @@ setInterval(() => {
   if (tab && _CATEGORY_TAB_NAMES.includes(tab)) {
     loadCategory(tab);
   }
+}, 3000);
+
+// --- Situational Awareness Map (Leaflet) ---
+// Lazy-initialized on first Map tab activation. Markers are grouped by
+// layer (aircraft/vessels/drones/operators); each layer is toggleable
+// via the checkbox row. Auto-refreshes every 3s when the Map tab is
+// visible; historical session freezes the map like other category tabs.
+let _map = null;
+const _mapLayers = {
+  aircraft:  null,
+  vessels:   null,
+  drones:    null,
+  operators: null,
+};
+const _MAP_COLORS = {
+  aircraft:  '#4caf50',
+  vessels:   '#2196f3',
+  drones:    '#f44336',
+  operators: '#ff9800',
+};
+
+function initMap() {
+  if (_map || typeof L === 'undefined') return;
+  _map = L.map('map', {
+    center: [0, 0],
+    zoom: 2,
+    worldCopyJump: true,
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors',
+  }).addTo(_map);
+  for (const k of Object.keys(_mapLayers)) {
+    _mapLayers[k] = L.layerGroup().addTo(_map);
+  }
+  // Re-sync layer visibility when checkboxes change
+  for (const k of Object.keys(_mapLayers)) {
+    const cb = document.getElementById('map-show-' + k);
+    if (cb) cb.addEventListener('change', () => {
+      if (cb.checked) _map.addLayer(_mapLayers[k]);
+      else _map.removeLayer(_mapLayers[k]);
+    });
+  }
+  // Force Leaflet to recompute its size once the container is visible
+  setTimeout(() => { if (_map) _map.invalidateSize(); }, 100);
+}
+
+function _mapMarker(lat, lon, color, popup) {
+  return L.circleMarker([lat, lon], {
+    radius: 6,
+    color: color,
+    fillColor: color,
+    fillOpacity: 0.8,
+    weight: 2,
+  }).bindPopup(popup);
+}
+
+async function loadMap() {
+  if (!_map) return;
+  const qs = _selectedSession ? ('?session=' + encodeURIComponent(_selectedSession)) : '';
+  const tabs = ['aircraft', 'vessels', 'drones'];
+  try {
+    const results = await Promise.all(tabs.map(t =>
+      fetch('/api/cat/' + t + qs).then(r => r.json()).catch(() => ({rows: []}))
+    ));
+    const [aircraft, vessels, drones] = results.map(d => d.rows || []);
+    _renderMap({aircraft, vessels, drones});
+  } catch (e) {}
+}
+
+function _renderMap(data) {
+  for (const k of Object.keys(_mapLayers)) {
+    if (_mapLayers[k]) _mapLayers[k].clearLayers();
+  }
+  let positioned = 0;
+  const bounds = [];
+
+  (data.aircraft || []).forEach(a => {
+    if (a.latitude == null || a.longitude == null) return;
+    const popup = '<b>' + esc(a.callsign || a.icao) + '</b><br>'
+      + esc(a.icao) + '<br>'
+      + (a.altitude_ft != null ? a.altitude_ft + ' ft' : '-') + '<br>'
+      + (a.speed_kt != null ? a.speed_kt.toFixed(0) + ' kt' : '') + ' '
+      + (a.heading != null ? a.heading.toFixed(0) + '&deg;' : '');
+    _mapMarker(a.latitude, a.longitude, _MAP_COLORS.aircraft, popup)
+      .addTo(_mapLayers.aircraft);
+    bounds.push([a.latitude, a.longitude]);
+    positioned++;
+  });
+
+  (data.vessels || []).forEach(v => {
+    if (v.latitude == null || v.longitude == null) return;
+    const popup = '<b>' + esc(v.name || v.mmsi) + '</b><br>'
+      + 'MMSI ' + esc(v.mmsi) + '<br>'
+      + esc(v.ship_type || '') + '<br>'
+      + (v.speed_kn != null ? v.speed_kn.toFixed(1) + ' kn' : '-') + ' '
+      + (v.course != null ? v.course.toFixed(0) + '&deg;' : '');
+    _mapMarker(v.latitude, v.longitude, _MAP_COLORS.vessels, popup)
+      .addTo(_mapLayers.vessels);
+    bounds.push([v.latitude, v.longitude]);
+    positioned++;
+  });
+
+  (data.drones || []).forEach(d => {
+    if (d.last_lat != null && d.last_lon != null) {
+      const popup = '<b>' + esc(d.serial || d.key) + '</b><br>'
+        + esc(d.ua_type || d.signal_type) + '<br>'
+        + (d.altitude_m != null ? d.altitude_m.toFixed(0) + ' m' : '-') + '<br>'
+        + (d.speed_ms != null ? d.speed_ms.toFixed(1) + ' m/s' : '');
+      _mapMarker(d.last_lat, d.last_lon, _MAP_COLORS.drones, popup)
+        .addTo(_mapLayers.drones);
+      bounds.push([d.last_lat, d.last_lon]);
+      positioned++;
+    }
+    if (d.op_lat != null && d.op_lon != null) {
+      const popup = '<b>Operator</b><br>' + esc(d.serial || d.key);
+      _mapMarker(d.op_lat, d.op_lon, _MAP_COLORS.operators, popup)
+        .addTo(_mapLayers.operators);
+      bounds.push([d.op_lat, d.op_lon]);
+      positioned++;
+    }
+  });
+
+  // Summary line
+  const el = document.getElementById('map-summary');
+  if (el) {
+    el.textContent = positioned > 0
+      ? positioned + ' position(s) on map (' + (data.aircraft.length) + ' aircraft, '
+          + (data.vessels.length) + ' vessels, ' + (data.drones.length) + ' drones)'
+      : 'no GPS positions in the current session — run a capture with GPS, or wait for RemoteID / ADS-B / AIS';
+  }
+
+  // On first load, fit to data if we have any
+  if (!_map._hasFit && bounds.length) {
+    _map.fitBounds(bounds, {padding: [40, 40], maxZoom: 12});
+    _map._hasFit = true;
+  }
+}
+
+function mapFitAll() {
+  if (!_map) return;
+  const bounds = [];
+  for (const g of Object.values(_mapLayers)) {
+    if (!g) continue;
+    g.eachLayer(m => {
+      const ll = m.getLatLng();
+      bounds.push([ll.lat, ll.lng]);
+    });
+  }
+  if (bounds.length) _map.fitBounds(bounds, {padding: [40, 40], maxZoom: 14});
+}
+
+// Auto-refresh the Map tab on the same cadence as category tabs
+setInterval(() => {
+  if (_selectedSession) return;
+  if (document.hidden) return;
+  const activeBtn = document.querySelector('.tab-btn.active');
+  if (activeBtn && activeBtn.dataset.tab === 'map') loadMap();
 }, 3000);
 
 // Session dropdown: initial load + change handler + periodic refresh so
