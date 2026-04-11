@@ -55,16 +55,17 @@ The web dashboard can run in two modes:
 Detections are grouped into real-world category tabs rather than a flat signal-type list:
 
 - **Live** — per-category overview grid (total count, unique count, last-seen) + recent events feed
+- **Map** — Leaflet canvas showing Aircraft (green) / Vessels (blue) / Drones (red) / Operators (orange) positions over OpenStreetMap. Four layer checkboxes, Fit All button, auto-fit on first load, persistent zoom/pan across tab switches. Leaflet 1.9.4 is vendored into `web/static/` — no CDN, no marker PNGs (uses `L.circleMarker` for pure-SVG markers)
 - **Voice** — PMR446 / dPMR / 70cm / MarineVHF / 2m / FRS / FM_voice transmissions with inline transcript + audio playback
 - **Drones** — RemoteID, RemoteID-operator, DroneCtrl, DroneVideo grouped by drone serial or frequency with GPS + operator position
 - **Aircraft** — ADS-B flights by ICAO with callsign, altitude, speed, heading, position
 - **Vessels** — AIS by MMSI with name, nav status, speed, course, position
 - **Vehicles** — TPMS by sensor_id (pressure/temperature), keyfob by data_hex
 - **Cellular** — GSM / LTE uplink activity per channel (wildcard-matched, so new LTE subtypes appear automatically)
-- **Devices** — WiFi APs (physical-AP grouping across 2.4/5 GHz radios + associated clients), WiFi Clients, BLE
+- **Devices** — WiFi APs (physical-AP grouping across 2.4/5 GHz radios + associated clients), WiFi Clients, BLE. Both client tables show an RSSI column (real dBm from HCI / scapy, color-coded by proximity). The BLE persona loader surfaces AirTag and Find My accessory classification (including "AirTag (lost)" for separated mode) via `parsers/ble/apple_continuity.py`'s Continuity 0x12 profiling.
 - **Other** — ISM, LoRa, POCSAG, and anything unclassified
 
-Each category tab runs a SQL query against the currently-tailed `.db` with a configurable time window (default 6 h, capped at 7 days via `?window=<hours>`), and auto-refreshes every 3 s while visible. A **Session** dropdown in the header lets you switch category tabs to a historical `.db` for post-hoc browsing; Live / Log / Timeline / Devices always reflect the active session.
+Each category tab runs a SQL query against every `.db` file in the output directory with a configurable time window (default 6 h, capped at 7 days via `?window=<hours>`), and auto-refreshes every 3 s while visible. The multi-DB union is important because standalone scanner subprocesses (`sdr.py pmr`, `adsb`, `ais`, etc.) write to their own detection files separate from the main server file. A **Session** dropdown in the header lets you switch category tabs to a single historical `.db` for post-hoc browsing; Live / Log / Timeline / Devices always reflect the active session.
 
 ## Test Notes
 

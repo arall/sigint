@@ -101,9 +101,13 @@ sudo python3 sdr.py --tak --gps server configs/server_voice.json  # Voice record
 sudo python3 sdr.py server configs/server.json --web   # Server with web dashboard
 
 # Web dashboard (standalone, reads from output directory)
-# Category tabs: Voice / Drones / Aircraft / Vessels / Vehicles /
-# Cellular / Devices / Other — each with domain-specific columns.
-# Session dropdown in the header lets you browse historical .db files.
+# - Category tabs: Voice / Drones / Aircraft / Vessels / Vehicles /
+#   Cellular / Devices / Other, each with domain-specific columns.
+# - Map tab: Leaflet canvas showing Aircraft / Vessels / Drones /
+#   Operators positions on OpenStreetMap, auto-refreshing.
+# - Session dropdown in the header lets you browse historical .db files.
+# - Devices tab: WiFi APs / WiFi Clients / BLE sub-tabs with RSSI
+#   column and AirTag / Find My accessory detection.
 python3 sdr.py web                                     # Default port 8080
 python3 sdr.py web -p 3000                             # Custom port
 python3 sdr.py web -d /path/to/output                  # Custom output directory
@@ -142,7 +146,7 @@ python3 tests/hw/tx_pmr_loopback.py          # Full TX/RX loopback
 - **IMSI catcher detection** — Compare observed cell IDs against OpenCelliD, flag unknown towers.
 - **GPS jamming detection** — Monitor L1 band (1575.42 MHz) for abnormal power levels.
 - **Tracker detection (RF)** — Monitor 800-960 MHz for periodic GSM/LTE bursts from hidden GPS trackers.
-- **Tracker detection (BLE)** — Detect AirTags/Tiles by parsing Find My and Tile advertisement frames.
+- **Tracker detection (BLE)** — Tile advertisement parsing; AirTag/Find My classification is already implemented (see Devices tab). Missing: full anti-stalking detection across GPS positions per the IETF `draft-detecting-unwanted-location-trackers`.
 - **Doppler / TDOA** — Time-difference-of-arrival for more precise geolocation. Requires GPS PPS time sync.
 - **ML-based AMC** — ONNX Runtime + RadioML pre-trained model for deeper modulation classification on CPU.
 

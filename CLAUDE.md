@@ -90,9 +90,11 @@ src/
     __init__.py           # Public: run_web_server, start_web_server_background
     categories.py         # Signal-type → real-world category map
     loaders.py            # Device + category loaders (pure functions, dict in / list-of-dict out)
+    fetch.py              # SQL-backed category fetch with multi-DB unioning
+    sessions.py           # Session discovery + path-traversal-safe resolve
     tailer.py             # DBTailer: polls newest .db, builds live dashboard state
     server.py             # WebHandler HTTP routing + whitelisted static file serving
-    static/               # Real index.html / style.css / app.js (browser-debuggable)
+    static/               # Real index.html / style.css / app.js / leaflet.* (browser-debuggable)
 tests/
   data/                   # Shared test audio (voice WAVs, gTTS MP3s)
   run_tests.sh            # Test runner (--hw for hardware tests)
@@ -299,16 +301,125 @@ Detection logging is a per-session SQLite file (`<type>_YYYYMMDD_HHMMSS.db`) in 
 - **External consumers**: if something wants CSV, shell out to `sqlite3 out.db -csv -header "SELECT * FROM detections"` — the codebase no longer writes CSV itself.
 - **One file per node**: triangulation still composes across nodes by shipping the `.db` file per sensor, exactly as it did with CSVs — no federation / replication.
 
-### Devices Tab (web dashboard)
+### Web Dashboard Tabs
 
-The former "Personas" tab is now "Devices" with three sub-tabs: **WiFi APs**, **WiFi Clients**, **BLE** (`web/loaders.py` `_load_wifi_aps` / `_load_wifi_clients` / `_load_ble_devices`). Important semantics:
+The dashboard groups detections into real-world category tabs plus a
+few cross-cutting ones:
+
+**Live** — per-category overview grid (total count, unique, last-seen)
++ recent events feed. Click a category row to jump into its tab.
+
+**Map** — Leaflet canvas with four toggleable layers (Aircraft/green,
+Vessels/blue, Drones/red, Operators/orange). OSM public tiles by
+default (internet required for tiles; markers still render without).
+Leaflet 1.9.4 is vendored into `web/static/leaflet.js` +
+`leaflet.css` — no CDN dependency, no PNG marker images (uses
+`L.circleMarker` for pure SVG). Map instance is lazy-initialized on
+first tab activation and persists across tab switches. Auto-refreshes
+every 3s in LIVE mode. `invalidateSize` fires 100ms after init to
+handle the "hidden container" resize bug.
+
+**Voice / Drones / Aircraft / Vessels / Vehicles / Cellular / Other** —
+category tabs, one per row group. Each has domain-specific columns
+(ICAO/callsign for aircraft, MMSI/name for vessels, etc). Loaders
+are pure functions in `web/loaders.py` that take a list of detection
+dicts and return shaped rows — same interface whether the rows come
+from the in-memory deque or a SQL fetch.
+
+**Log** — raw detection table with filter-by-type. Auto-refreshes on
+each SSE tick while active.
+
+**Devices** — three sub-tabs: **WiFi APs**, **WiFi Clients**, **BLE**
+(`web/loaders.py` `_load_wifi_aps` / `_load_wifi_clients` /
+`_load_ble_devices`). Sources are the persistent JSON sidecars, not
+the detection DB.
+
+**Config / Timeline** — unchanged (capture status badges, per-minute
+activity chart).
+
+### Category fetch semantics
+
+`/api/cat/<name>` reads detections from disk via `web/fetch.py`:
+
+- **LIVE mode** (no `?session=` param): `fetch_detections_for_category_all`
+  unions across every `.db` file in the output directory, merges oldest-
+  first, caps to `limit`. This is the only way to see detections from
+  standalone scanner subprocesses — `sdr.py pmr` as a server child
+  writes its own `pmr446_*.db` separate from the main `server_*.db`,
+  and the Voice tab must see both. Gotcha: if you add a new scanner
+  that writes to its own DB, you get this automatically.
+- **Specific session** (`?session=<filename>` from the header dropdown):
+  stays on the single-file `fetch_detections_for_category` path so the
+  user's scope is respected.
+- **Time window**: `?window=<hours>` (default 6, capped 168 / 1wk).
+- **Other category**: the predicate is a *negation* — NOT IN any known
+  type AND NOT LIKE `GSM-UPLINK-%` / `LTE-UPLINK-%`. Keeps unknown
+  signal types visible without double-counting cellular.
+- **Cellular**: wildcard LIKE match so new LTE subtypes (e.g.
+  `LTE-UPLINK-BAND7`) don't fall through the stale IN-list.
+
+### Session switcher
+
+`/api/sessions` lists all `.db` files in the output dir with cached
+metadata (`web/sessions.py` `list_sessions`, `_metadata_cache` keyed
+by `(path, mtime)` so historical sessions are computed once). The
+newest file is flagged `live: true`.
+
+Header dropdown calls `loadSessions()` every 15s. When the user picks
+a historical session:
+  - Category tabs query that single file via `?session=<name>`
+  - Live / Log / Timeline / Devices still reflect the active session
+  - `resolve_session_path` path-traversal-guards the filename before
+    the fetch — rejects `..`, `/`, `\`, non-`.db` extensions, and
+    files outside the output dir.
+
+### Devices Tab semantics
+
+The former "Personas" tab is now "Devices" with three sub-tabs: **WiFi
+APs**, **WiFi Clients**, **BLE** (`web/loaders.py` `_load_wifi_aps` /
+`_load_wifi_clients` / `_load_ble_devices`). Important semantics:
 
 - **WiFi Clients are NOT APs**: the old flat tab labeled client probe personas with the SSIDs they were *probing for*, so a phone searching for "NSA Hotspot #14" looked like an AP broadcasting that SSID. The client rows are now labeled by `manufacturer + fingerprint` with a small `probing: "SSID"` badge.
 - **WiFi APs** come from the persisted `aps.json` (`utils/ap_db.py`) keyed by BSSID. The loader groups 2.4/5 GHz radios of the same physical AP using a conservative heuristic — same non-empty SSID AND matching first 5 MAC octets — so the typical vendor pattern of incrementing only the last octet between radios collapses into one row. Over-splitting is harmless; over-grouping is what you should avoid.
 - **AP client tracking**: every non-beacon Dot11 frame referencing a known BSSID contributes a client MAC to that AP's `clients` set. The dashboard shows the count with a hover tooltip listing MACs, or an em-dash with a "no clients seen yet" tooltip when the channel hop hasn't dwelled long enough to see data frames.
-- **BLE labels**: `_load_ble_devices` prefers the persisted `apple_device` (e.g. "AirPods Pro 2", "Apple Watch", "MacBook") over the generic manufacturer. The Apple Continuity parser (`parsers/ble/apple_continuity.py`) persists this via `PersonaDB.update_persona(apple_device=...)`, and decodes Proximity Pairing model IDs from an `APPLE_PROXIMITY_MODELS` table (AirPods 1–4, AirPods Pro 1/2, AirPods Max, Beats line). Note: Proximity Pairing model IDs are **big-endian**, not little-endian — there was a latent bug in the old decoder that byte-swapped them.
+- **RSSI column** (BLE + WiFi Clients): pulls `last_rssi` from the persona's most recent detection within 5 min via `DBTailer.get_active_sigs`. Value is real dBm from `power_db` — note that `get_active_sigs` used to store `snr_db` under the `rssi` key which was off by 100 (BLE noise floor is a nominal -100); fixed. Idle rows show `—` and sort to the bottom of a DESC sort via a `-999` sentinel in `_devSortValue`. Colour bands: ≥-55 green, ≥-70 yellow, ≥-85 orange, else red.
+- **BLE labels**: `_load_ble_devices` prefers the persisted `apple_device` (e.g. "AirPods Pro 2", "Apple Watch", "MacBook", **"AirTag (lost)"**) over the generic manufacturer. The Apple Continuity parser (`parsers/ble/apple_continuity.py`) persists this via `PersonaDB.update_persona(apple_device=...)`, and decodes Proximity Pairing model IDs from an `APPLE_PROXIMITY_MODELS` table (AirPods 1–4, AirPods Pro 1/2, AirPods Max, Beats line). Note: Proximity Pairing model IDs are **big-endian**, not little-endian — there was a latent bug in the old decoder that byte-swapped them.
 - **Row keys**: row identity uses `persona_key` (`dev_sig:ssid-set`) not `dev_sig`, because the DB can store multiple personas with the same `dev_sig` under different SSID sets. The per-subtab `_devExpanded` is a `Set` so multiple rows can be expanded simultaneously.
 - **Tooltips**: badges and capture-status pills use a central `TAG_TIPS` dictionary + `tipFor()` helper so adding a new badge only needs a dictionary entry, not per-call wiring. Tag-prefix matches (e.g. `lna `, `probing: `) handle dynamic values.
+
+### AirTag / Find My Accessory Classification
+
+Full Apple devices (iPhone/iPad/Mac/Watch) participate in Apple's
+offline-finding network by broadcasting Find My (Continuity type
+`0x12`) alongside Nearby Info (`0x10`). AirTags, third-party Find My
+accessories (Chipolo, Pebblebee), and idle AirPods Pro 2 cases
+broadcast **only** Find My. The parser uses this profile to label
+them:
+
+- Each persona tracks its `continuity_types` set (`0x07`, `0x10`,
+  `0x12`, …).
+- `_classify_findmy(continuity_types, findmy_mode)` returns a label
+  only if the set is *exactly* `{0x12}`:
+    - `findmy_mode == "separated"` → `"AirTag (lost)"` (≥22-byte
+      payload: the accessory is broadcasting the full rotating
+      public key because it hasn't seen its owner in >15 min)
+    - else → `"Find My accessory"` (short nearby-mode broadcast)
+- Priority: Nearby Info `0x10` > Proximity Pairing `0x07` > Find My
+  `0x12`. A tentative Find My label is always overridden by a later
+  `0x10`/`0x07` frame that carries a real `device_type`.
+- Label upgrades in place: a persona first seen in nearby mode
+  (`"Find My accessory"`) is upgraded to `"AirTag (lost)"` when a
+  separated-mode frame arrives on the same persona.
+
+The rotating public key is Apple's anti-stalking privacy feature —
+no passive scanner can follow a specific AirTag across rotations
+without breaking the Find My crypto. The label above is the most
+specific identification possible without the owner's private key.
+
+A proper anti-stalking detector (tracking an AirTag across multiple
+GPS positions over hours, alerting when one follows you) would build
+on top of this labeling layer. Not yet implemented; the IETF draft
+`draft-detecting-unwanted-location-trackers` specifies the flow.
 
 ### HackRF Queue & Latency
 
