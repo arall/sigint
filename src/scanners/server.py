@@ -394,15 +394,9 @@ class ServerOrchestrator:
         from utils.tak import TrailTracker
         self._trail_tracker = TrailTracker(tak_client=tak_client)
 
-        # Device correlator — real-time co-occurrence tracking
-        from utils.correlator import DeviceCorrelator
-        self._correlator = DeviceCorrelator(
-            window_s=config.get("correlator_window_s", 30.0),
-            threshold=config.get("correlator_threshold", 0.5),
-        )
-        self._correlator_export_interval = config.get(
-            "correlator_export_interval_s", 30.0)
-        self._last_correlator_export = 0.0
+        # (Correlations used to live in a long-running DeviceCorrelator
+        # instance here with a 30s export loop. They're computed on
+        # demand from SQL now — see web/fetch.py fetch_correlations.)
         self._persona_flush_interval = config.get(
             "persona_flush_interval_s", 30.0)
         self._last_persona_flush = 0.0
@@ -460,17 +454,15 @@ class ServerOrchestrator:
         if len(self._recent_events) > self._max_recent:
             self._recent_events.pop(0)
 
-        # Feed live heatmap, trail tracker, and correlator
+        # Feed live heatmap and trail tracker. Correlations are computed
+        # on demand from the detection log (see web/fetch.py
+        # fetch_correlations) so there's no in-memory correlator to feed.
         try:
             self._heatmap.on_detection(detection)
         except Exception:
             pass
         try:
             self._trail_tracker.on_detection(detection)
-        except Exception:
-            pass
-        try:
-            self._correlator.add_detection(detection)
         except Exception:
             pass
 
@@ -1111,7 +1103,6 @@ class ServerOrchestrator:
         try:
             while not self._stop_event.is_set():
                 self._poll_capture_health()
-                self._export_correlations_if_due()
                 self._flush_personas_if_due()
                 self._print_dashboard()
                 self._stop_event.wait(2.0)
@@ -1133,22 +1124,6 @@ class ServerOrchestrator:
                     flush()
                 except Exception:
                     pass
-
-    def _export_correlations_if_due(self):
-        """Periodically publish correlations.json during runtime."""
-        if self._correlator_export_interval <= 0:
-            return
-        now = time.time()
-        if now - self._last_correlator_export < self._correlator_export_interval:
-            return
-        self._last_correlator_export = now
-        try:
-            if self._correlator.device_count >= 2:
-                corr_path = os.path.join(
-                    str(self._output_dir), "correlations.json")
-                self._correlator.export_json(corr_path)
-        except Exception:
-            pass
 
     def _poll_capture_health(self):
         """Check capture sources for degraded state (e.g. HackRF queue drops)."""
@@ -1198,15 +1173,9 @@ class ServerOrchestrator:
             except Exception:
                 pass
 
-        # Export final heatmap and device correlations
+        # Export final heatmap (correlations are computed on demand from SQL)
         try:
             self._heatmap.flush()
-        except Exception:
-            pass
-        try:
-            if self._correlator.device_count >= 2:
-                corr_path = os.path.join(str(self._output_dir), "correlations.json")
-                self._correlator.export_json(corr_path)
         except Exception:
             pass
 

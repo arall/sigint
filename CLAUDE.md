@@ -289,7 +289,7 @@ The server orchestrator (`scanners/server.py`) tracks per-capture status (`pendi
 
 - **Standalone subprocess failures** (e.g. RTL-SDR claimed by DVB driver) mark the capture `failed` with the last stderr line
 - **HackRF queue drops** mark the HackRF capture `degraded` (the channelizer can't keep up with the sample rate)
-- **Persona DB** (`personas.json`, `personas_bt.json`), **AP DB** (`aps.json`), and **device correlation** (`correlations.json`) are exported every 30s during runtime, not just at shutdown — configurable via `persona_flush_interval_s` and `correlator_export_interval_s` in the server config
+- **Persona DB** and **AP DB** are flushed from the parsers to `devices.db` every 30s during runtime (configurable via `persona_flush_interval_s`). Device correlations are **not** exported — they're computed on demand from SQL by `web/fetch.py::fetch_correlations`, which unions every session `.db` in the output dir, so restarting the server no longer wipes the Correlations tab and there's no sidecar JSON to sync
 - The Web UI uses `DISPLAY_NAMES` from `scanners/server.py` to render parser/scanner identifiers as friendly labels (`apple_continuity` → "BLE Devices", `pmr` → "PMR446", `beacon` → "WiFi APs", etc.) so the user-facing UI never shows raw Python module names
 
 ### SQLite Detection Storage
@@ -362,6 +362,22 @@ the detection DB.
 
 **Config / Timeline** — unchanged (capture status badges, per-minute
 activity chart).
+
+**Column sorting** — every column on every tab is click-sortable.
+The Devices tab has its own bespoke sort state (`_devSort` keyed by
+sub-tab, because rows there carry opaque `last_rssi=null` sentinels
+that need the `-999` fallback in `_devSortValue`). Every other tab
+(Live categories + the category tabs + Log + Correlations) uses the
+generic helper in `web/static/app.js` — `setTable(tbodyId, rows,
+renderFn)` caches rows per tbody id and re-renders through the
+same renderer on header click. Three-click cycle: desc → asc →
+clear (source order). Routing lives in the single top-level
+`th.sortable` handler: `data-sub` → `devSortBy`, `data-tbl` →
+`tblSortBy`. Null values always sink to the bottom regardless of
+direction (sort-by-RSSI puts idle devices last whether ascending
+or descending). If you add a new column, add `class="sortable"` +
+`data-tbl="<tbody-id>"` + `data-key="<row-field>"` to the `<th>` —
+no renderer changes required.
 
 ### Category fetch semantics
 
@@ -522,7 +538,7 @@ Device movement trail visualization for ATAK in `utils/tak.py` (`TrailTracker` c
 Cross-signal-type device co-occurrence analysis in `utils/correlator.py`. Finds devices that consistently appear together.
 
 - **CLI**: `python3 sdr.py correlate output/*.db --window 30 --threshold 0.5`
-- **Live**: `DeviceCorrelator` in server orchestrator — accumulates during capture, exports `correlations.json` on shutdown
+- **Web UI**: the Correlations tab calls `/api/correlations` which computes the pairs + clusters on demand from every session `.db` via `web/fetch.py::fetch_correlations`. The server no longer runs a live `DeviceCorrelator` or writes `correlations.json` — stateless across restarts, cross-session pairs come for free, and `?window=` / `?threshold=` on the endpoint let the UI re-compute with different parameters without touching the server
 - Union-find clustering: groups co-occurring devices into clusters (e.g., "WiFi phone + BLE watch + TPMS car")
 - Time-binned co-occurrence matrix with configurable window and threshold
 - Cross-transport flag identifies correlations across different signal types

@@ -32,6 +32,7 @@ from .fetch import (
     fetch_active_bssids,
     fetch_active_dev_sigs,
     fetch_activity_histogram,
+    fetch_correlations,
     fetch_detections_for_category,
     fetch_detections_for_category_all,
     fetch_recent_detections,
@@ -244,21 +245,37 @@ class WebHandler(BaseHTTPRequestHandler):
         self._send_json({"sessions": sessions})
 
     def _serve_correlations(self):
-        """Read output/correlations.json published by the server's
-        live DeviceCorrelator on its 30s flush loop."""
-        path = os.path.join(self.server.output_dir, "correlations.json")
+        """Compute correlations on demand from every session .db in the
+        output dir. See web/fetch.py::fetch_correlations for rationale
+        (cross-session pairs, stateless across server restart, no
+        sidecar JSON to sync)."""
+        qs = parse_qs(urlparse(self.path).query)
         try:
-            with open(path, 'r') as f:
-                self._send_json(json.load(f))
-        except (FileNotFoundError, json.JSONDecodeError):
-            self._send_json({
+            window_s = float(qs.get("window", [30])[0])
+        except (ValueError, TypeError):
+            window_s = 30.0
+        try:
+            threshold = float(qs.get("threshold", [0.5])[0])
+        except (ValueError, TypeError):
+            threshold = 0.5
+        window_s = max(1.0, min(window_s, 3600.0))
+        threshold = max(0.0, min(threshold, 1.0))
+
+        try:
+            result = fetch_correlations(
+                self.server.output_dir,
+                window_s=window_s,
+                threshold=threshold,
+            )
+        except Exception as e:
+            result = {
                 "correlated_pairs": [],
                 "clusters": [],
                 "total_devices": 0,
                 "timestamp": None,
-                "note": "no correlations.json yet — the live correlator "
-                        "publishes every 30s via the server flush loop",
-            })
+                "error": f"{type(e).__name__}: {e}",
+            }
+        self._send_json(result)
 
     def _serve_devices(self, qs):
         out_dir = self.server.output_dir

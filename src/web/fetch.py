@@ -702,3 +702,48 @@ def fetch_active_bssids(output_dir, minutes=5, now=None):
                 "last_seen": r["timestamp"] or "",
             }
     return active
+
+
+def fetch_correlations(output_dir, window_s=30.0, threshold=0.5):
+    """Compute device correlations on demand from every session .db in
+    the output directory.
+
+    Replaces the old `correlations.json` sidecar pattern where the server
+    kept a live DeviceCorrelator in memory and wrote a snapshot every
+    30s. That had two problems: state was lost on server restart, and
+    the web UI saw a snapshot up to 30s stale even on refresh. Reading
+    fresh from the detection log gives cross-session correlations for
+    free and makes server restarts stateless.
+
+    Returns the same dict shape the old export_json() produced so the
+    UI renderer doesn't change:
+        {timestamp, window_s, threshold, total_devices,
+         correlated_pairs, clusters}
+    """
+    from utils.correlator import DeviceCorrelator
+    from datetime import datetime as _dt
+
+    c = DeviceCorrelator(window_s=window_s, threshold=threshold)
+    for db_path in _iter_db_paths(output_dir):
+        try:
+            c.load_db(db_path)
+        except Exception:
+            continue
+
+    try:
+        pairs = c.correlate()
+    except Exception:
+        pairs = []
+    try:
+        clusters = c.find_clusters()
+    except Exception:
+        clusters = []
+
+    return {
+        "timestamp": _dt.now().isoformat(),
+        "window_s": window_s,
+        "threshold": threshold,
+        "total_devices": c.device_count,
+        "correlated_pairs": pairs,
+        "clusters": clusters,
+    }
