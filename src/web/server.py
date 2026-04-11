@@ -28,7 +28,14 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 from .categories import CATEGORY_LABELS
-from .fetch import fetch_detections_for_category, fetch_detections_for_category_all
+from .fetch import (
+    fetch_active_bssids,
+    fetch_active_dev_sigs,
+    fetch_activity_histogram,
+    fetch_detections_for_category,
+    fetch_detections_for_category_all,
+    fetch_recent_detections,
+)
 from .loaders import (
     CATEGORY_LOADERS,
     _load_ble_devices,
@@ -152,12 +159,18 @@ class WebHandler(BaseHTTPRequestHandler):
         limit = min(int(qs.get("limit", [50])[0]), 200)
         offset = int(qs.get("offset", [0])[0])
         sig_type = qs.get("type", [None])[0]
-        self._send_json(
-            self.server.tailer.get_detections(limit, offset, sig_type))
+        self._send_json(fetch_recent_detections(
+            self.server.output_dir,
+            limit=limit,
+            offset=offset,
+            signal_type=sig_type,
+        ))
 
     def _serve_activity(self, qs):
         minutes = min(int(qs.get("minutes", [60])[0]), 180)
-        self._send_json(self.server.tailer.get_activity(minutes))
+        self._send_json(fetch_activity_histogram(
+            self.server.output_dir, minutes=minutes,
+        ))
 
     def _serve_config(self):
         info_path = os.path.join(self.server.output_dir, "server_info.json")
@@ -204,7 +217,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     window_seconds=window_seconds,
                 )
             except Exception:
-                detections = None
+                detections = []
         else:
             try:
                 detections = fetch_detections_for_category_all(
@@ -212,21 +225,14 @@ class WebHandler(BaseHTTPRequestHandler):
                     window_seconds=window_seconds,
                 )
             except Exception:
-                detections = None
+                detections = []
 
-        source = "db"
-        if detections is None:
-            source = "deque"
-            with tailer._lock:
-                detections = list(tailer._detections)
-
-        rows = loader(detections)
+        rows = loader(detections or [])
         self._send_json({
             "category": name,
             "label": CATEGORY_LABELS.get(name, name),
             "rows": rows,
             "total": len(rows),
-            "source": source,
             "session": session_resolved,
             "window_hours": window_hours,
         })
@@ -236,11 +242,10 @@ class WebHandler(BaseHTTPRequestHandler):
         self._send_json({"sessions": sessions})
 
     def _serve_devices(self, qs):
-        tailer = self.server.tailer
-        active_sigs = tailer.get_active_sigs(minutes=5)
-        active_bssids = tailer.get_active_bssids(minutes=5)
         out_dir = self.server.output_dir
-        wifi_aps = _load_wifi_aps(out_dir, active_bssids)
+        active_sigs = fetch_active_dev_sigs(out_dir, minutes=5)
+        active_bssids_map = fetch_active_bssids(out_dir, minutes=5)
+        wifi_aps = _load_wifi_aps(out_dir, active_bssids_map)
         wifi_clients = _load_wifi_clients(out_dir, active_sigs)
         ble = _load_ble_devices(out_dir, active_sigs)
         summary = {

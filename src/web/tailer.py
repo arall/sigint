@@ -1,37 +1,49 @@
 """
-DBTailer — background thread that watches the output directory for SQLite
-detection files, bulk-reads historical ones once, and tails the newest by
-rowid in read-only WAL mode. Each new row is fed through _process_row into
-per-type counters, a 50k detection ring buffer, a live "recent events"
-feed, and a per-minute activity histogram for the Timeline tab.
+DBTailer — tracks which SQLite detection file is currently "live" and
+keeps a refreshed Live-tab state snapshot for the SSE broadcaster.
 
-Also hosts:
-  _get_system_stats — /proc-based CPU/mem/temp/disk snapshot for the header
-  _extract_detail   — per-signal-type one-line summary string for the Log tab
-  _extract_uid      — per-signal-type unique identifier for dedup counting
+After the SQL-first migration, the tailer is no longer a detection
+state machine (it used to keep a 50k in-memory deque + per-type
+counters + activity histogram + recent events + BSSID map, all
+reconstructed by replaying every row). Those are all computed on
+demand by `web/fetch.py` from SQL now — so the tailer is a thin
+watcher plus a state cache:
+
+  - `_tailing_db` / `_db_name`   — newest .db in the output dir, for
+                                    the header "DB" display
+  - `_cached_state`              — result of `fetch_live_state(...)`,
+                                    refreshed on a background thread
+                                    every ~2s so SSE + /api/state are
+                                    sub-millisecond reads despite the
+                                    underlying query being ~200ms
+  - `_transcripts`               — whisper sidecar cache (mtime-keyed)
+
+Also hosts two stateless helpers used by `web/fetch.py`:
+
+  _extract_detail — per-signal-type one-line summary for Log/Live
+  _extract_uid    — per-signal-type unique identifier for uniques
+                    counting (SQL query in fetch._UNIQUES_SQL has
+                    to stay in sync with this)
 """
 
-import json
 import os
 import threading
 import time
-from collections import Counter, deque
 from datetime import datetime, timedelta
 
-from .categories import CATEGORY_LABELS, CATEGORY_ORDER, category_of
+
+STATE_REFRESH_INTERVAL_S = 2.0   # matches SSE cadence
 
 
 def _get_system_stats():
     """Read CPU, memory, and disk stats from /proc and os (Linux)."""
     stats = {}
     try:
-        # CPU load average (instantaneous, no state)
         load1, _, _ = os.getloadavg()
         cpu_count = os.cpu_count() or 1
         stats["load"] = round(load1, 2)
         stats["cpu_pct"] = round(load1 / cpu_count * 100, 1)
 
-        # Memory from /proc/meminfo
         with open('/proc/meminfo', 'r') as f:
             meminfo = {}
             for line in f:
@@ -45,14 +57,12 @@ def _get_system_stats():
         stats["mem_used_mb"] = round(used_kb / 1024)
         stats["mem_pct"] = round(used_kb / total_kb * 100, 1) if total_kb else 0
 
-        # CPU temperature (Raspberry Pi)
         try:
             with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
                 stats["cpu_temp"] = round(int(f.read().strip()) / 1000, 1)
         except (FileNotFoundError, ValueError):
             pass
 
-        # Disk usage for root partition
         st = os.statvfs('/')
         disk_total = st.f_blocks * st.f_frsize
         disk_free = st.f_bavail * st.f_frsize
@@ -60,48 +70,38 @@ def _get_system_stats():
         stats["disk_total_gb"] = round(disk_total / (1024**3), 1)
         stats["disk_used_gb"] = round(disk_used / (1024**3), 1)
         stats["disk_pct"] = round(disk_used / disk_total * 100, 1) if disk_total else 0
-
     except Exception:
         pass
     return stats
 
 
 class DBTailer:
-    """Watches the output directory for .db files, tails the latest by
-    rowid, and builds the live dashboard state."""
+    """Thin watcher for the output directory + Live-tab state cache."""
 
     def __init__(self, output_dir):
         self.output_dir = output_dir
         self._lock = threading.Lock()
         self._stop = threading.Event()
-
-        # State
-        self._detections = deque(maxlen=50000)
-        self._recent_bssids = {}  # bssid -> {"rssi": float, "last_seen": iso}
-        self._type_counts = Counter()
-        self._type_last_seen = {}
-        self._type_last_snr = {}
-        self._type_last_detail = {}
-        self._type_uniques = {}
-        self._recent_events = deque(maxlen=20)
-        self._activity_minutes = {}
-        self._db_name = ""
         self._start_time = time.time()
 
-        # DB tracking — which files we've already fully loaded, and the
-        # rowid cursor for the currently tailing file.
-        self._loaded_dbs = set()
+        # Current session tracking — used for the header "DB" display
+        # and (indirectly) to decide which file to tail.
         self._tailing_db = None
-        self._tail_last_id = 0
-        self._read_errors = set()   # paths we've already warned about
+        self._db_name = ""
 
-        # Transcript sidecar — lets detections appear immediately and get
-        # text back-filled later when the async transcriber finishes.
-        self._transcripts = {}      # basename(audio_file) -> transcript text
-        self._transcripts_mtime = 0
+        # Cached Live-tab state, refreshed by the background thread.
+        self._cached_state = {
+            "detection_count": 0,
+            "signals": [],
+            "categories": [],
+            "recent": [],
+        }
+
+        # Read-error deduplication (one warning per path)
+        self._read_errors = set()
 
     def start(self):
-        """Start background thread that tails DB files."""
+        """Start the background state-refresh thread."""
         t = threading.Thread(target=self._run, daemon=True, name="db-tailer")
         t.start()
         return t
@@ -110,385 +110,78 @@ class DBTailer:
         self._stop.set()
 
     def _find_all_dbs(self):
-        """Find all .db files in output_dir, sorted by mtime."""
+        """Return all .db files in output_dir sorted by mtime."""
         try:
             dbs = [
                 os.path.join(self.output_dir, f)
                 for f in os.listdir(self.output_dir)
-                if f.endswith('.db') and not f.endswith('-wal') and not f.endswith('-shm')
+                if f.endswith('.db')
+                and not f.endswith('-wal')
+                and not f.endswith('-shm')
             ]
             return sorted(dbs, key=os.path.getmtime)
         except OSError:
             return []
 
+    def _update_tailing_db(self):
+        """Pick the newest .db file and expose its basename."""
+        all_dbs = self._find_all_dbs()
+        latest = all_dbs[-1] if all_dbs else None
+        with self._lock:
+            if latest != self._tailing_db:
+                self._tailing_db = latest
+                self._db_name = os.path.basename(latest) if latest else ""
+
+    def _refresh_state(self):
+        """Recompute the cached Live-tab state from SQL. Cheap enough at
+        ~200ms on 10k-row DBs to run every 2s on the background thread."""
+        from .fetch import fetch_live_state
+        try:
+            new_state = fetch_live_state(self.output_dir)
+        except Exception as e:
+            self._warn_read_error("<live_state>", e)
+            return
+        with self._lock:
+            self._cached_state = new_state
+
+    def _run(self):
+        """Background loop: pick latest .db, refresh cached state."""
+        while not self._stop.is_set():
+            self._update_tailing_db()
+            self._refresh_state()
+            self._stop.wait(STATE_REFRESH_INTERVAL_S)
+
     def _warn_read_error(self, path, err):
-        """Print a single warning per .db path when we can't read it. The
-        usual cause is the output dir being owned by root with mode 0o755
-        while the web UI runs as a normal user — SQLite's WAL reader
-        needs to create a -shm sidecar which requires dir write access.
-        The fix is `chmod 777 output/` or (better) run the server with
-        the umask fix that landed in server.py.
-        """
+        """Print a single warning per read failure key. Dedup so we don't
+        flood the log."""
         if path in self._read_errors:
             return
         self._read_errors.add(path)
-        import os
-        name = os.path.basename(path)
-        print(f"[WEB] cannot read {name}: {err}")
-        print(f"[WEB]   usual cause: output dir not writable by the web user "
-              f"(SQLite WAL needs to create {name}-shm)")
-        print(f"[WEB]   fix: sudo chmod 777 {os.path.dirname(path) or '.'}  "
-              "or restart the server so it re-applies the umask patch")
+        print(f"[WEB] read error ({path}): {err}")
+        if isinstance(path, str) and path.endswith(".db"):
+            print(f"[WEB]   usual cause: output dir not writable by the web user "
+                  "(SQLite WAL needs to create sidecar files)")
+            print(f"[WEB]   fix: sudo chmod 777 {os.path.dirname(path) or '.'}  "
+                  "or restart the server so it re-applies the umask patch")
 
-    def _read_full_db(self, path):
-        """Read every row from a historical DB file once."""
-        try:
-            from utils import db as _db
-            conn = _db.connect(path, readonly=True)
-        except Exception as e:
-            self._warn_read_error(path, e)
-            return
-        try:
-            for row in _db.iter_detections(conn):
-                self._process_row(_db.row_to_dict(row))
-        except Exception as e:
-            self._warn_read_error(path, e)
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    def _tail_db(self, path):
-        """Poll the latest DB for rows with id > last seen and feed them."""
-        try:
-            from utils import db as _db
-            conn = _db.connect(path, readonly=True)
-        except Exception as e:
-            self._warn_read_error(path, e)
-            return
-        try:
-            rows = list(_db.iter_detections(conn, since_rowid=self._tail_last_id))
-            for row in rows:
-                self._process_row(_db.row_to_dict(row))
-                if row["id"] > self._tail_last_id:
-                    self._tail_last_id = row["id"]
-        except Exception as e:
-            self._warn_read_error(path, e)
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    def _run(self):
-        """Background loop: read any new DB files, tail the latest for new rows."""
-        self._poll_transcripts()
-        while not self._stop.is_set():
-            all_dbs = self._find_all_dbs()
-
-            # Read any historical DB files we haven't seen yet, EXCEPT the
-            # latest one (which we'll tail instead to pick up live writes).
-            latest = all_dbs[-1] if all_dbs else None
-            for db_path in all_dbs:
-                if db_path in self._loaded_dbs:
-                    continue
-                if db_path == latest:
-                    continue  # will tail from rowid 0 below
-                self._read_full_db(db_path)
-                self._loaded_dbs.add(db_path)
-
-            # Tail the latest DB for new rows
-            if latest:
-                if self._tailing_db != latest:
-                    self._tailing_db = latest
-                    self._tail_last_id = 0
-                    self._db_name = os.path.basename(latest)
-                self._tail_db(latest)
-
-            self._poll_transcripts()
-            self._stop.wait(1.0)
-
-    def _poll_transcripts(self):
-        """Reload transcripts.json if it changed and back-fill detections."""
-        path = os.path.join(self.output_dir, "transcripts.json")
-        try:
-            mtime = os.path.getmtime(path)
-        except OSError:
-            return
-        if mtime == self._transcripts_mtime:
-            return
-        try:
-            with open(path, "r") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return
-        except (OSError, json.JSONDecodeError):
-            return
-        self._transcripts_mtime = mtime
-
-        new_keys = {k: v for k, v in data.items() if self._transcripts.get(k) != v}
-        self._transcripts = data
-        if not new_keys:
-            return
-
-        with self._lock:
-            for d in self._detections:
-                af = d.get("audio_file")
-                if not af:
-                    continue
-                t = new_keys.get(af)
-                if t and d.get("transcript") != t:
-                    d["transcript"] = t
-                    sig = d.get("signal_type", "")
-                    if sig in ("PMR446", "dPMR", "70cm", "MarineVHF",
-                               "2m", "FRS", "FM_voice"):
-                        d["detail"] = f'"{t[:60]}"'
-                        self._type_last_detail[sig] = d["detail"]
-
-    def _process_row(self, row):
-        """Process a single detection row into internal state."""
-        sig = row.get("signal_type", "")
-        if not sig:
-            return
-
-        try:
-            snr = float(row.get("snr_db", 0))
-        except (ValueError, TypeError):
-            snr = 0
-        try:
-            power_db = float(row.get("power_db", 0))
-        except (ValueError, TypeError):
-            power_db = 0
-        try:
-            freq = float(row.get("frequency_hz", 0))
-        except (ValueError, TypeError):
-            freq = 0
-        try:
-            meta = json.loads(row.get("metadata", "")) if row.get("metadata") else {}
-        except (json.JSONDecodeError, TypeError):
-            meta = {}
-
-        ts = row.get("timestamp", "")
-        ch = row.get("channel", "")
-        audio_file = row.get("audio_file", "") or None
-        transcript = meta.get("transcript")
-        if audio_file and not transcript:
-            sidecar = self._transcripts.get(audio_file)
-            if sidecar:
-                transcript = sidecar
-                meta["transcript"] = sidecar
-        detail = _extract_detail(sig, ch, meta)
-
-        with self._lock:
-            self._type_counts[sig] += 1
-
-            ts_short = ""
-            if "T" in ts:
-                ts_short = ts.split("T")[1].split(".")[0]
-            self._type_last_seen[sig] = ts_short
-
-            if snr > 0:
-                self._type_last_snr[sig] = snr
-            if detail:
-                self._type_last_detail[sig] = detail
-
-            if sig == "WiFi-AP":
-                bssid = meta.get("bssid") or row.get("device_id", "")
-                if bssid:
-                    self._recent_bssids[bssid] = {
-                        "rssi": power_db if power_db else None,
-                        "last_seen": ts,
-                    }
-
-            uid = _extract_uid(sig, row, meta)
-            if uid:
-                if sig not in self._type_uniques:
-                    self._type_uniques[sig] = set()
-                self._type_uniques[sig].add(uid)
-
-            try:
-                lat = float(row.get("latitude") or 0) or None
-            except (ValueError, TypeError):
-                lat = None
-            try:
-                lon = float(row.get("longitude") or 0) or None
-            except (ValueError, TypeError):
-                lon = None
-            self._detections.append({
-                "timestamp": ts,
-                "signal_type": sig,
-                "category": category_of(sig),
-                "frequency_mhz": round(freq / 1e6, 4) if freq else 0,
-                "channel": ch,
-                "snr_db": round(snr, 1) if snr > 0 else None,
-                "power_db": power_db if power_db else None,
-                "audio_file": audio_file if audio_file else None,
-                "detail": detail,
-                "transcript": transcript,
-                "dev_sig": meta.get("dev_sig", ""),
-                "apple_device": meta.get("apple_device", ""),
-                "device_id": row.get("device_id", "") or meta.get("bssid", ""),
-                "latitude": lat,
-                "longitude": lon,
-                "meta": meta,
-            })
-
-            freq_mhz = freq / 1e6 if freq else 0
-            line = (
-                f"{ts_short}  {sig:12s} {ch:6s}  "
-                f"{freq_mhz:8.3f} MHz  {snr:5.1f} dB  {detail}"
-            )
-            self._recent_events.append((sig, line))
-
-            minute_key = ts[:16] if len(ts) >= 16 else ""
-            if minute_key:
-                if minute_key not in self._activity_minutes:
-                    self._activity_minutes[minute_key] = Counter()
-                    if len(self._activity_minutes) > 180:
-                        cutoff = (datetime.now() - timedelta(hours=2)).strftime(
-                            "%Y-%m-%dT%H:%M")
-                        self._activity_minutes = {
-                            k: v for k, v in self._activity_minutes.items()
-                            if k >= cutoff
-                        }
-                self._activity_minutes[minute_key][sig] += 1
+    # --- public API ---
 
     def get_state(self):
-        """Return dashboard summary state."""
+        """Return the cached dashboard state merged with live counters
+        (time, uptime, db filename, /proc snapshot). Sub-millisecond
+        because everything is in-memory; the real work happens on the
+        background refresh thread."""
         uptime = timedelta(seconds=int(time.time() - self._start_time))
-        now = datetime.now().strftime("%H:%M:%S")
-
-        type_order = [
-            "PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS",
-            "RemoteID", "DroneCtrl",
-            "keyfob", "tpms", "lora", "ISM",
-            "ADS-B",
-            "GSM-UPLINK-GSM-900", "GSM-UPLINK-GSM-850",
-            "pocsag",
-            "BLE-Adv", "WiFi-Probe",
-        ]
-
         with self._lock:
-            seen = set(self._type_counts.keys())
-            all_types = [t for t in type_order if t in seen]
-            all_types += sorted(seen - set(type_order))
-
-            signals = []
-            for sig in all_types:
-                signals.append({
-                    "type": sig,
-                    "category": category_of(sig),
-                    "count": self._type_counts.get(sig, 0),
-                    "uniques": len(self._type_uniques.get(sig, set())),
-                    "last_seen": self._type_last_seen.get(sig),
-                    "snr": self._type_last_snr.get(sig),
-                    "detail": self._type_last_detail.get(sig, ""),
-                })
-
-            # Roll signals up into category summary rows for the Live tab
-            cat_counts = Counter()
-            cat_uniques = {}
-            cat_last_seen = {}
-            cat_types = {}
-            for s in signals:
-                c = s["category"]
-                cat_counts[c] += s["count"]
-                cat_uniques.setdefault(c, 0)
-                cat_uniques[c] += s["uniques"]
-                prev_ls = cat_last_seen.get(c, "")
-                if s["last_seen"] and s["last_seen"] > prev_ls:
-                    cat_last_seen[c] = s["last_seen"]
-                cat_types.setdefault(c, []).append(s["type"])
-            categories = []
-            for c in CATEGORY_ORDER:
-                if cat_counts.get(c, 0) == 0:
-                    continue
-                categories.append({
-                    "id": c,
-                    "label": CATEGORY_LABELS[c],
-                    "count": cat_counts.get(c, 0),
-                    "uniques": cat_uniques.get(c, 0),
-                    "last_seen": cat_last_seen.get(c, ""),
-                    "types": cat_types.get(c, []),
-                })
-
-            recent = [
-                {"type": sig, "line": line}
-                for sig, line in self._recent_events
-            ]
-
-            total = sum(self._type_counts.values())
-
-        return {
-            "time": now,
-            "uptime": str(uptime),
-            "detection_count": total,
-            "gps": None,
-            "db": self._db_name,
-            "captures": [],
-            "signals": signals,
-            "categories": categories,
-            "recent": recent,
-            "system": _get_system_stats(),
-        }
-
-    def get_detections(self, limit=50, offset=0, signal_type=None):
-        """Return recent detections, newest first."""
-        with self._lock:
-            buf = list(reversed(self._detections))
-        if signal_type:
-            buf = [d for d in buf if d["signal_type"] == signal_type]
-        return buf[offset:offset + limit]
-
-    def get_activity(self, minutes=60):
-        """Return per-minute detection counts."""
-        now = datetime.now()
-        result = []
-        with self._lock:
-            for i in range(minutes - 1, -1, -1):
-                t = now - timedelta(minutes=i)
-                key = t.strftime("%Y-%m-%dT%H:%M")
-                counts = self._activity_minutes.get(key, Counter())
-                result.append({
-                    "minute": key,
-                    "counts": dict(counts),
-                    "total": sum(counts.values()),
-                })
-        return result
-
-    def get_active_bssids(self, minutes=5):
-        """Return dict of bssid → info for APs seen in the last N minutes."""
-        cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
-        active = {}
-        with self._lock:
-            for bssid, info in self._recent_bssids.items():
-                if info.get("last_seen", "") >= cutoff:
-                    active[bssid] = dict(info)
-        return active
-
-    def get_active_sigs(self, minutes=5):
-        """Return dict of dev_sig → info for devices seen in the last N minutes.
-
-        `rssi` is the real dBm RSSI from power_db (BLE HCI, WiFi scapy),
-        not snr_db — for BLE the noise floor is a nominal -100 dB so
-        snr_db = rssi + 100, which is not what the UI wants to show.
-        """
-        cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
-        active = {}
-        with self._lock:
-            for d in reversed(self._detections):
-                if d["timestamp"] < cutoff:
-                    break
-                sig = d.get("dev_sig")
-                if not sig:
-                    continue
-                if sig not in active:
-                    active[sig] = {
-                        "rssi": d.get("power_db"),
-                        "apple_device": d.get("apple_device", ""),
-                    }
-        return active
+            state = dict(self._cached_state)
+            db_name = self._db_name
+        state["time"] = datetime.now().strftime("%H:%M:%S")
+        state["uptime"] = str(uptime)
+        state["gps"] = None
+        state["db"] = db_name
+        state["captures"] = []
+        state["system"] = _get_system_stats()
+        return state
 
 
 def _extract_detail(sig, channel, meta):
@@ -592,7 +285,12 @@ def _extract_detail(sig, channel, meta):
 
 
 def _extract_uid(sig, row, meta):
-    """Extract unique device ID from a detection row."""
+    """Extract unique device ID from a detection row.
+
+    NOTE: kept in sync with `fetch._UNIQUES_SQL`. If you change the
+    keys here, update the CASE expression there (or vice versa) so the
+    Live tab's per-type unique counts stay consistent with the Log tab's.
+    """
     if sig == "BLE-Adv":
         return meta.get("persona_id") or row.get("channel", "")
     elif sig == "WiFi-Probe":

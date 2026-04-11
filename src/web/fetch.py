@@ -14,11 +14,13 @@ category loaders in `web/loaders.py` consume them with no changes.
 import json
 import os
 import time
+from collections import Counter
+from datetime import datetime, timedelta
 
 from utils import db as _db
 
-from .categories import CATEGORIES, category_of
-from .tailer import _extract_detail
+from .categories import CATEGORIES, CATEGORY_LABELS, CATEGORY_ORDER, category_of
+from .tailer import _extract_detail, _extract_uid
 
 
 DEFAULT_WINDOW_SECONDS = 6 * 3600   # 6 hours
@@ -238,3 +240,439 @@ def fetch_detections_for_category_all(
     if len(merged) > limit:
         merged = merged[-limit:]
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Generic SQL helpers — back the Log tab, Timeline tab, Live tab, Devices
+# tab active flag, and the SSE state stream. They all union across every
+# .db file in the output dir so a standalone scanner subprocess writing
+# to its own file (pmr446_*.db, adsb_*.db, …) doesn't hide detections
+# from the dashboard.
+# ---------------------------------------------------------------------------
+
+def _iter_db_paths(output_dir):
+    """Yield every .db file in `output_dir`, sorted alphabetically so the
+    order across calls is stable (makes debugging less confusing)."""
+    try:
+        names = sorted(
+            f for f in os.listdir(output_dir)
+            if f.endswith('.db')
+            and not f.endswith('-wal')
+            and not f.endswith('-shm')
+        )
+    except OSError:
+        return
+    for name in names:
+        yield os.path.join(output_dir, name)
+
+
+def fetch_recent_detections(
+    output_dir,
+    limit=50,
+    offset=0,
+    signal_type=None,
+    transcripts=None,
+):
+    """Newest-first detection rows for the Log tab. Unions across all .db
+    files in the output dir, applies optional type filter, overlays the
+    transcripts sidecar on voice rows."""
+    if transcripts is None:
+        transcripts = _load_transcripts(output_dir)
+
+    per_file_limit = limit + offset
+    merged = []
+    for path in _iter_db_paths(output_dir):
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            continue
+        try:
+            if signal_type:
+                sql = ("SELECT * FROM detections WHERE signal_type = ? "
+                       "ORDER BY id DESC LIMIT ?")
+                params = [signal_type, per_file_limit]
+            else:
+                sql = "SELECT * FROM detections ORDER BY id DESC LIMIT ?"
+                params = [per_file_limit]
+            for row in conn.execute(sql, params):
+                merged.append(_row_to_detection_dict(row, transcripts))
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    merged.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+    return merged[offset:offset + limit]
+
+
+def fetch_activity_histogram(output_dir, minutes=60, now=None):
+    """Per-minute detection counts over the last `minutes` wall-clock
+    minutes. Returns a list of
+      {"minute": "YYYY-MM-DDTHH:MM", "counts": {sig: n, ...}, "total": N}
+    with one entry per minute even when empty."""
+    now_ts = now if now is not None else time.time()
+    since_epoch = now_ts - minutes * 60
+
+    counts = {}   # minute_key → Counter()
+    for path in _iter_db_paths(output_dir):
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            continue
+        try:
+            rows = conn.execute(
+                "SELECT substr(timestamp, 1, 16) AS minute, signal_type, "
+                "       COUNT(*) AS n "
+                "FROM detections WHERE ts_epoch >= ? "
+                "GROUP BY minute, signal_type",
+                (since_epoch,),
+            ).fetchall()
+        except Exception:
+            rows = []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        for r in rows:
+            m = r["minute"] or ""
+            if not m:
+                continue
+            counts.setdefault(m, Counter())[r["signal_type"] or ""] += int(r["n"] or 0)
+
+    # Fill zero minutes so the chart is smooth
+    result = []
+    now_dt = datetime.fromtimestamp(now_ts)
+    for i in range(minutes - 1, -1, -1):
+        t = now_dt - timedelta(minutes=i)
+        key = t.strftime("%Y-%m-%dT%H:%M")
+        c = counts.get(key, Counter())
+        result.append({
+            "minute": key,
+            "counts": dict(c),
+            "total": sum(c.values()),
+        })
+    return result
+
+
+# Per-signal-type unique-id extraction, pushed into SQL via json_extract
+# so the Live tab's aggregate query stays fast (~10 ms per DB file) even
+# with tens of thousands of rows. The CASE expression mirrors the
+# _extract_uid Python helper in tailer.py — keep them in sync.
+_UNIQUES_SQL = """
+SELECT DISTINCT signal_type, uid FROM (
+    SELECT signal_type,
+        CASE signal_type
+            WHEN 'BLE-Adv'    THEN COALESCE(json_extract(metadata, '$.persona_id'), channel)
+            WHEN 'WiFi-Probe' THEN COALESCE(json_extract(metadata, '$.persona_id'), device_id)
+            WHEN 'WiFi-AP'    THEN COALESCE(json_extract(metadata, '$.bssid'), device_id)
+            WHEN 'ADS-B'      THEN COALESCE(json_extract(metadata, '$.icao'), channel)
+            WHEN 'keyfob'     THEN json_extract(metadata, '$.data_hex')
+            WHEN 'tpms'       THEN json_extract(metadata, '$.sensor_id')
+            WHEN 'lora'       THEN CAST(frequency_hz AS INTEGER)
+            WHEN 'PMR446'     THEN channel
+            WHEN 'dPMR'       THEN channel
+            WHEN '70cm'       THEN channel
+            WHEN 'MarineVHF'  THEN channel
+            WHEN '2m'         THEN channel
+            WHEN 'FRS'        THEN channel
+            ELSE NULL
+        END AS uid
+    FROM detections
+)
+WHERE uid IS NOT NULL AND uid != ''
+"""
+
+
+# Signal type display order for the Live tab (matches the old tailer).
+_LIVE_TYPE_ORDER = [
+    "PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS",
+    "RemoteID", "DroneCtrl",
+    "keyfob", "tpms", "lora", "ISM",
+    "ADS-B",
+    "GSM-UPLINK-GSM-900", "GSM-UPLINK-GSM-850",
+    "pocsag",
+    "BLE-Adv", "WiFi-Probe",
+]
+
+
+def fetch_live_state(output_dir, transcripts=None, recent_events_limit=20):
+    """Aggregated Live-tab state: per-type counts / uniques / last-seen /
+    last-SNR / last-detail, rolled into categories, plus a recent-events
+    feed. Replaces DBTailer.get_state's in-memory counters.
+
+    Computed on demand via SQL on every call. The heavy lifting is:
+      - SELECT signal_type, COUNT, MAX(snr), MAX(ts_epoch)  GROUP BY type
+      - SELECT signal_type, metadata  FROM latest row per type  (window fn)
+      - SELECT last N rows across all files for the Recent feed
+
+    On a 10k-row DB this is a few ms total — cheap enough to run on
+    every SSE tick. The work scales linearly with DB count (multi-session
+    dirs). Caller supplies `transcripts` if it already has them loaded.
+    """
+    if transcripts is None:
+        transcripts = _load_transcripts(output_dir)
+
+    per_type = {}        # sig → {count, last_ts, last_snr, last_detail_id, last_row}
+    unique_ids = {}      # sig → set of uid strings
+    recent_rows = []     # list of (timestamp, signal_type, line) tuples
+
+    total = 0
+    for path in _iter_db_paths(output_dir):
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            continue
+        try:
+            # Per-type aggregates in one query
+            for r in conn.execute(
+                "SELECT signal_type, COUNT(*) AS n, "
+                "       MAX(ts_epoch) AS last_epoch, "
+                "       MAX(timestamp) AS last_ts "
+                "FROM detections GROUP BY signal_type"
+            ).fetchall():
+                sig = r["signal_type"] or ""
+                agg = per_type.setdefault(sig, {
+                    "count": 0,
+                    "last_epoch": 0.0,
+                    "last_ts": "",
+                    "last_snr": None,
+                    "last_detail_row": None,
+                })
+                agg["count"] += int(r["n"] or 0)
+                le = float(r["last_epoch"] or 0)
+                if le > agg["last_epoch"]:
+                    agg["last_epoch"] = le
+                    agg["last_ts"] = r["last_ts"] or ""
+                total += int(r["n"] or 0)
+
+            # Fetch the newest row per signal_type for last_detail extraction
+            # and last_snr. Uses a window function, available in SQLite ≥3.25.
+            for r in conn.execute(
+                "SELECT * FROM ("
+                "  SELECT *, ROW_NUMBER() OVER ("
+                "    PARTITION BY signal_type ORDER BY id DESC"
+                "  ) AS rn FROM detections"
+                ") WHERE rn = 1"
+            ).fetchall():
+                sig = r["signal_type"] or ""
+                agg = per_type.get(sig)
+                if not agg:
+                    continue
+                # Keep the row with the highest ts_epoch across files
+                if r["ts_epoch"] and r["ts_epoch"] >= agg["last_epoch"] - 1e-9:
+                    agg["last_detail_row"] = r
+                    if r["snr_db"]:
+                        agg["last_snr"] = float(r["snr_db"])
+
+            # Uniques per type — _extract_uid's logic is per-type and
+            # depends on the metadata JSON. Push it into SQL via
+            # json_extract so we avoid the per-row Python round-trip.
+            # Keeps the query O(unique values) instead of O(total rows).
+            for r in conn.execute(_UNIQUES_SQL).fetchall():
+                sig = r["signal_type"] or ""
+                uid = r["uid"]
+                if uid is None or uid == "":
+                    continue
+                unique_ids.setdefault(sig, set()).add(str(uid))
+
+            # Recent events feed — newest N rows from this file
+            for r in conn.execute(
+                "SELECT timestamp, signal_type, channel, frequency_hz, snr_db, metadata "
+                "FROM detections ORDER BY id DESC LIMIT ?",
+                (recent_events_limit,),
+            ).fetchall():
+                ts = r["timestamp"] or ""
+                sig = r["signal_type"] or ""
+                ch = r["channel"] or ""
+                try:
+                    freq = float(r["frequency_hz"] or 0)
+                except (ValueError, TypeError):
+                    freq = 0
+                try:
+                    snr = float(r["snr_db"] or 0)
+                except (ValueError, TypeError):
+                    snr = 0
+                try:
+                    meta = json.loads(r["metadata"]) if r["metadata"] else {}
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                # Overlay transcript sidecar for voice rows
+                if meta.get("audio_file") and transcripts:
+                    pass  # audio_file is actually in the row, not meta
+                ts_short = ts.split("T")[1].split(".")[0] if "T" in ts else ""
+                detail = _extract_detail(sig, ch, meta)
+                line = (f"{ts_short}  {sig:12s} {ch:6s}  "
+                        f"{freq/1e6:8.3f} MHz  {snr:5.1f} dB  {detail}")
+                recent_rows.append((ts, sig, line))
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # Assemble signals list in the canonical display order
+    seen = set(per_type.keys())
+    ordered_types = [t for t in _LIVE_TYPE_ORDER if t in seen]
+    ordered_types += sorted(seen - set(_LIVE_TYPE_ORDER))
+
+    signals = []
+    for sig in ordered_types:
+        agg = per_type[sig]
+        row = agg["last_detail_row"]
+        if row is not None:
+            try:
+                meta = json.loads(row["metadata"]) if row["metadata"] else {}
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            # Overlay transcript sidecar on voice
+            audio = row["audio_file"]
+            if audio and transcripts and transcripts.get(audio):
+                meta["transcript"] = transcripts[audio]
+            detail = _extract_detail(sig, row["channel"] or "", meta)
+        else:
+            detail = ""
+        last_ts_short = ""
+        if "T" in agg["last_ts"]:
+            last_ts_short = agg["last_ts"].split("T")[1].split(".")[0]
+        signals.append({
+            "type": sig,
+            "category": category_of(sig),
+            "count": agg["count"],
+            "uniques": len(unique_ids.get(sig, set())),
+            "last_seen": last_ts_short,
+            "snr": round(agg["last_snr"], 1) if agg["last_snr"] else None,
+            "detail": detail,
+        })
+
+    # Roll up into category summary rows
+    cat_counts = Counter()
+    cat_uniques = {}
+    cat_last_seen = {}
+    cat_types = {}
+    for s in signals:
+        c = s["category"]
+        cat_counts[c] += s["count"]
+        cat_uniques.setdefault(c, 0)
+        cat_uniques[c] += s["uniques"]
+        prev = cat_last_seen.get(c, "")
+        if s["last_seen"] and s["last_seen"] > prev:
+            cat_last_seen[c] = s["last_seen"]
+        cat_types.setdefault(c, []).append(s["type"])
+    categories = [
+        {
+            "id": c,
+            "label": CATEGORY_LABELS[c],
+            "count": cat_counts.get(c, 0),
+            "uniques": cat_uniques.get(c, 0),
+            "last_seen": cat_last_seen.get(c, ""),
+            "types": cat_types.get(c, []),
+        }
+        for c in CATEGORY_ORDER if cat_counts.get(c, 0) > 0
+    ]
+
+    # Recent events: newest 20 across all files
+    recent_rows.sort(key=lambda x: x[0], reverse=True)
+    recent = [
+        {"type": sig, "line": line}
+        for _, sig, line in recent_rows[:recent_events_limit]
+    ]
+
+    return {
+        "detection_count": total,
+        "signals": signals,
+        "categories": categories,
+        "recent": recent,
+    }
+
+
+def fetch_active_dev_sigs(output_dir, minutes=5, now=None):
+    """Return {dev_sig: {rssi, apple_device}} for BLE / WiFi-probe personas
+    detected in the last N minutes. Drives the 'active' flag + last_rssi
+    on the Devices tab's BLE + WiFi Clients sub-tables."""
+    now_ts = now if now is not None else time.time()
+    since_epoch = now_ts - minutes * 60
+
+    active = {}
+    for path in _iter_db_paths(output_dir):
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            continue
+        try:
+            rows = conn.execute(
+                "SELECT power_db, metadata FROM detections "
+                "WHERE ts_epoch >= ? AND signal_type IN ('BLE-Adv', 'WiFi-Probe') "
+                "ORDER BY id DESC",
+                (since_epoch,),
+            ).fetchall()
+        except Exception:
+            rows = []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        for r in rows:
+            try:
+                meta = json.loads(r["metadata"]) if r["metadata"] else {}
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            dev_sig = meta.get("dev_sig")
+            if not dev_sig or dev_sig in active:
+                continue
+            active[dev_sig] = {
+                "rssi": r["power_db"] if r["power_db"] else None,
+                "apple_device": meta.get("apple_device", ""),
+            }
+    return active
+
+
+def fetch_active_bssids(output_dir, minutes=5, now=None):
+    """Return {bssid: {rssi, last_seen}} for WiFi APs seen in the last N
+    minutes. Drives the 'active' flag on the Devices tab's WiFi APs
+    sub-table."""
+    now_ts = now if now is not None else time.time()
+    since_epoch = now_ts - minutes * 60
+
+    active = {}
+    for path in _iter_db_paths(output_dir):
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            continue
+        try:
+            rows = conn.execute(
+                "SELECT power_db, device_id, timestamp, metadata "
+                "FROM detections "
+                "WHERE ts_epoch >= ? AND signal_type = 'WiFi-AP' "
+                "ORDER BY id DESC",
+                (since_epoch,),
+            ).fetchall()
+        except Exception:
+            rows = []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        for r in rows:
+            try:
+                meta = json.loads(r["metadata"]) if r["metadata"] else {}
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            bssid = meta.get("bssid") or (r["device_id"] or "")
+            if not bssid or bssid in active:
+                continue
+            active[bssid] = {
+                "rssi": r["power_db"] if r["power_db"] else None,
+                "last_seen": r["timestamp"] or "",
+            }
+    return active
