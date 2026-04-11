@@ -108,8 +108,8 @@ class WiFiScanner:
         sig.signal(sig.SIGINT, _signal_handler)
         sig.signal(sig.SIGTERM, _signal_handler)
 
-        csv_path = self.logger.start()
-        print(f"[*] Logging to: {csv_path}")
+        db_path = self.logger.start()
+        print(f"[*] Logging to: {db_path}")
         print(f"[*] Min RSSI: {self.probe_parser.min_rssi} dBm")
 
         try:

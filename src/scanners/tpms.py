@@ -177,8 +177,8 @@ class TPMSScanner:
                 print("\nSensor ID summary:")
                 for sid, count in sorted(sensor_ids.items(), key=lambda x: -x[1]):
                     print(f"  {sid}: {count} detections")
-            if logged_count > 0 and hasattr(self.logger, '_csv_path'):
-                print(f"Log file: {self.logger._csv_path}")
+            if logged_count > 0 and getattr(self.logger, "db_path", None):
+                print(f"Log file: {self.logger.db_path}")
 
 
 def main():

@@ -1,18 +1,19 @@
 """
 RSSI Triangulation Module
 
-Post-hoc multilateration from multi-node CSV detection logs.
-Takes 2+ CSV files from sensor nodes at known GPS positions, correlates
+Post-hoc multilateration from multi-node SQLite detection logs.
+Takes 2+ .db files from sensor nodes at known GPS positions, correlates
 detections of the same emitter by device ID or frequency, and estimates
 emitter position using log-distance path loss model.
 """
 
-import csv
 import json
 import math
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
+
+from utils import db as _db
 
 
 # Log-distance path loss defaults: (exponent n, RSSI at 1m in dB)
@@ -69,44 +70,47 @@ def offset_position(lat, lon, north_m, east_m):
     return lat + math.degrees(dlat), lon + math.degrees(dlon)
 
 
-def load_detections(csv_path):
-    """Load and parse a CSV detection log. Returns list of dicts."""
+def load_detections(db_path):
+    """Load and parse a .db detection log. Returns list of dicts."""
     detections = []
-    with open(csv_path) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            # Parse timestamp
-            try:
-                row["_ts"] = datetime.fromisoformat(row["timestamp"])
-            except (ValueError, KeyError):
+    conn = _db.connect(db_path, readonly=True)
+    try:
+        rows = [_db.row_to_dict(r) for r in _db.iter_detections(conn)]
+    finally:
+        conn.close()
+    for row in rows:
+        # Parse timestamp
+        try:
+            row["_ts"] = datetime.fromisoformat(row["timestamp"])
+        except (ValueError, KeyError, TypeError):
+            continue
+
+        # Parse coordinates
+        try:
+            lat = row.get("latitude", "")
+            lon = row.get("longitude", "")
+            if lat in ("", None) or lon in ("", None):
                 continue
+            row["_lat"] = float(lat)
+            row["_lon"] = float(lon)
+        except (ValueError, TypeError):
+            continue
 
-            # Parse coordinates
-            try:
-                lat = row.get("latitude", "")
-                lon = row.get("longitude", "")
-                if not lat or not lon:
-                    continue
-                row["_lat"] = float(lat)
-                row["_lon"] = float(lon)
-            except (ValueError, TypeError):
-                continue
+        # Parse power
+        try:
+            row["_power"] = float(row.get("power_db", 0))
+            row["_noise"] = float(row.get("noise_floor_db", 0))
+        except (ValueError, TypeError):
+            continue
 
-            # Parse power
-            try:
-                row["_power"] = float(row.get("power_db", 0))
-                row["_noise"] = float(row.get("noise_floor_db", 0))
-            except (ValueError, TypeError):
-                continue
+        # Parse metadata
+        try:
+            row["_meta"] = json.loads(row.get("metadata", "{}") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            row["_meta"] = {}
 
-            # Parse metadata
-            try:
-                row["_meta"] = json.loads(row.get("metadata", "{}") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                row["_meta"] = {}
-
-            row["_source_file"] = csv_path
-            detections.append(row)
+        row["_source_file"] = db_path
+        detections.append(row)
     return detections
 
 
@@ -453,11 +457,11 @@ def run_triangulation(args, tak_client=None):
     """Entry point called from sdr.py dispatch."""
     files = args.files
     if len(files) < 2:
-        print("Error: need at least 2 CSV files from different nodes")
+        print("Error: need at least 2 .db files from different nodes")
         return
 
     # Load all files
-    print(f"Loading {len(files)} CSV files...")
+    print(f"Loading {len(files)} detection DBs...")
     file_data = []
     for path in files:
         dets = load_detections(path)
@@ -495,7 +499,7 @@ def run_triangulation(args, tak_client=None):
 
     if not groups:
         print("No correlated detections found across nodes.")
-        print("Tips: increase --time-window, check that CSVs have overlapping signals")
+        print("Tips: increase --time-window, check that DBs have overlapping signals")
         return
 
     print(f"Found {len(groups)} correlated signal(s)\n")
@@ -528,34 +532,5 @@ def run_triangulation(args, tak_client=None):
     print(f"\n{'=' * 70}")
     print(f"Total: {len(results)} emitter(s) triangulated from {len(file_data)} nodes")
 
-    # CSV output
-    csv_out = getattr(args, "csv_out", None)
-    if csv_out:
-        _write_results_csv(csv_out, results)
-        print(f"Results written to: {csv_out}")
-
     if tak_client:
         tak_client.close()
-
-
-def _write_results_csv(path, results):
-    """Write triangulation results to CSV."""
-    with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "signal_type", "match_key", "frequency_hz",
-            "estimated_lat", "estimated_lon", "error_radius_m",
-            "num_nodes", "method", "node_details",
-        ])
-        for group, pos in results:
-            writer.writerow([
-                group["signal_type"],
-                group["key"],
-                group["frequency_hz"],
-                f"{pos['lat']:.8f}",
-                f"{pos['lon']:.8f}",
-                f"{pos['error_radius_m']:.1f}",
-                pos["num_nodes"],
-                pos["method"],
-                json.dumps(pos["distances"]),
-            ])

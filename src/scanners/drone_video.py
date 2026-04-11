@@ -3,7 +3,7 @@ Drone Video Link Scanner — detects drone video downlinks on 2.4/5.8 GHz.
 
 Uses HackRF for 20 MHz wideband IQ capture to detect OFDM video
 transmissions from drones (DJI O4, OcuSync, etc.). Reports bandwidth,
-duty cycle, and confidence to CSV/TAK.
+duty cycle, and confidence to the detection log + TAK.
 
 Requires: HackRF One hardware + hackrf_transfer.
 """

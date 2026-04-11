@@ -6,7 +6,7 @@ keyfobs, door sensors, thermometers, smoke detectors, smart home devices, etc.
 Unknown signals (not decoded by rtl_433) are analyzed with native FSK/OOK
 detection to identify car keyfobs and other unrecognized transmitters.
 
-Logs all decoded transmissions to CSV with device model, ID, and full metadata.
+Logs all decoded transmissions with device model, ID, and full metadata.
 
 Requires: rtl_433 (apt install rtl-433 or build from github.com/merbanan/rtl_433)
 """

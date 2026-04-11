@@ -1,7 +1,7 @@
 """
 RF Activity Heatmap Generator
 
-Generates spatial density heatmaps from detection CSV logs.
+Generates spatial density heatmaps from detection logs.
 Output: KML GroundOverlay with PNG tile for ATAK map display.
 
 Usage:
@@ -10,12 +10,11 @@ Usage:
     gen.add_detection(lat, lon, power_db)
     gen.export_kml("output/heatmap.kml")
 
-    # Or from CSV:
-    gen = HeatmapGenerator.from_csv("output/server_20250101_120000.csv")
+    # Or from a detection DB:
+    gen = HeatmapGenerator.from_db("output/server_20250101_120000.db")
     gen.export_kml("output/heatmap.kml")
 """
 
-import csv
 import math
 import os
 import struct
@@ -23,6 +22,8 @@ import zlib
 from collections import defaultdict
 from datetime import datetime
 from typing import List, Optional, Tuple
+
+from utils import db as _db
 
 
 # Grid resolution (degrees) — ~100m at mid-latitudes
@@ -133,29 +134,27 @@ class HeatmapGenerator:
             self._bounds[3] = max(self._bounds[3], lon)
 
     @classmethod
-    def from_csv(cls, csv_path: str, resolution: float = DEFAULT_GRID_RESOLUTION,
-                 signal_types: Optional[List[str]] = None) -> "HeatmapGenerator":
-        """Load detections from a CSV log file."""
+    def from_db(cls, db_path: str, resolution: float = DEFAULT_GRID_RESOLUTION,
+                signal_types: Optional[List[str]] = None) -> "HeatmapGenerator":
+        """Load detections from a .db log file."""
         gen = cls(resolution=resolution, signal_types=signal_types)
-
-        with open(csv_path, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                lat = row.get("latitude", "")
-                lon = row.get("longitude", "")
-                power = row.get("power_db", "0")
-                sig_type = row.get("signal_type", "")
-
-                if lat and lon and lat != "None" and lon != "None":
-                    try:
-                        gen.add_detection(
-                            float(lat), float(lon),
-                            float(power) if power else 0.0,
-                            sig_type,
-                        )
-                    except (ValueError, TypeError):
-                        continue
-
+        conn = _db.connect(db_path, readonly=True)
+        try:
+            for r in _db.iter_detections(conn):
+                lat = r["latitude"]
+                lon = r["longitude"]
+                if lat is None or lon is None:
+                    continue
+                try:
+                    gen.add_detection(
+                        float(lat), float(lon),
+                        float(r["power_db"] or 0),
+                        r["signal_type"] or "",
+                    )
+                except (ValueError, TypeError):
+                    continue
+        finally:
+            conn.close()
         return gen
 
     @property

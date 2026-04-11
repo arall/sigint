@@ -195,5 +195,5 @@ class KeyfobScanner:
             self.capture.stop()
             logged_count = self.logger.stop()
             print(f"\nScanner stopped. {logged_count} signals logged.")
-            if logged_count > 0 and hasattr(self.logger, '_csv_path'):
-                print(f"Log file: {self.logger._csv_path}")
+            if logged_count > 0 and getattr(self.logger, "db_path", None):
+                print(f"Log file: {self.logger.db_path}")

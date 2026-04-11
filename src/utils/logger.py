@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
 Signal Logger Module
-Captures and stores signal detections for later processing.
-Supports CSV output (and later API upload).
+Captures and stores signal detections in a per-session SQLite database
+(WAL mode) so multiple writers (parsers, scanners) and readers (web
+dashboard, triangulation) can share the same file safely.
 """
 
-import csv
 import os
 import threading
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from utils import db as _db
 
 
 @dataclass
@@ -64,24 +66,9 @@ class SignalDetection:
 
 class SignalLogger:
     """
-    Logs signal detections to CSV (and later to API).
+    Logs signal detections to a session SQLite database.
     Thread-safe for concurrent signal capture.
     """
-
-    CSV_HEADERS = [
-        "timestamp",
-        "signal_type",
-        "frequency_hz",
-        "power_db",
-        "noise_floor_db",
-        "snr_db",
-        "channel",
-        "latitude",
-        "longitude",
-        "device_id",
-        "audio_file",
-        "metadata",
-    ]
 
     def __init__(
         self,
@@ -90,15 +77,18 @@ class SignalLogger:
         device_id: Optional[str] = None,
         min_snr_db: float = 5.0,  # Minimum SNR to log (filter noise)
         gps=None,  # Optional GPSReader instance for auto lat/lon
+        db_path: Optional[str] = None,  # Reuse an existing .db (e.g. server-wide)
     ):
         """
         Initialize the signal logger.
 
         Args:
-            output_dir: Directory to store CSV files
+            output_dir: Directory to store the DB file
             signal_type: Type of signals being captured (used in filename)
             device_id: Identifier for this SDR device
             min_snr_db: Minimum SNR threshold to log a detection
+            db_path: Optional explicit path — if set, new session file is
+                not created and the logger appends to the given DB.
         """
         self.output_dir = Path(output_dir)
         self.signal_type = signal_type
@@ -108,48 +98,49 @@ class SignalLogger:
 
         self._lock = threading.Lock()
         self._running = False
-        self._csv_path = None
-        self._csv_file = None
-        self._csv_writer = None
+        self._db_path = Path(db_path) if db_path else None
+        self._conn = None
         self._detection_count = 0
         self.on_detection = None  # Optional callback: fn(SignalDetection) -> None
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_csv_path(self) -> Path:
-        """Generate CSV filename with timestamp."""
+    def _build_db_path(self) -> Path:
+        """Generate DB filename with timestamp (one file per session)."""
         date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return self.output_dir / f"{self.signal_type}_{date_str}.csv"
+        return self.output_dir / f"{self.signal_type}_{date_str}.db"
+
+    @property
+    def db_path(self) -> Optional[Path]:
+        return self._db_path
 
     def start(self) -> str:
         """Start the logger and return the output file path."""
         if self._running:
-            return str(self._csv_path)
+            return str(self._db_path)
 
-        self._csv_path = self._get_csv_path()
-        self._csv_file = open(self._csv_path, "w", newline="")
-        self._csv_writer = csv.DictWriter(
-            self._csv_file, fieldnames=self.CSV_HEADERS)
-        self._csv_writer.writeheader()
-        self._csv_file.flush()
+        if self._db_path is None:
+            self._db_path = self._build_db_path()
 
+        self._conn = _db.connect(str(self._db_path))
         self._running = True
-        return str(self._csv_path)
+        return str(self._db_path)
 
     def stop(self) -> int:
         """Stop the logger and return total detections logged."""
         self._running = False
-
-        if self._csv_file:
-            self._csv_file.close()
-            self._csv_file = None
-
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
         return self._detection_count
 
     def log(self, detection: SignalDetection) -> bool:
         """
-        Log a signal detection immediately to CSV.
+        Log a signal detection immediately to the DB.
 
         Args:
             detection: The signal detection to log
@@ -169,7 +160,6 @@ class SignalLogger:
             if detection.latitude is None and detection.longitude is None and self.gps:
                 detection.latitude, detection.longitude = self.gps.position
 
-            # Write immediately (synchronous) for real-time logging
             self._write_detection_locked(detection)
 
             if self.on_detection:
@@ -194,9 +184,6 @@ class SignalLogger:
     ) -> bool:
         """
         Convenience method to log a signal without creating SignalDetection manually.
-
-        Returns:
-            True if detection was logged, False if below SNR threshold
         """
         detection = SignalDetection.create(
             signal_type=signal_type,
@@ -213,32 +200,16 @@ class SignalLogger:
         return self.log(detection)
 
     def _write_detection_locked(self, detection: SignalDetection):
-        """Write a single detection to CSV. Caller must hold self._lock."""
-        if self._csv_writer is None:
+        """Write a single detection to SQLite. Caller must hold self._lock."""
+        if self._conn is None:
             return
-
-        self._csv_writer.writerow(asdict(detection))
-        self._csv_file.flush()
-        os.fsync(self._csv_file.fileno())
+        _db.insert_detection(self._conn, detection)
         self._detection_count += 1
 
     @property
     def detection_count(self) -> int:
         """Return the number of detections logged so far."""
         return self._detection_count
-
-    # Future API integration placeholder
-    def _upload_to_api(self, detection: SignalDetection) -> bool:
-        """
-        Upload detection to central API.
-        TODO: Implement when API is available.
-        """
-        # api_url = os.environ.get("SIGNAL_API_URL")
-        # if not api_url:
-        #     return False
-        # response = requests.post(f"{api_url}/detections", json=asdict(detection))
-        # return response.ok
-        return False
 
 
 # Convenience function for quick logging

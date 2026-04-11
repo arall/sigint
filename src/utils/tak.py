@@ -668,7 +668,7 @@ def setup_tak(config_dir: str, callsign: str = "SDR") -> Optional[TAKClient]:
         client.connect()
     except Exception as e:
         print(f"[TAK] Connection failed: {e}")
-        print("[TAK] Detections will be logged to CSV only.")
+        print("[TAK] Detections will be logged to the local DB only.")
         return None
 
     return client

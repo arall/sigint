@@ -70,7 +70,7 @@ Examples:
     parser.add_argument(
         "--wipe",
         action="store_true",
-        help="Delete all output data (CSVs, audio, personas, logs) before starting",
+        help="Delete all output data (DBs, audio, personas, logs) before starting",
     )
     parser.add_argument(
         "--device-id", "-d",
@@ -658,16 +658,16 @@ Examples:
         help="Delete all SDR markers from TAK Server",
     )
 
-    # Triangulation from multi-node CSV logs
+    # Triangulation from multi-node detection logs
     tri_parser = subparsers.add_parser(
         "triangulate",
         aliases=["tri"],
-        help="Triangulate emitter positions from multi-node CSV logs",
+        help="Triangulate emitter positions from multi-node detection logs",
     )
     tri_parser.add_argument(
         "files",
         nargs="+",
-        help="CSV log files from different sensor nodes (minimum 2)",
+        help="Detection log files (.db) from different sensor nodes (minimum 2)",
     )
     tri_parser.add_argument(
         "--time-window", "-t",
@@ -700,22 +700,16 @@ Examples:
         action="store_true",
         help="Use SNR instead of raw power (better when nodes have different gains)",
     )
-    tri_parser.add_argument(
-        "--csv",
-        metavar="FILE",
-        dest="csv_out",
-        help="Write results to CSV file",
-    )
 
-    # Heatmap from CSV logs
+    # Heatmap from detection logs
     heatmap_parser = subparsers.add_parser(
         "heatmap",
-        help="Generate RF activity heatmap from CSV detection logs",
+        help="Generate RF activity heatmap from detection logs",
     )
     heatmap_parser.add_argument(
         "files",
         nargs="+",
-        help="Detection CSV files",
+        help="Detection log files (.db)",
     )
     heatmap_parser.add_argument(
         "--resolution", "-r",
@@ -731,7 +725,7 @@ Examples:
         help="Filter to specific signal types (can repeat, default: all)",
     )
 
-    # Device correlation from CSV logs
+    # Device correlation from detection logs
     corr_parser = subparsers.add_parser(
         "correlate",
         aliases=["corr"],
@@ -740,7 +734,7 @@ Examples:
     corr_parser.add_argument(
         "files",
         nargs="+",
-        help="Detection CSV files",
+        help="Detection log files (.db)",
     )
     corr_parser.add_argument(
         "--window", "-w",
@@ -976,21 +970,21 @@ def _dispatch_scanner(args):
         )
         for f in args.files:
             print(f"Loading: {f}")
-            csv_gen = HeatmapGenerator.from_csv(
+            sub = HeatmapGenerator.from_db(
                 f, resolution=args.resolution, signal_types=args.signal_types)
             # Merge grids
-            for key, cell in csv_gen._grid.items():
+            for key, cell in sub._grid.items():
                 gen._grid[key]["count"] += cell["count"]
                 gen._grid[key]["total_power"] += cell["total_power"]
                 gen._grid[key]["max_power"] = max(gen._grid[key]["max_power"], cell["max_power"])
-            if csv_gen._bounds:
+            if sub._bounds:
                 if gen._bounds is None:
-                    gen._bounds = list(csv_gen._bounds)
+                    gen._bounds = list(sub._bounds)
                 else:
-                    gen._bounds[0] = min(gen._bounds[0], csv_gen._bounds[0])
-                    gen._bounds[1] = min(gen._bounds[1], csv_gen._bounds[1])
-                    gen._bounds[2] = max(gen._bounds[2], csv_gen._bounds[2])
-                    gen._bounds[3] = max(gen._bounds[3], csv_gen._bounds[3])
+                    gen._bounds[0] = min(gen._bounds[0], sub._bounds[0])
+                    gen._bounds[1] = min(gen._bounds[1], sub._bounds[1])
+                    gen._bounds[2] = max(gen._bounds[2], sub._bounds[2])
+                    gen._bounds[3] = max(gen._bounds[3], sub._bounds[3])
         kml_path = os.path.join(args.output, "heatmap.kml")
         gen.export_kml(kml_path)
         return
@@ -1001,7 +995,7 @@ def _dispatch_scanner(args):
             window_s=args.window, threshold=args.threshold)
         for f in args.files:
             print(f"Loading: {f}")
-            correlator.load_csv(f)
+            correlator.load_db(f)
         correlator.print_report()
         if args.json_out:
             correlator.export_json(args.json_out)
@@ -1347,9 +1341,9 @@ def _dispatch_scanner(args):
 
 def _run_tak_clear(args):
     """Delete all SDR markers from TAK Server."""
-    import csv
     import glob
     from utils.tak import setup_tak, delete_cot
+    from utils import db as _db
 
     config_dir = args.tak_dir
     client = setup_tak(config_dir, callsign=args.device_id)
@@ -1357,27 +1351,28 @@ def _run_tak_clear(args):
         print("[TAK] Connection failed")
         sys.exit(1)
 
-    # Collect all UIDs from CSV logs
+    # Collect all UIDs from detection logs
     uids = set()
-    csv_files = glob.glob(os.path.join(args.output, "*.csv"))
-    for csv_file in csv_files:
+    for path in glob.glob(os.path.join(args.output, "*.db")):
         try:
-            with open(csv_file) as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    sig_type = row.get("signal_type", "")
-                    channel = row.get("channel", "")
-                    freq = row.get("frequency_hz", "0")
-                    if channel:
-                        uids.add(f"sdr-{sig_type}-{channel}")
-                    else:
-                        freq_mhz = float(freq) / 1e6
-                        uids.add(f"sdr-{sig_type}-{freq_mhz:.3f}")
+            conn = _db.connect(path, readonly=True)
         except Exception:
             continue
+        try:
+            for r in _db.iter_detections(conn):
+                row = _db.row_to_dict(r)
+                sig_type = row.get("signal_type", "")
+                channel = row.get("channel", "")
+                freq = row.get("frequency_hz", 0) or 0
+                if channel:
+                    uids.add(f"sdr-{sig_type}-{channel}")
+                else:
+                    uids.add(f"sdr-{sig_type}-{float(freq)/1e6:.3f}")
+        finally:
+            conn.close()
 
     if not uids:
-        print("[TAK] No SDR markers found in CSV logs")
+        print("[TAK] No SDR markers found in detection logs")
         client.close()
         return
 

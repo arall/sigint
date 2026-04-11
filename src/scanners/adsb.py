@@ -799,7 +799,7 @@ class ADSBScanner:
             self.stop_dump1090()
 
     def _log_aircraft_updates(self):
-        """Log new/updated aircraft positions for CSV and TAK."""
+        """Log new/updated aircraft positions to the detection log and TAK."""
         import json
         for icao, ac in list(self.aircraft_db.items()):
             if ac.latitude is None or ac.longitude is None:

@@ -1,16 +1,15 @@
 """
 Device Relationship Correlator
 
-Analyzes detection CSV logs to find co-occurring devices across signal types.
+Analyzes detection logs to find co-occurring devices across signal types.
 Identifies clusters of devices that consistently appear together (e.g.,
 a phone's WiFi probe + BLE advertisement + TPMS from the same vehicle).
 
 Usage:
-    python -m utils.correlator output/server_*.csv
-    python -m utils.correlator output/server_*.csv --window 30 --threshold 0.7
+    python -m utils.correlator output/server_*.db
+    python -m utils.correlator output/server_*.db --window 30 --threshold 0.7
 """
 
-import csv
 import json
 import math
 import os
@@ -18,6 +17,8 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
+
+from utils import db as _db
 
 
 # Default co-occurrence time window (seconds)
@@ -43,7 +44,7 @@ UID_EXTRACTORS = {
 
 
 def _extract_uid(row: dict) -> Optional[str]:
-    """Extract a unique device identifier from a CSV row."""
+    """Extract a unique device identifier from a detection row dict."""
     sig = row.get("signal_type", "")
     try:
         meta = json.loads(row.get("metadata", "{}") or "{}")
@@ -88,11 +89,12 @@ class DeviceCorrelator:
         # device_id → list of (timestamp_epoch, lat, lon, signal_type)
         self._observations: Dict[str, List[Tuple[float, Optional[float], Optional[float], str]]] = defaultdict(list)
 
-    def load_csv(self, path: str):
-        """Load detections from a CSV file."""
-        with open(path, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
+    def load_db(self, path: str):
+        """Load detections from a .db file."""
+        conn = _db.connect(path, readonly=True)
+        try:
+            for r in _db.iter_detections(conn):
+                row = _db.row_to_dict(r)
                 uid = _extract_uid(row)
                 if not uid:
                     continue
@@ -104,12 +106,14 @@ class DeviceCorrelator:
                 lat = row.get("latitude", "")
                 lon = row.get("longitude", "")
                 try:
-                    lat = float(lat) if lat and lat != "None" else None
-                    lon = float(lon) if lon and lon != "None" else None
+                    lat = float(lat) if lat not in ("", None, "None") else None
+                    lon = float(lon) if lon not in ("", None, "None") else None
                 except (ValueError, TypeError):
                     lat, lon = None, None
 
                 self._observations[uid].append((ts, lat, lon, row.get("signal_type", "")))
+        finally:
+            conn.close()
 
     def add_detection(self, detection):
         """Add a SignalDetection object (for real-time use)."""
@@ -310,7 +314,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Device correlation analysis")
-    parser.add_argument("csv_files", nargs="+", help="Detection CSV files")
+    parser.add_argument("db_files", nargs="+", help="Detection .db files")
     parser.add_argument("--window", type=float, default=DEFAULT_WINDOW_S,
                         help=f"Co-occurrence time window in seconds (default: {DEFAULT_WINDOW_S})")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
@@ -321,9 +325,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     correlator = DeviceCorrelator(window_s=args.window, threshold=args.threshold)
-    for path in args.csv_files:
+    for path in args.db_files:
         print(f"Loading: {path}")
-        correlator.load_csv(path)
+        correlator.load_db(path)
 
     correlator.print_report()
 
