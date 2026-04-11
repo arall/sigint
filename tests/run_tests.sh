@@ -65,6 +65,7 @@ run_test "ApDB merge semantics"           "python3 tests/sw/test_ap_db.py"
 run_test "Web loaders (categories/devices)" "python3 tests/sw/test_web_loaders.py"
 run_test "Web SQL fetch (categories)"     "python3 tests/sw/test_web_fetch.py"
 run_test "Web sessions"                   "python3 tests/sw/test_web_sessions.py"
+run_test "Apple Continuity + AirTag"      "python3 tests/sw/test_apple_continuity.py"
 
 # ---- Transcription tests (needs Whisper) ----
 if python3 -c "import whisper" 2>/dev/null; then

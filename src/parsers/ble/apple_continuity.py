@@ -160,9 +160,49 @@ def parse_apple_continuity(data):
             result["battery_case"] = (payload[5] >> 4) * 10
 
     elif msg_type == 0x12:
+        # Find My network. Two broadcast shapes:
+        #   nearby (≤6 B payload)   — owner's Apple device is in BLE range;
+        #                             the accessory barely advertises.
+        #   separated (≥22 B payload) — accessory has lost contact with its
+        #                             owner for >15 min; it broadcasts the
+        #                             full rotating public key so other
+        #                             Apple devices can relay its position.
         result["findmy"] = True
+        if len(payload) >= 1:
+            status = payload[0]
+            result["findmy_status"] = status
+            # Bit 2 in the status byte = "maintained" (recently saw owner).
+            result["findmy_maintained"] = bool(status & 0x04)
+        result["findmy_mode"] = "separated" if len(payload) >= 22 else "nearby"
 
     return result
+
+
+def _classify_findmy(continuity_types, findmy_mode):
+    """Return an apple_device label for a persona whose *only* observed
+    Apple Continuity message type is Find My (0x12). For everything else
+    the Nearby Info (0x10) / Proximity Pairing (0x07) handlers already
+    set a more specific label.
+
+    Rules:
+      - Full Apple devices (iPhone/iPad/Mac/Watch) broadcast Find My as
+        part of the offline-finding network, but they also broadcast
+        Nearby Info (0x10). If Nearby Info is in the type set, this
+        helper is not reached.
+      - A persona with only 0x12 is almost always an AirTag, a third-
+        party Find My accessory (Chipolo, Pebblebee), or an idle AirPods
+        Pro 2 case — none of which broadcast Nearby Info.
+      - The separated / nearby split lets us flag "AirTag (lost)" for
+        the really interesting ones: trackers that have been out of
+        contact with their owner long enough to be broadcasting the
+        full rotating public key. These are the same ones Apple's
+        anti-stalking alerts fire on.
+    """
+    if continuity_types != {0x12}:
+        return None
+    if findmy_mode == "separated":
+        return "AirTag (lost)"
+    return "Find My accessory"
 
 
 def build_device_signature(ad_info, apple_info):
@@ -256,8 +296,43 @@ class AppleContinuityParser(BaseParser):
             if apple:
                 if "handoff_hash" in apple and not persona.get("handoff_hash"):
                     persona["handoff_hash"] = apple["handoff_hash"]
-                if "device_type" in apple and not persona.get("apple_device"):
-                    persona["apple_device"] = apple["device_type"]
+
+                # Track which Apple Continuity message types this persona
+                # has ever broadcast. Used for Find My classification below.
+                if "type" in apple:
+                    persona.setdefault("continuity_types", set()).add(apple["type"])
+
+                # Priority 1: Nearby Info (0x10) or Proximity Pairing (0x07)
+                # both carry an explicit device_type. These override any
+                # earlier Find-My-derived label since they're much more
+                # specific (iPhone / AirPods Pro 2 / Apple Watch / etc).
+                if "device_type" in apple:
+                    current = persona.get("apple_device") or ""
+                    findmy_label = (
+                        current.startswith("AirTag")
+                        or current.startswith("Find My")
+                    )
+                    if not current or findmy_label:
+                        persona["apple_device"] = apple["device_type"]
+
+                # Priority 2: Find My only. Classify as AirTag / Find My
+                # accessory based on the current mode. Re-checked on every
+                # frame so a persona initially seen in nearby mode gets
+                # upgraded to "AirTag (lost)" if it later broadcasts
+                # separated mode. A 0x10/0x07 frame will override it.
+                elif apple.get("findmy"):
+                    findmy_label = _classify_findmy(
+                        persona.get("continuity_types", set()),
+                        apple.get("findmy_mode"),
+                    )
+                    if findmy_label:
+                        current = persona.get("apple_device") or ""
+                        # Set if unset, or upgrade "Find My accessory" → "AirTag (lost)"
+                        if not current or (
+                            current == "Find My accessory"
+                            and findmy_label == "AirTag (lost)"
+                        ):
+                            persona["apple_device"] = findmy_label
 
             self._macs[addr]["last_seen"] = now
 
@@ -374,6 +449,7 @@ class AppleContinuityParser(BaseParser):
             "prior_sessions": prior_sessions,
             "handoff_hash": handoff_hash,
             "apple_device": apple_device,
+            "continuity_types": set(),
         }
         self._sig_to_personas[dev_sig].append(pid)
         self._macs[mac] = {"persona_id": pid, "last_seen": time.time()}
