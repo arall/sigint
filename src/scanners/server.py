@@ -48,6 +48,7 @@ DISPLAY_NAMES = {
     "tpms":             "TPMS",
     "lora":             "LoRa",
     "elrs":             "ELRS",
+    "meshtastic":       "Meshtastic",
     # Voice / FM
     "fm_voice":         "FM Voice",
     # Cellular
@@ -61,6 +62,7 @@ DISPLAY_NAMES = {
     "pocsag":           "POCSAG",
     "fm":               "FM scanner",
     "drone-video":      "Drone video",
+    "fpv":              "FPV analog video",
     "scan":             "Wideband scan",
     "bluetooth":        "BLE adv",
     "bt":               "BLE adv",
@@ -91,11 +93,13 @@ _STANDALONE_COVERAGE = {
     "pocsag":     ("153\u2013170 MHz (POCSAG paging)",                  "continuous"),
     "ism":        ("433.92 / 868 / 915 MHz ISM",                        "continuous"),
     "lora":       ("868.1\u2013869.525 MHz (EU) or 902\u2013928 MHz (US)", "continuous"),
+    "mesh":       ("868/915 MHz Meshtastic mesh (serial device)",          "passive"),
     "keyfob":     ("433.92 MHz (or 315 MHz)",                           "continuous"),
     "tpms":       ("433.92 MHz (or 315 MHz)",                           "continuous"),
     "gsm":        ("876\u2013915 MHz (GSM900 uplink)",                  "hopping"),
     "lte":        ("LTE uplink bands",                                  "hopping"),
     "drone-video":("2.4 / 5.8 GHz ISM (HackRF)",                        "continuous"),
+    "fpv":        ("5.8 / 1.2 GHz FPV analog video (HackRF)",            "hopping"),
     "scan":       ("wideband energy scan",                              "hopping"),
 }
 
@@ -269,6 +273,12 @@ def _create_parser(name, logger, channel_cfg=None, capture_cfg=None):
             logger=logger, sample_rate=sr, center_freq=freq,
             channels=LORA_CHANNELS_EU, min_snr_db=min_snr,
             min_chirp_confidence=min_chirp)
+
+    elif name == "meshtastic":
+        from parsers.meshtastic.mesh import MeshtasticParser
+        region = (channel_cfg or {}).get("region", "eu")
+        return MeshtasticParser(
+            logger=logger, capture_source=None, region=region)
 
     elif name == "gsm":
         from parsers.cellular.gsm import GSMBurstParser

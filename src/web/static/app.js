@@ -18,6 +18,10 @@ const TYPE_COLORS = {
   "GSM-UPLINK-GSM-900": "#ccc",
   "GSM-UPLINK-GSM-850": "#ccc",
   "lora": "#ce93d8",
+  "Meshtastic-Position": "#ab47bc",
+  "Meshtastic-Message": "#7e57c2",
+  "Meshtastic-Telemetry": "#ab47bc",
+  "Meshtastic-Node": "#9575cd",
   "pocsag": "#ccc"
 };
 function esc(s) {
@@ -1111,6 +1115,29 @@ function _renderSignalRows(tbodyId, rows, emptyMsg) {
 
 function renderIsm(rows)    { _renderSignalRows('ism-body', rows, 'no ISM detections yet'); }
 function renderLora(rows)   { _renderSignalRows('lora-body', rows, 'no LoRa detections yet'); }
+
+function renderMeshtastic(rows) {
+  const tbody = document.getElementById('meshtastic-body');
+  if (!rows.length) { _emptyRow('meshtastic-body', 8, 'no Meshtastic traffic yet \u2014 connect a Meshtastic device via sdr.py mesh'); return; }
+  tbody.innerHTML = rows.map(r => {
+    const snr = r.snr != null ? r.snr.toFixed(1) : '-';
+    const hops = r.hops != null ? r.hops : '-';
+    const pos = _fmtCoord(r.latitude, r.longitude);
+    const typeColors = {Position:'#4caf50', Message:'#2196f3', Telemetry:'#ff9800', Node:'#9e9e9e'};
+    const color = typeColors[r.subtype] || '#ccc';
+    return '<tr>'
+      + '<td style="font-size:11px">'+(r.timestamp||'-')+'</td>'
+      + '<td><span style="color:'+color+';font-weight:600">'+esc(r.subtype||'')+'</span></td>'
+      + '<td style="font-weight:600">'+esc(r.node_name||'-')+'</td>'
+      + '<td style="font-family:monospace;font-size:11px">'+esc(r.node_id||'')+'</td>'
+      + '<td>'+esc(r.detail||'')+'</td>'
+      + '<td class="num">'+snr+'</td>'
+      + '<td class="num">'+hops+'</td>'
+      + '<td style="font-size:11px">'+pos+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
 function renderPagers(rows) { _renderSignalRows('pagers-body', rows, 'no pager messages yet'); }
 
 const _CATEGORY_RENDERERS = {
@@ -1122,9 +1149,56 @@ const _CATEGORY_RENDERERS = {
   tpms:     renderTpms,
   cellular: renderCellular,
   ism:      renderIsm,
-  lora:     renderLora,
-  pagers:   renderPagers,
+  lora:       renderLora,
+  meshtastic: renderMeshtastic,
+  pagers:     renderPagers,
 };
+
+// --- FPV Video Feed ---
+let _fpvStreaming = false;
+let _fpvPollTimer = null;
+
+function fpvCheckFrame() {
+  // Probe if fpv_latest.png exists, show/hide section accordingly
+  fetch('/api/fpv/frame', {method: 'HEAD'}).then(r => {
+    const section = document.getElementById('fpv-section');
+    if (r.ok) {
+      section.style.display = '';
+      if (!_fpvStreaming) fpvLoadFrame();
+    }
+  }).catch(() => {});
+}
+
+function fpvLoadFrame() {
+  const img = document.getElementById('fpv-frame');
+  const empty = document.getElementById('fpv-empty');
+  img.src = '/api/fpv/frame?t=' + Date.now();
+  img.onload = () => { img.style.display = ''; empty.style.display = 'none'; };
+  img.onerror = () => { img.style.display = 'none'; empty.style.display = ''; };
+}
+
+function fpvToggleStream() {
+  const img = document.getElementById('fpv-frame');
+  const empty = document.getElementById('fpv-empty');
+  _fpvStreaming = !_fpvStreaming;
+  if (_fpvStreaming) {
+    img.src = '/api/fpv/stream';
+    img.style.display = '';
+    empty.style.display = 'none';
+    document.getElementById('fpv-info').textContent = 'STREAMING';
+  } else {
+    img.src = '';
+    img.style.display = 'none';
+    document.getElementById('fpv-info').textContent = '';
+    fpvLoadFrame();
+  }
+}
+
+// Check for FPV frames when drones tab is active
+setInterval(() => {
+  const activeBtn = document.querySelector('.sig-subtab-btn.active');
+  if (activeBtn && activeBtn.dataset.sub === 'drones') fpvCheckFrame();
+}, 3000);
 
 // --- Activity Tab ---
 async function loadActivity() {
@@ -1211,7 +1285,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
 // Category names resolve into the Signals parent + a sub-tab switch.
 // Everything else is a plain top-tab click.
-const _SIGNAL_CATEGORIES = ['voice','drones','aircraft','vessels','keyfobs','tpms','cellular','ism','lora','pagers'];
+const _SIGNAL_CATEGORIES = ['voice','drones','aircraft','vessels','keyfobs','tpms','cellular','ism','lora','meshtastic','pagers'];
 
 function goToTab(name) {
   if (_SIGNAL_CATEGORIES.includes(name)) {

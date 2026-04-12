@@ -730,6 +730,67 @@ def _load_lora(detections):
     return _load_generic_signals(detections, "lora")
 
 
+def _load_meshtastic(detections):
+    """Meshtastic mesh traffic (positions, messages, telemetry, nodes)."""
+    rows = []
+    for d in reversed(detections):
+        if d.get("category") != "meshtastic":
+            continue
+        meta = d.get("meta") or {}
+        sig_type = d["signal_type"]
+        # Subtype label without prefix
+        subtype = sig_type.replace("Meshtastic-", "") if sig_type.startswith("Meshtastic-") else sig_type
+
+        detail = ""
+        if subtype == "Position":
+            alt = meta.get("altitude_m")
+            sats = meta.get("sats")
+            parts = []
+            if alt is not None:
+                parts.append(f"{alt}m")
+            if sats:
+                parts.append(f"{sats} sats")
+            detail = ", ".join(parts) if parts else ""
+        elif subtype == "Message":
+            detail = meta.get("text", "")
+        elif subtype == "Telemetry":
+            parts = []
+            if meta.get("battery") is not None:
+                parts.append(f"bat:{meta['battery']}%")
+            if meta.get("voltage") is not None:
+                parts.append(f"{meta['voltage']:.2f}V")
+            if meta.get("temperature") is not None:
+                parts.append(f"{meta['temperature']:.1f}C")
+            if meta.get("humidity") is not None:
+                parts.append(f"hum:{meta['humidity']:.0f}%")
+            detail = ", ".join(parts) if parts else ""
+        elif subtype == "Node":
+            parts = []
+            if meta.get("long_name"):
+                parts.append(meta["long_name"])
+            if meta.get("hw_model"):
+                parts.append(meta["hw_model"])
+            if meta.get("route"):
+                parts.append("route: " + " > ".join(meta["route"]))
+            detail = " | ".join(parts) if parts else ""
+
+        rows.append({
+            "timestamp": d["timestamp"],
+            "signal_type": sig_type,
+            "subtype": subtype,
+            "node_id": meta.get("node_id", d.get("device_id", "")),
+            "node_name": meta.get("node_name", ""),
+            "detail": detail,
+            "snr": meta.get("snr"),
+            "hops": meta.get("hops"),
+            "latitude": d.get("latitude"),
+            "longitude": d.get("longitude"),
+        })
+        if len(rows) >= 200:
+            break
+    return rows
+
+
 def _load_pagers(detections):
     """POCSAG pager messages."""
     return _load_generic_signals(detections, "pagers")
@@ -744,6 +805,7 @@ CATEGORY_LOADERS = {
     "tpms":     _load_tpms,
     "cellular": _load_cellular,
     "ism":      _load_ism,
-    "lora":     _load_lora,
-    "pagers":   _load_pagers,
+    "lora":       _load_lora,
+    "meshtastic": _load_meshtastic,
+    "pagers":     _load_pagers,
 }

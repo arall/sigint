@@ -585,6 +585,39 @@ Examples:
         help="Enable HackRF RF amplifier (+14 dB)",
     )
 
+    # FPV analog video scanner
+    fpv_parser = subparsers.add_parser(
+        "fpv",
+        help="Detect and demodulate analog FPV drone video on 5.8/1.2 GHz (requires HackRF)",
+    )
+    fpv_parser.add_argument(
+        "--band", "-b",
+        choices=["5.8", "1.2"],
+        default="5.8",
+        help="Frequency band (default: 5.8)",
+    )
+    fpv_parser.add_argument(
+        "--serial", "-d",
+        help="HackRF serial number",
+    )
+    fpv_parser.add_argument(
+        "--lna-gain",
+        type=int,
+        default=40,
+        help="HackRF LNA gain 0-40 dB (default: 40)",
+    )
+    fpv_parser.add_argument(
+        "--vga-gain",
+        type=int,
+        default=40,
+        help="HackRF VGA gain 0-62 dB (default: 40)",
+    )
+    fpv_parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="Enable HackRF RF amplifier (+14 dB)",
+    )
+
     # LoRa/Meshtastic scanner
     lora_parser = subparsers.add_parser(
         "lora",
@@ -597,6 +630,24 @@ Examples:
         help="RF gain (default: 40)",
     )
     lora_parser.add_argument(
+        "--region", "-r",
+        choices=["eu", "us"],
+        default="eu",
+        help="Region: eu (868 MHz) or us (915 MHz) (default: eu)",
+    )
+
+    # Meshtastic mesh scanner (serial device)
+    mesh_parser = subparsers.add_parser(
+        "mesh",
+        help="Decode Meshtastic mesh traffic via serial device (positions, messages, telemetry)",
+    )
+    mesh_parser.add_argument(
+        "--port", "-p",
+        type=str,
+        default=None,
+        help="Serial port (e.g. /dev/ttyUSB0). Auto-detect if omitted.",
+    )
+    mesh_parser.add_argument(
         "--region", "-r",
         choices=["eu", "us"],
         default="eu",
@@ -1311,6 +1362,22 @@ def _dispatch_scanner(args):
         _attach_tak(scanner, tak_client)
         scanner.scan()
 
+    elif args.command == "fpv":
+        from scanners.fpv_analog import FPVAnalogScanner
+
+        scanner = FPVAnalogScanner(
+            output_dir=args.output,
+            device_id=args.device_id,
+            serial=args.serial,
+            band=args.band,
+            lna_gain=args.lna_gain,
+            vga_gain=args.vga_gain,
+            amp=args.amp,
+        )
+        if gps:
+            scanner.logger.gps = gps
+        scanner.scan()
+
     elif args.command == "lora":
         from scanners.lora import LoRaScanner
 
@@ -1324,6 +1391,19 @@ def _dispatch_scanner(args):
         )
         if gps:
             scanner.logger.gps = gps
+        _attach_tak(scanner, tak_client)
+        scanner.scan()
+
+    elif args.command == "mesh":
+        from scanners.meshtastic import MeshtasticScanner
+
+        scanner = MeshtasticScanner(
+            dev_path=args.port,
+            output_dir=args.output,
+            device_id=args.device_id,
+            region=args.region,
+            gps=gps,
+        )
         _attach_tak(scanner, tak_client)
         scanner.scan()
 

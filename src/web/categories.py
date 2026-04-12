@@ -13,6 +13,7 @@ CATEGORIES = {
     ],
     "drones": [
         "RemoteID", "RemoteID-operator", "DroneCtrl", "DroneVideo",
+        "FPV-Analog",
     ],
     "aircraft": ["ADS-B"],
     "vessels":  ["AIS"],
@@ -26,6 +27,10 @@ CATEGORIES = {
     ],
     "ism":      ["ISM"],
     "lora":     ["lora"],
+    "meshtastic": [
+        "Meshtastic-Position", "Meshtastic-Message",
+        "Meshtastic-Telemetry", "Meshtastic-Node",
+    ],
     "pagers":   ["pocsag"],
 }
 
@@ -40,13 +45,14 @@ CATEGORY_LABELS = {
     "devices":  "Devices",
     "ism":      "ISM",
     "lora":     "LoRa",
+    "meshtastic": "Meshtastic",
     "pagers":   "Pagers",
 }
 
 CATEGORY_ORDER = [
     "voice", "drones", "aircraft", "vessels",
     "keyfobs", "tpms", "cellular", "devices",
-    "ism", "lora", "pagers",
+    "ism", "lora", "meshtastic", "pagers",
 ]
 
 TYPE_TO_CATEGORY = {sig: cat for cat, sigs in CATEGORIES.items() for sig in sigs}

@@ -104,6 +104,7 @@
     <button class="sig-subtab-btn" data-sub="cellular">Cellular</button>
     <button class="sig-subtab-btn" data-sub="ism">ISM</button>
     <button class="sig-subtab-btn" data-sub="lora">LoRa</button>
+    <button class="sig-subtab-btn" data-sub="meshtastic">Meshtastic</button>
     <button class="sig-subtab-btn" data-sub="pagers">Pagers</button>
   </div>
 
@@ -170,6 +171,22 @@
         <tr><td colspan="9" class="empty">select tab to load...</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- FPV Analog Video Feed -->
+  <div class="section" id="fpv-section" style="display:none">
+    <div class="section-title">
+      <span>FPV Video Feed</span>
+      <div class="filter-bar">
+        <span id="fpv-info" style="font-size:11px;color:#888;text-transform:none;letter-spacing:0"></span>
+        <button onclick="fpvToggleStream()">Stream</button>
+      </div>
+    </div>
+    <div class="tab-desc">Live intercepted analog video from FPV drone (PAL/NTSC FM demodulation).</div>
+    <div style="padding:8px 16px;text-align:center">
+      <img id="fpv-frame" style="max-width:100%;border:1px solid #0f3460;background:#000;display:none" alt="FPV Video">
+      <div id="fpv-empty" class="empty">No FPV video signal detected. Start the FPV analog scanner to capture drone video feeds.</div>
+    </div>
   </div>
 </div>
 
@@ -368,6 +385,35 @@
       </tr></thead>
       <tbody id="lora-body">
         <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Sub-pane: Meshtastic -->
+<div class="sig-subpane" data-sub="meshtastic" style="display:none">
+  <div class="section">
+    <div class="section-title">
+      <span>Meshtastic Mesh</span>
+      <div class="filter-bar">
+        <select id="meshtastic-filter-type"><option value="">All Types</option></select>
+        <button onclick="loadCategory('meshtastic')">Refresh</button>
+      </div>
+    </div>
+    <div class="tab-desc">Decoded Meshtastic mesh traffic via serial device. Shows node positions, text messages, telemetry (battery, environment), and node identity.</div>
+    <table>
+      <thead><tr>
+        <th class="sortable" data-tbl="meshtastic-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="meshtastic-body" data-key="subtype">Type</th>
+        <th class="sortable" data-tbl="meshtastic-body" data-key="node_name">Node</th>
+        <th class="sortable" data-tbl="meshtastic-body" data-key="node_id">ID</th>
+        <th class="sortable" data-tbl="meshtastic-body" data-key="detail">Detail</th>
+        <th class="sortable num" data-tbl="meshtastic-body" data-key="snr">SNR</th>
+        <th class="sortable num" data-tbl="meshtastic-body" data-key="hops">Hops</th>
+        <th class="sortable" data-tbl="meshtastic-body" data-key="latitude">Position</th>
+      </tr></thead>
+      <tbody id="meshtastic-body">
+        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
       </tbody>
     </table>
   </div>
