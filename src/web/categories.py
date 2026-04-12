@@ -28,8 +28,7 @@ CATEGORIES = {
     "ism":      ["ISM"],
     "lora":     ["lora"],
     "meshtastic": [
-        "Meshtastic-Position", "Meshtastic-Message",
-        "Meshtastic-Telemetry", "Meshtastic-Node",
+        "Meshtastic-Position", "Meshtastic-Telemetry", "Meshtastic-Node",
     ],
     "pagers":   ["pocsag"],
 }

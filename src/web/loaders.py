@@ -751,8 +751,6 @@ def _load_meshtastic(detections):
             if sats:
                 parts.append(f"{sats} sats")
             detail = ", ".join(parts) if parts else ""
-        elif subtype == "Message":
-            detail = meta.get("text", "")
         elif subtype == "Telemetry":
             parts = []
             if meta.get("battery") is not None:

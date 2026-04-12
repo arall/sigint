@@ -4,7 +4,6 @@ Meshtastic Mesh Parser
 Consumes decoded packet dicts from MeshtasticCaptureSource, produces
 SignalDetections with signal types:
   - Meshtastic-Position  (node GPS, goes on map)
-  - Meshtastic-Message   (text messages)
   - Meshtastic-Telemetry (battery, environment)
   - Meshtastic-Node      (node info / identity)
 
@@ -98,9 +97,6 @@ class MeshtasticParser(BaseParser):
         if portnum == "POSITION_APP":
             self._handle_position(decoded, from_id, from_name, to_name,
                                   channel, hops, snr, power_db, noise_floor)
-        elif portnum == "TEXT_MESSAGE_APP":
-            self._handle_text(decoded, packet, from_id, from_name, to_name,
-                              channel, hops, snr, power_db, noise_floor)
         elif portnum == "TELEMETRY_APP":
             self._handle_telemetry(decoded, from_id, from_name,
                                    channel, hops, snr, power_db, noise_floor)
@@ -145,40 +141,6 @@ class MeshtasticParser(BaseParser):
             device_id=from_id,
             latitude=lat,
             longitude=lon,
-            metadata=json.dumps(meta),
-        )
-        self.logger.log(detection)
-        self._total += 1
-
-    def _handle_text(self, decoded, packet, from_id, from_name, to_name,
-                     channel, hops, snr, power_db, noise_floor):
-        text = decoded.get("text", "")
-        if not text:
-            payload = decoded.get("payload")
-            if payload and isinstance(payload, bytes):
-                text = payload.decode("utf-8", errors="replace")
-        if not text:
-            return
-        if not self._should_log(from_id, f"TEXT:{text[:20]}"):
-            return
-
-        meta = {
-            "node_id": from_id,
-            "node_name": from_name,
-            "to": to_name,
-            "text": text,
-            "channel": channel,
-            "hops": hops,
-            "snr": snr,
-        }
-
-        detection = SignalDetection.create(
-            signal_type="Meshtastic-Message",
-            frequency_hz=self._freq(),
-            power_db=power_db,
-            noise_floor_db=noise_floor,
-            channel=str(channel),
-            device_id=from_id,
             metadata=json.dumps(meta),
         )
         self.logger.log(detection)

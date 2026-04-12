@@ -19,7 +19,6 @@ const TYPE_COLORS = {
   "GSM-UPLINK-GSM-850": "#ccc",
   "lora": "#ce93d8",
   "Meshtastic-Position": "#ab47bc",
-  "Meshtastic-Message": "#7e57c2",
   "Meshtastic-Telemetry": "#ab47bc",
   "Meshtastic-Node": "#9575cd",
   "pocsag": "#ccc"
@@ -1123,7 +1122,7 @@ function renderMeshtastic(rows) {
     const snr = r.snr != null ? r.snr.toFixed(1) : '-';
     const hops = r.hops != null ? r.hops : '-';
     const pos = _fmtCoord(r.latitude, r.longitude);
-    const typeColors = {Position:'#4caf50', Message:'#2196f3', Telemetry:'#ff9800', Node:'#9e9e9e'};
+    const typeColors = {Position:'#4caf50', Telemetry:'#ff9800', Node:'#9e9e9e'};
     const color = typeColors[r.subtype] || '#ccc';
     return '<tr>'
       + '<td style="font-size:11px">'+(r.timestamp||'-')+'</td>'
