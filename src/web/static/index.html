@@ -173,20 +173,23 @@
         <button onclick="loadCategory('aircraft')">Refresh</button>
       </div>
     </div>
-    <div class="tab-desc">Aircraft broadcasting ADS-B position reports on 1090 MHz. Shows ICAO address, callsign, altitude, speed, and heading.</div>
+    <div class="tab-desc">Aircraft broadcasting ADS-B position reports on 1090 MHz. Shows ICAO address, callsign, type, altitude, speed, heading, vertical rate, and squawk.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="aircraft-body" data-key="icao">ICAO</th>
         <th class="sortable" data-tbl="aircraft-body" data-key="callsign">Callsign</th>
+        <th class="sortable" data-tbl="aircraft-body" data-key="category">Type</th>
         <th class="sortable num" data-tbl="aircraft-body" data-key="altitude_ft">Altitude</th>
         <th class="sortable num" data-tbl="aircraft-body" data-key="speed_kt">Speed</th>
         <th class="sortable num" data-tbl="aircraft-body" data-key="heading">Heading</th>
+        <th class="sortable num" data-tbl="aircraft-body" data-key="vertical_rate">V/Rate</th>
+        <th class="sortable" data-tbl="aircraft-body" data-key="squawk">Squawk</th>
         <th class="sortable" data-tbl="aircraft-body" data-key="latitude">Position</th>
         <th class="sortable num" data-tbl="aircraft-body" data-key="count">Msgs</th>
         <th class="sortable" data-tbl="aircraft-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="aircraft-body">
-        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="11" class="empty">select tab to load...</td></tr>
       </tbody>
     </table>
   </div>

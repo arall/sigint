@@ -85,6 +85,33 @@ TC_TYPES = {
     (31, 31): "Aircraft operational status",
 }
 
+# Aircraft category from TC (1-4) and CA sub-field (3 bits)
+# Key: (tc, ca) → human label.  tc=1 reserved, tc=2..4 carry useful categories.
+AIRCRAFT_CATEGORIES = {
+    (2, 1): "Light",       # < 15500 lbs
+    (2, 2): "Small",       # 15500–75000 lbs
+    (2, 3): "Large",       # 75000–300000 lbs
+    (2, 4): "High vortex", # e.g. B757
+    (2, 5): "Heavy",       # > 300000 lbs
+    (2, 6): "High performance",
+    (2, 7): "Rotorcraft",
+    (3, 1): "Glider",
+    (3, 2): "Lighter-than-air",
+    (3, 3): "Skydiver",
+    (3, 4): "Ultralight",
+    (3, 6): "UAV",
+    (3, 7): "Space vehicle",
+    (4, 1): "Emergency vehicle",
+    (4, 2): "Service vehicle",
+    (4, 4): "Obstruction",
+}
+
+EMERGENCY_SQUAWKS = {
+    "7500": "Hijack",
+    "7600": "Radio failure",
+    "7700": "Emergency",
+}
+
 # Character set for callsign decoding
 CALLSIGN_CHARS = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ##### ###############0123456789######"
 
@@ -101,7 +128,9 @@ class Aircraft:
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     squawk: Optional[str] = None
+    category: Optional[str] = None  # aircraft type (e.g. "Heavy", "Rotorcraft")
     on_ground: bool = False
+    emergency: Optional[str] = None  # emergency status from squawk
     last_seen: datetime = field(default_factory=datetime.now)
     message_count: int = 0
 
@@ -399,11 +428,41 @@ def decode_adsb_message(msg: bytes, aircraft_db: Dict[str, Aircraft]) -> Optiona
     # Aircraft identification (TC 1-4)
     if 1 <= tc <= 4:
         ac.callsign = decode_callsign(msg[5:11])
+        ca = msg[4] & 0x07
+        cat = AIRCRAFT_CATEGORIES.get((tc, ca))
+        if cat:
+            ac.category = cat
 
     # Surface position (TC 5-8)
     elif 5 <= tc <= 8:
         ac.on_ground = True
-        # Position decoding similar to airborne
+        ac.altitude = 0
+        # Ground speed
+        movement = ((msg[4] & 0x07) << 4) | ((msg[5] >> 4) & 0x0F)
+        if 1 < movement < 124:
+            if movement <= 8:
+                ac.ground_speed = 0.125 * (movement - 1)
+            elif movement <= 12:
+                ac.ground_speed = 1.0 + 0.25 * (movement - 9)
+            elif movement <= 38:
+                ac.ground_speed = 2.0 + 0.5 * (movement - 13)
+            elif movement <= 93:
+                ac.ground_speed = 15.0 + 1.0 * (movement - 39)
+            elif movement <= 108:
+                ac.ground_speed = 70.0 + 2.0 * (movement - 94)
+            elif movement <= 123:
+                ac.ground_speed = 100.0 + 5.0 * (movement - 109)
+        # Ground track
+        track_status = (msg[5] >> 3) & 0x01
+        if track_status:
+            ac.heading = (((msg[5] & 0x07) << 4) | ((msg[6] >> 4) & 0x0F)) * 360 / 128
+        # CPR position
+        odd = (msg[6] >> 2) & 0x01
+        lat_cpr = ((msg[6] & 0x03) << 15) | ((msg[7] & 0xFF) << 7) | ((msg[8] >> 1) & 0x7F)
+        lon_cpr = ((msg[8] & 0x01) << 16) | ((msg[9] & 0xFF) << 8) | (msg[10] & 0xFF)
+        lat_cpr /= 131072.0
+        lon_cpr /= 131072.0
+        ac.update_position_cpr(lat_cpr, lon_cpr, bool(odd), time.time())
 
     # Airborne position with baro altitude (TC 9-18)
     elif 9 <= tc <= 18:
@@ -806,13 +865,19 @@ class ADSBScanner:
                 continue
             last_count = self._logged_aircraft.get(icao, 0)
             if ac.message_count > last_count:
+                if ac.squawk and ac.squawk in EMERGENCY_SQUAWKS:
+                    ac.emergency = EMERGENCY_SQUAWKS[ac.squawk]
                 meta = {
                     "icao": ac.icao,
                     "callsign": ac.callsign or "",
                     "altitude": ac.altitude,
                     "speed": ac.ground_speed,
                     "heading": ac.heading,
+                    "vertical_rate": ac.vertical_rate,
                     "squawk": ac.squawk or "",
+                    "category": ac.category or "",
+                    "on_ground": ac.on_ground,
+                    "emergency": ac.emergency or "",
                 }
                 self.logger.log_signal(
                     signal_type="ADS-B",

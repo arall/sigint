@@ -915,18 +915,27 @@ function renderDrones(rows) {
 
 function renderAircraft(rows) {
   const tbody = document.getElementById('aircraft-body');
-  if (!rows.length) { _emptyRow('aircraft-body', 8, 'no aircraft detected — ADS-B capture not running'); return; }
+  if (!rows.length) { _emptyRow('aircraft-body', 11, 'no aircraft detected — ADS-B capture not running'); return; }
   tbody.innerHTML = rows.map(r => {
     const alt = r.altitude_ft != null ? r.altitude_ft+' ft' : '-';
     const spd = r.speed_kt != null ? r.speed_kt.toFixed(0)+' kt' : '-';
     const hdg = r.heading != null ? r.heading.toFixed(0)+'\u00b0' : '-';
+    const vr = r.vertical_rate != null ? (r.vertical_rate >= 0 ? '+' : '') + r.vertical_rate + ' fpm' : '-';
     const pos = _fmtCoord(r.latitude, r.longitude);
+    const squawk = r.squawk || '-';
+    const sqStyle = r.emergency ? 'color:#f44336;font-weight:600' : '';
+    const sqLabel = r.emergency ? esc(squawk) + ' <span style="color:#f44336;font-size:10px">' + esc(r.emergency) + '</span>' : esc(squawk);
+    const cat = r.category || '-';
+    const ground = r.on_ground ? '<span style="color:#ff9800;font-size:10px;margin-left:4px">GND</span>' : '';
     return '<tr>'
       + '<td style="font-family:monospace">'+esc(r.icao)+'</td>'
       + '<td style="font-weight:600">'+esc(r.callsign||'-')+'</td>'
+      + '<td>'+esc(cat)+ground+'</td>'
       + '<td class="num">'+alt+'</td>'
       + '<td class="num">'+spd+'</td>'
       + '<td class="num">'+hdg+'</td>'
+      + '<td class="num">'+vr+'</td>'
+      + '<td style="'+sqStyle+'">'+sqLabel+'</td>'
       + '<td style="font-size:11px">'+pos+'</td>'
       + '<td class="num">'+r.count+'</td>'
       + '<td style="font-size:11px">'+(r.last_seen||'-')+'</td>'
@@ -1289,6 +1298,22 @@ function _mapMarker(lat, lon, color, popup) {
   }).bindPopup(popup);
 }
 
+function _planeMarker(lat, lon, color, heading, popup) {
+  const svg = '<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">'
+    + '<g transform="rotate(' + (heading || 0) + ' 12 12)">'
+    + '<path d="M12 2 L14 9 L20 12 L14 13 L15 20 L12 18 L9 20 L10 13 L4 12 L10 9 Z" '
+    + 'fill="' + color + '" stroke="#000" stroke-width="0.8"/>'
+    + '</g></svg>';
+  return L.marker([lat, lon], {
+    icon: L.divIcon({
+      html: svg,
+      className: '',
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+    }),
+  }).bindPopup(popup);
+}
+
 async function loadMap() {
   if (!_map) return;
   const qs = _selectedSession ? ('?session=' + encodeURIComponent(_selectedSession)) : '';
@@ -1312,11 +1337,15 @@ function _renderMap(data) {
   (data.aircraft || []).forEach(a => {
     if (a.latitude == null || a.longitude == null) return;
     const popup = '<b>' + esc(a.callsign || a.icao) + '</b><br>'
-      + esc(a.icao) + '<br>'
+      + esc(a.icao) + (a.category ? ' &middot; ' + esc(a.category) : '') + '<br>'
       + (a.altitude_ft != null ? a.altitude_ft + ' ft' : '-') + '<br>'
       + (a.speed_kt != null ? a.speed_kt.toFixed(0) + ' kt' : '') + ' '
-      + (a.heading != null ? a.heading.toFixed(0) + '&deg;' : '');
-    _mapMarker(a.latitude, a.longitude, _MAP_COLORS.aircraft, popup)
+      + (a.heading != null ? a.heading.toFixed(0) + '&deg;' : '')
+      + (a.vertical_rate != null ? '<br>' + (a.vertical_rate >= 0 ? '+' : '') + a.vertical_rate + ' fpm' : '')
+      + (a.squawk ? '<br>Squawk ' + esc(a.squawk) : '')
+      + (a.emergency ? '<br><b style="color:#f44336">' + esc(a.emergency) + '</b>' : '')
+      + (a.on_ground ? '<br><span style="color:#ff9800">On ground</span>' : '');
+    _planeMarker(a.latitude, a.longitude, _MAP_COLORS.aircraft, a.heading, popup)
       .addTo(_mapLayers.aircraft);
     bounds.push([a.latitude, a.longitude]);
     positioned++;

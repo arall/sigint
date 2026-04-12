@@ -493,6 +493,11 @@ def _load_aircraft(detections):
                 "altitude_ft": None,
                 "speed_kt": None,
                 "heading": None,
+                "vertical_rate": None,
+                "squawk": "",
+                "category": "",
+                "on_ground": False,
+                "emergency": "",
                 "latitude": None,
                 "longitude": None,
                 "count": 0,
@@ -507,15 +512,22 @@ def _load_aircraft(detections):
         if cs:
             rec["callsign"] = cs
         for k_out, k_meta, cast in (
-            ("altitude_ft", "altitude", _try_int),
-            ("speed_kt",    "speed",    _try_float),
-            ("heading",     "heading",  _try_float),
+            ("altitude_ft",   "altitude",      _try_int),
+            ("speed_kt",      "speed",         _try_float),
+            ("heading",       "heading",       _try_float),
+            ("vertical_rate", "vertical_rate", _try_int),
         ):
             v = meta.get(k_meta)
             if v not in (None, ""):
                 c = cast(v)
                 if c is not None:
                     rec[k_out] = c
+        for k in ("squawk", "category", "emergency"):
+            v = (meta.get(k) or "").strip()
+            if v:
+                rec[k] = v
+        if meta.get("on_ground"):
+            rec["on_ground"] = True
         if d.get("latitude") is not None:
             rec["latitude"] = d["latitude"]
             rec["longitude"] = d["longitude"]
