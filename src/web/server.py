@@ -108,6 +108,10 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_correlations()
         elif path.startswith('/api/cat/'):
             self._serve_category(path[len('/api/cat/'):], qs)
+        elif path == '/api/fpv/frame':
+            self._serve_fpv_frame()
+        elif path == '/api/fpv/stream':
+            self._serve_fpv_stream()
         elif path.startswith('/audio/'):
             self._serve_audio(path[7:])
         else:
@@ -330,6 +334,63 @@ class WebHandler(BaseHTTPRequestHandler):
                 if not chunk:
                     break
                 self.wfile.write(chunk)
+
+    def _serve_fpv_frame(self):
+        """Serve the latest FPV video frame as PNG."""
+        fpv_path = os.path.join(self.server.output_dir, "fpv_latest.png")
+        if not os.path.isfile(fpv_path):
+            self.send_error(404, "No FPV frame available")
+            return
+        try:
+            with open(fpv_path, 'rb') as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/png')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(data)
+        except OSError:
+            self.send_error(500)
+
+    def _serve_fpv_stream(self):
+        """Serve FPV video as MJPEG-style stream (multipart PNG frames)."""
+        fpv_path = os.path.join(self.server.output_dir, "fpv_latest.png")
+        self.send_response(200)
+        self.send_header('Content-Type',
+                         'multipart/x-mixed-replace; boundary=--frame')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+
+        last_mtime = 0
+        try:
+            while not self.server.stop_event.is_set():
+                try:
+                    if not os.path.isfile(fpv_path):
+                        time.sleep(0.5)
+                        continue
+                    mtime = os.path.getmtime(fpv_path)
+                    if mtime == last_mtime:
+                        time.sleep(0.2)
+                        continue
+                    last_mtime = mtime
+                    with open(fpv_path, 'rb') as f:
+                        data = f.read()
+                    if len(data) < 50:
+                        continue
+                    self.wfile.write(b'--frame\r\n')
+                    self.wfile.write(b'Content-Type: image/png\r\n')
+                    self.wfile.write(
+                        f'Content-Length: {len(data)}\r\n\r\n'.encode())
+                    self.wfile.write(data)
+                    self.wfile.write(b'\r\n')
+                    self.wfile.flush()
+                except OSError:
+                    time.sleep(0.5)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 
 # ---------------------------------------------------------------------------
