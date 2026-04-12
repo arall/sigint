@@ -554,10 +554,16 @@ def _load_vessels(detections):
             rec = {
                 "mmsi": mmsi,
                 "name": "",
+                "callsign": "",
+                "imo": "",
                 "ship_type": "",
                 "nav_status": "",
                 "speed_kn": None,
                 "course": None,
+                "heading": None,
+                "rot": None,
+                "destination": "",
+                "draught": None,
                 "latitude": None,
                 "longitude": None,
                 "count": 0,
@@ -568,14 +574,15 @@ def _load_vessels(detections):
         rec["count"] += 1
         if d["timestamp"] > rec["last_seen"]:
             rec["last_seen"] = d["timestamp"]
-        if meta.get("name"):
-            rec["name"] = meta["name"]
-        if meta.get("ship_type"):
-            rec["ship_type"] = meta["ship_type"]
-        if meta.get("nav_status"):
-            rec["nav_status"] = meta["nav_status"]
-        rec["speed_kn"] = _try_float(meta.get("speed")) or rec["speed_kn"]
-        rec["course"]   = _try_float(meta.get("course")) or rec["course"]
+        for k in ("name", "callsign", "imo", "ship_type", "nav_status", "destination"):
+            v = (meta.get(k) or meta.get({"ship_type": "type", "nav_status": "status"}.get(k, "")) or "").strip()
+            if v:
+                rec[k] = v
+        for k_out, k_meta in (("speed_kn", "speed_kn"), ("course", "course"),
+                              ("heading", "heading"), ("rot", "rot"), ("draught", "draught")):
+            v = _try_float(meta.get(k_meta) if meta.get(k_meta) is not None else meta.get({"speed_kn": "sog", "course": "cog"}.get(k_out, "")))
+            if v is not None:
+                rec[k_out] = v
         if d.get("latitude") is not None:
             rec["latitude"] = d["latitude"]
             rec["longitude"] = d["longitude"]

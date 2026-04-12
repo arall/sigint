@@ -76,8 +76,8 @@
     <div class="section-title">
       <span>Situational Awareness Map</span>
       <div class="filter-bar" id="map-filters">
-        <label><input type="checkbox" id="map-show-aircraft" checked> <span style="color:#4caf50">Aircraft</span></label>
-        <label><input type="checkbox" id="map-show-vessels" checked> <span style="color:#2196f3">Vessels</span></label>
+        <label><input type="checkbox" id="map-show-aircraft" checked> <span style="color:#2196f3">Aircraft</span></label>
+        <label><input type="checkbox" id="map-show-vessels" checked> <span style="color:#4caf50">Vessels</span></label>
         <label><input type="checkbox" id="map-show-drones" checked> <span style="color:#f44336">Drones</span></label>
         <label><input type="checkbox" id="map-show-operators" checked> <span style="color:#ff9800">Operators</span></label>
         <button onclick="loadMap()">Refresh</button>
@@ -204,21 +204,25 @@
         <button onclick="loadCategory('vessels')">Refresh</button>
       </div>
     </div>
-    <div class="tab-desc">Marine vessels broadcasting AIS position reports on VHF channels 87B/88B (162 MHz). Shows MMSI, name, type, and navigation status.</div>
+    <div class="tab-desc">Marine vessels broadcasting AIS position reports on VHF channels 87B/88B (162 MHz). Shows MMSI, name, type, callsign, destination, navigation status, speed, course, and heading.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="vessels-body" data-key="mmsi">MMSI</th>
         <th class="sortable" data-tbl="vessels-body" data-key="name">Name</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="callsign">Callsign</th>
         <th class="sortable" data-tbl="vessels-body" data-key="ship_type">Type</th>
-        <th class="sortable" data-tbl="vessels-body" data-key="nav_status">Nav Status</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="nav_status">Status</th>
+        <th class="sortable" data-tbl="vessels-body" data-key="destination">Destination</th>
         <th class="sortable num" data-tbl="vessels-body" data-key="speed_kn">Speed</th>
         <th class="sortable num" data-tbl="vessels-body" data-key="course">Course</th>
+        <th class="sortable num" data-tbl="vessels-body" data-key="heading">Heading</th>
+        <th class="sortable num" data-tbl="vessels-body" data-key="draught">Draught</th>
         <th class="sortable" data-tbl="vessels-body" data-key="latitude">Position</th>
         <th class="sortable num" data-tbl="vessels-body" data-key="count">Msgs</th>
         <th class="sortable" data-tbl="vessels-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="vessels-body">
-        <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="13" class="empty">select tab to load...</td></tr>
       </tbody>
     </table>
   </div>

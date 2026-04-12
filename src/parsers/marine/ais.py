@@ -50,13 +50,24 @@ class AISParser(BaseParser):
             self._last_logged[vessel.mmsi] = vessel.message_count
             self._total_detections += 1
 
+            # AIS "not available" sentinels: heading=511, cog=360.0, sog=102.3
+            hdg = vessel.heading if vessel.heading is not None and vessel.heading < 511 else None
+            cog = vessel.cog if vessel.cog is not None and vessel.cog < 360.0 else None
+            sog = vessel.sog if vessel.sog is not None and vessel.sog < 102.3 else None
             meta = {
                 "mmsi": vessel.mmsi,
                 "name": vessel.name or "",
-                "type": vessel.ship_type_name,
-                "status": vessel.nav_status_name,
-                "sog": vessel.sog,
-                "cog": vessel.cog,
+                "callsign": vessel.callsign or "",
+                "imo": vessel.imo or "",
+                "ship_type": vessel.ship_type_name,
+                "nav_status": vessel.nav_status_name,
+                "speed_kn": sog,
+                "course": cog,
+                "heading": hdg,
+                "rot": vessel.rot,
+                "destination": vessel.destination or "",
+                "eta": vessel.eta or "",
+                "draught": vessel.draught if vessel.draught and vessel.draught > 0 else None,
             }
 
             detection = SignalDetection.create(

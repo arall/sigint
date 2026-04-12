@@ -268,6 +268,13 @@ def _decode_static_voyage(bits, vessel):
     vessel.callsign = decode_ais_string(bits, 70, 7)
     vessel.name = decode_ais_string(bits, 112, 20)
     vessel.ship_type = decode_ais_unsigned(bits, 232, 8)
+    # ETA: month (4 bits @ 274), day (5 @ 278), hour (5 @ 283), minute (6 @ 288)
+    eta_month = decode_ais_unsigned(bits, 274, 4)
+    eta_day = decode_ais_unsigned(bits, 278, 5)
+    eta_hour = decode_ais_unsigned(bits, 283, 5)
+    eta_minute = decode_ais_unsigned(bits, 288, 6)
+    if eta_month > 0 and eta_day > 0:
+        vessel.eta = f"{eta_month:02d}-{eta_day:02d} {eta_hour:02d}:{eta_minute:02d}"
     vessel.draught = decode_ais_unsigned(bits, 294, 8) / 10.0
     vessel.destination = decode_ais_string(bits, 302, 20)
 

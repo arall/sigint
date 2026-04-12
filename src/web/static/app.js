@@ -945,18 +945,24 @@ function renderAircraft(rows) {
 
 function renderVessels(rows) {
   const tbody = document.getElementById('vessels-body');
-  if (!rows.length) { _emptyRow('vessels-body', 9, 'no vessels detected — AIS capture not running'); return; }
+  if (!rows.length) { _emptyRow('vessels-body', 13, 'no vessels detected — AIS capture not running'); return; }
   tbody.innerHTML = rows.map(r => {
     const spd = r.speed_kn != null ? r.speed_kn.toFixed(1)+' kn' : '-';
     const crs = r.course != null ? r.course.toFixed(0)+'\u00b0' : '-';
+    const hdg = r.heading != null && r.heading < 511 ? r.heading+'\u00b0' : '-';
+    const dft = r.draught != null && r.draught > 0 ? r.draught.toFixed(1)+' m' : '-';
     const pos = _fmtCoord(r.latitude, r.longitude);
     return '<tr>'
       + '<td style="font-family:monospace">'+esc(r.mmsi)+'</td>'
       + '<td style="font-weight:600">'+esc(r.name||'-')+'</td>'
+      + '<td>'+esc(r.callsign||'-')+'</td>'
       + '<td>'+esc(r.ship_type||'')+'</td>'
       + '<td>'+esc(r.nav_status||'')+'</td>'
+      + '<td>'+esc(r.destination||'-')+'</td>'
       + '<td class="num">'+spd+'</td>'
       + '<td class="num">'+crs+'</td>'
+      + '<td class="num">'+hdg+'</td>'
+      + '<td class="num">'+dft+'</td>'
       + '<td style="font-size:11px">'+pos+'</td>'
       + '<td class="num">'+r.count+'</td>'
       + '<td style="font-size:11px">'+(r.last_seen||'-')+'</td>'
@@ -1353,11 +1359,14 @@ function _renderMap(data) {
 
   (data.vessels || []).forEach(v => {
     if (v.latitude == null || v.longitude == null) return;
-    const popup = '<b>' + esc(v.name || v.mmsi) + '</b><br>'
-      + 'MMSI ' + esc(v.mmsi) + '<br>'
-      + esc(v.ship_type || '') + '<br>'
+    const popup = '<b>' + esc(v.name || v.mmsi) + '</b>'
+      + (v.callsign ? ' (' + esc(v.callsign) + ')' : '') + '<br>'
+      + 'MMSI ' + esc(v.mmsi) + (v.imo ? ' &middot; IMO ' + esc(v.imo) : '') + '<br>'
+      + (v.ship_type ? esc(v.ship_type) : '') + (v.nav_status ? ' &middot; ' + esc(v.nav_status) : '') + '<br>'
       + (v.speed_kn != null ? v.speed_kn.toFixed(1) + ' kn' : '-') + ' '
-      + (v.course != null ? v.course.toFixed(0) + '&deg;' : '');
+      + (v.course != null ? v.course.toFixed(0) + '&deg;' : '')
+      + (v.destination ? '<br>Dest: ' + esc(v.destination) : '')
+      + (v.draught != null && v.draught > 0 ? '<br>Draught: ' + v.draught.toFixed(1) + ' m' : '');
     _mapMarker(v.latitude, v.longitude, _MAP_COLORS.vessels, popup)
       .addTo(_mapLayers.vessels);
     bounds.push([v.latitude, v.longitude]);
