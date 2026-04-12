@@ -119,8 +119,8 @@ class FPVAnalogScanner:
 
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, timeout=dwell_s + 10,
-                stderr=subprocess.DEVNULL)
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                timeout=dwell_s + 10)
             if proc.returncode != 0 or len(proc.stdout) < 1000:
                 return None
             raw = np.frombuffer(proc.stdout, dtype=np.int8)
