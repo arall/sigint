@@ -8,7 +8,8 @@ handled by prefix so new subtypes don't fall through.
 
 CATEGORIES = {
     "voice": [
-        "PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS", "FM_voice",
+        "PMR446", "dPMR", "dPMR446", "70cm", "MarineVHF", "2m", "FRS", "FM_voice",
+        "TETRA",
     ],
     "drones": [
         "RemoteID", "RemoteID-operator", "DroneCtrl", "DroneVideo",

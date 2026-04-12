@@ -513,8 +513,9 @@ class PMRScanner:
                 # Check signal duration from signal-present samples only
                 duration = self._dpmr_signal_samples[channel] / self.sample_rate
 
-                # Save discriminator audio for DSD decoding
+                # Save discriminator audio and decode dPMR voice
                 audio_file = None
+                decoded = False
                 if duration < self.MIN_TX_DURATION:
                     self._dpmr_buffers[channel] = []
                 elif self.record_audio and self._dpmr_buffers[channel]:
@@ -522,9 +523,21 @@ class PMRScanner:
                         audio_file = self._save_discriminator_audio(
                             self._dpmr_buffers[channel], channel_freq)
                         if audio_file:
-                            print(
-                                f"\n  >> D{channel} discriminator saved: "
-                                f"{os.path.basename(audio_file)} ({duration:.1f}s)\n")
+                            # Try decoding AMBE+2 voice via dsdccx
+                            from utils.dpmr_decode import decode_dpmr
+                            decoded_file = decode_dpmr(audio_file)
+                            if decoded_file:
+                                # Replace discriminator with decoded voice
+                                os.remove(audio_file)
+                                audio_file = decoded_file
+                                decoded = True
+                                print(
+                                    f"\n  >> D{channel} voice decoded: "
+                                    f"{os.path.basename(audio_file)} ({duration:.1f}s)\n")
+                            else:
+                                print(
+                                    f"\n  >> D{channel} discriminator saved (decode failed): "
+                                    f"{os.path.basename(audio_file)} ({duration:.1f}s)\n")
                     except Exception as e:
                         print(f"Digital audio error: {e}", file=sys.stderr)
                     self._dpmr_buffers[channel] = []
@@ -532,6 +545,7 @@ class PMRScanner:
                 import json
                 meta = json.dumps({
                     "mode": "digital",
+                    "decoded": decoded,
                     "duration_s": round(duration, 1),
                 })
 
@@ -545,7 +559,8 @@ class PMRScanner:
                     metadata=meta,
                 )
 
-                if self._async_transcriber and audio_file:
+                # Only transcribe decoded voice, not raw discriminator
+                if self._async_transcriber and audio_file and decoded:
                     self._async_transcriber.submit(
                         audio_file,
                         model=self.whisper_model,

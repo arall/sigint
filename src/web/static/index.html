@@ -113,6 +113,14 @@
     <div class="section-title">
       <span>Voice Transmissions</span>
       <div class="filter-bar">
+        <select id="voice-filter-type"><option value="">All Types</option></select>
+        <select id="voice-filter-ch"><option value="">All Channels</option></select>
+        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;text-transform:none;letter-spacing:0">
+          <input type="checkbox" id="voice-filter-audio"> Audio only
+        </label>
+        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;text-transform:none;letter-spacing:0">
+          <input type="checkbox" id="voice-filter-transcript"> With transcript
+        </label>
         <button onclick="loadCategory('voice')">Refresh</button>
       </div>
     </div>
@@ -141,6 +149,7 @@
     <div class="section-title">
       <span>Drones</span>
       <div class="filter-bar">
+        <select id="drones-filter-type"><option value="">All Types</option></select>
         <button onclick="loadCategory('drones')">Refresh</button>
       </div>
     </div>
@@ -287,6 +296,7 @@
     <div class="section-title">
       <span>Cellular Uplink Activity</span>
       <div class="filter-bar">
+        <select id="cellular-filter-type"><option value="">All Types</option></select>
         <button onclick="loadCategory('cellular')">Refresh</button>
       </div>
     </div>
@@ -314,6 +324,7 @@
     <div class="section-title">
       <span>ISM Devices</span>
       <div class="filter-bar">
+        <select id="ism-filter-type"><option value="">All Types</option></select>
         <button onclick="loadCategory('ism')">Refresh</button>
       </div>
     </div>

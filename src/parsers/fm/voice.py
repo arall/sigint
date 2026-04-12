@@ -142,6 +142,30 @@ BAND_PROFILES = {
         "channel_bw": 12500,
         "fm_deviation": 2500,
     },
+    "tetra": {
+        "name": "TETRA Emergency",
+        "signal_type": "TETRA",
+        "channels": {
+            "389.0": 389.000e6, "389.5": 389.500e6,
+            "390.0": 390.000e6, "390.5": 390.500e6,
+            "391.0": 391.000e6,
+        },
+        "channel_bw": 25000,
+        "fm_deviation": 5000,
+        "record_audio": False,
+    },
+    "tetra-priv": {
+        "name": "TETRA Private",
+        "signal_type": "TETRA",
+        "channels": {
+            "410.0": 410.000e6, "410.5": 410.500e6,
+            "411.0": 411.000e6, "411.5": 411.500e6,
+            "412.0": 412.000e6,
+        },
+        "channel_bw": 25000,
+        "fm_deviation": 5000,
+        "record_audio": False,
+    },
 }
 
 
@@ -195,6 +219,7 @@ class FMVoiceParser(BaseParser):
         self.channels = profile["channels"]
         self.channel_bw = profile["channel_bw"]
         self.fm_deviation = profile["fm_deviation"]
+        self.record_audio = profile.get("record_audio", True)
 
         # Filter channels to those within our bandwidth
         half_bw = sample_rate / 2
@@ -338,6 +363,27 @@ class FMVoiceParser(BaseParser):
         if signal_duration < self.MIN_TX_DURATION:
             return
 
+        # Energy-only mode (TETRA, P25): log detection without audio
+        audio_file = None
+        audio_path = None
+        if not self.record_audio:
+            metadata = {
+                "duration_s": round(signal_duration, 2),
+                "band": self.band_name,
+                "mode": "energy",
+            }
+            detection = SignalDetection.create(
+                signal_type=self.signal_type,
+                frequency_hz=ch_freq,
+                power_db=peak_power,
+                noise_floor_db=noise_floor,
+                channel=ch_label,
+                metadata=json.dumps(metadata),
+            )
+            self.logger.log(detection)
+            self._detection_count += 1
+            return
+
         # Coalesce adjacent small channelizer blocks into larger contiguous
         # chunks so extract_and_demodulate_buffers can process them
         # efficiently (the channelizer delivers ~325 samples per block at
@@ -353,8 +399,6 @@ class FMVoiceParser(BaseParser):
         coalesced.append((cur_off, cur_samp))
 
         # FM demodulate
-        audio_file = None
-        audio_path = None
         try:
             audio, audio_rate = extract_and_demodulate_buffers(
                 coalesced,

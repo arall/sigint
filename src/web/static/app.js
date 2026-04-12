@@ -827,6 +827,18 @@ document.querySelectorAll('.sig-subtab-btn').forEach(btn => {
   btn.addEventListener('click', () => switchSigSubtab(btn.dataset.sub));
 });
 
+// Category filter change events — re-render without refetch
+['voice','drones','cellular','ism'].forEach(cat => {
+  const typeSel = document.getElementById(cat + '-filter-type');
+  if (typeSel) typeSel.addEventListener('change', () => _renderFiltered(cat));
+  const chSel = document.getElementById(cat + '-filter-ch');
+  if (chSel) chSel.addEventListener('change', () => _renderFiltered(cat));
+  const audioChk = document.getElementById(cat + '-filter-audio');
+  if (audioChk) audioChk.addEventListener('change', () => _renderFiltered(cat));
+  const txChk = document.getElementById(cat + '-filter-transcript');
+  if (txChk) txChk.addEventListener('change', () => _renderFiltered(cat));
+});
+
 // --- Category Tabs ---
 const _CATEGORY_BODY_IDS = {
   voice:    'voice-body',
@@ -841,6 +853,9 @@ const _CATEGORY_BODY_IDS = {
   pagers:   'pagers-body',
 };
 
+// Raw rows cache for client-side filtering
+const _categoryRows = {};
+
 async function loadCategory(name) {
   try {
     let url = '/api/cat/' + encodeURIComponent(name);
@@ -850,10 +865,66 @@ async function loadCategory(name) {
     const r = await fetch(url);
     const data = await r.json();
     const rows = data.rows || [];
-    const fn = _CATEGORY_RENDERERS[name];
-    const bodyId = _CATEGORY_BODY_IDS[name];
-    if (fn && bodyId) setTable(bodyId, rows, fn);
+    _categoryRows[name] = rows;
+    _populateFilters(name, rows);
+    _renderFiltered(name);
   } catch(e) {}
+}
+
+function _renderFiltered(name) {
+  const rows = _categoryRows[name] || [];
+  const filtered = _applyFilters(name, rows);
+  const fn = _CATEGORY_RENDERERS[name];
+  const bodyId = _CATEGORY_BODY_IDS[name];
+  if (fn && bodyId) setTable(bodyId, filtered, fn);
+}
+
+function _populateFilters(name, rows) {
+  // Populate type dropdown
+  const typeSel = document.getElementById(name + '-filter-type');
+  if (typeSel) {
+    const prev = typeSel.value;
+    const types = [...new Set(rows.map(r => r.signal_type || r.technology || r.kind || '').filter(Boolean))].sort();
+    typeSel.innerHTML = '<option value="">All Types</option>' +
+      types.map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
+    typeSel.value = prev;
+  }
+  // Populate channel dropdown (voice)
+  const chSel = document.getElementById(name + '-filter-ch');
+  if (chSel) {
+    const prev = chSel.value;
+    const chs = [...new Set(rows.map(r => r.channel || '').filter(Boolean))].sort();
+    chSel.innerHTML = '<option value="">All Channels</option>' +
+      chs.map(c => '<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');
+    chSel.value = prev;
+  }
+}
+
+function _applyFilters(name, rows) {
+  let out = rows;
+  // Type filter
+  const typeSel = document.getElementById(name + '-filter-type');
+  if (typeSel && typeSel.value) {
+    const v = typeSel.value;
+    out = out.filter(r => (r.signal_type || r.technology || r.kind || '') === v);
+  }
+  // Channel filter (voice)
+  const chSel = document.getElementById(name + '-filter-ch');
+  if (chSel && chSel.value) {
+    const v = chSel.value;
+    out = out.filter(r => r.channel === v);
+  }
+  // Audio only (voice)
+  const audioChk = document.getElementById(name + '-filter-audio');
+  if (audioChk && audioChk.checked) {
+    out = out.filter(r => r.audio_file);
+  }
+  // With transcript (voice)
+  const txChk = document.getElementById(name + '-filter-transcript');
+  if (txChk && txChk.checked) {
+    out = out.filter(r => r.transcript);
+  }
+  return out;
 }
 
 function _emptyRow(bodyId, cols, msg) {
