@@ -73,11 +73,6 @@ class MeshtasticParser(BaseParser):
 
     def handle_frame(self, packet):
         """Process one Meshtastic packet dict."""
-        decoded = packet.get("decoded")
-        if not decoded:
-            return
-
-        portnum = decoded.get("portnum", "UNKNOWN_APP")
         from_raw = packet.get("from")
         from_id = self._node_hex(from_raw) if from_raw else packet.get("fromId", "?")
         from_name = self._node_name(from_raw) if from_raw else str(from_id)
@@ -93,6 +88,16 @@ class MeshtasticParser(BaseParser):
 
         power_db = float(rssi) if rssi is not None else 0.0
         noise_floor = power_db - float(snr) if snr is not None and rssi is not None else -120.0
+
+        decoded = packet.get("decoded")
+        if not decoded:
+            # Encrypted packet we can't decrypt — still log the node activity
+            if packet.get("encrypted") and from_id != "?":
+                self._handle_encrypted(from_id, from_name, to_name,
+                                       channel, hops, snr, power_db, noise_floor)
+            return
+
+        portnum = decoded.get("portnum", "UNKNOWN_APP")
 
         if portnum == "POSITION_APP":
             self._handle_position(decoded, from_id, from_name, to_name,
@@ -261,6 +266,33 @@ class MeshtasticParser(BaseParser):
             "node_id": from_id,
             "node_name": from_name,
             "neighbors": nb_list,
+            "hops": hops,
+            "snr": snr,
+        }
+
+        detection = SignalDetection.create(
+            signal_type="Meshtastic-Node",
+            frequency_hz=self._freq(),
+            power_db=power_db,
+            noise_floor_db=noise_floor,
+            channel=str(channel),
+            device_id=from_id,
+            metadata=json.dumps(meta),
+        )
+        self.logger.log(detection)
+        self._total += 1
+
+    def _handle_encrypted(self, from_id, from_name, to_name,
+                          channel, hops, snr, power_db, noise_floor):
+        """Log encrypted packet as node activity (can't decrypt, but know who transmitted)."""
+        if not self._should_log(from_id, "ENCRYPTED"):
+            return
+
+        meta = {
+            "node_id": from_id,
+            "node_name": from_name,
+            "to": to_name,
+            "encrypted": True,
             "hops": hops,
             "snr": snr,
         }
