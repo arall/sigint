@@ -91,8 +91,8 @@ class MeshtasticParser(BaseParser):
 
         decoded = packet.get("decoded")
         if not decoded:
-            # Encrypted packet we can't decrypt — still log the node activity
-            if packet.get("encrypted") and from_id != "?":
+            # Encrypted or undecoded packet — still log node activity
+            if from_id != "?":
                 self._handle_encrypted(from_id, from_name, to_name,
                                        channel, hops, snr, power_db, noise_floor)
             return
