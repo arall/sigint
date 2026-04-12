@@ -16,5 +16,8 @@ openai-whisper>=20231117
 # Remote Whisper API transcription (alternative to local whisper)
 openai>=1.0.0
 
+# Meshtastic mesh scanner (sdr.py mesh)
+meshtastic>=2.3.0
+
 # Test audio generation (tests only)
 gTTS>=2.3.0

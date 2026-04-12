@@ -74,6 +74,18 @@ class MeshtasticCaptureSource(BaseCaptureSource):
         except Exception as e:
             raise RuntimeError(f"Could not connect to Meshtastic device: {e}")
 
+        # Warn if role suppresses serial packet forwarding
+        try:
+            node = self._iface.getMyNodeInfo()
+            role = (node or {}).get("user", {}).get("role", "")
+            if role == "CLIENT_MUTE":
+                print("  [Meshtastic] WARNING: device role is CLIENT_MUTE — most "
+                      "mesh traffic will NOT be forwarded over serial.")
+                print("  [Meshtastic] Change with: meshtastic --port "
+                      f"{self.dev_path or '<port>'} --set device.role CLIENT")
+        except Exception:
+            pass
+
         # Block until stopped
         try:
             while not self.stopped:
