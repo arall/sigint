@@ -92,19 +92,35 @@ def _category_predicate(category):
             [],
         )
 
-    if category == "other":
-        # Known signal types that belong to one of the other categories.
-        known = set()
-        for cat, sigs in CATEGORIES.items():
-            if cat != "other":
-                known.update(sigs)
-        placeholders = ",".join("?" * len(known))
-        clause = (
-            f"(signal_type NOT IN ({placeholders}) "
-            f"AND signal_type NOT LIKE 'GSM-UPLINK-%' "
-            f"AND signal_type NOT LIKE 'LTE-UPLINK-%')"
+    if category == "keyfobs":
+        return (
+            "(signal_type = 'keyfob'"
+            " OR signal_type LIKE 'ISM:Microchip-HCS%'"
+            " OR signal_type LIKE 'ISM:Nice-%'"
+            " OR signal_type LIKE 'ISM:CAME-%'"
+            " OR signal_type LIKE 'ISM:FSK%')",
+            [],
         )
-        return clause, sorted(known)
+
+    if category == "tpms":
+        return (
+            "(signal_type = 'tpms'"
+            " OR (signal_type LIKE 'ISM:%'"
+            "     AND json_extract(metadata, '$.type') = 'TPMS'))",
+            [],
+        )
+
+    if category == "ism":
+        # ISM devices excluding keyfobs and TPMS (those have their own tabs)
+        return (
+            "(signal_type LIKE 'ISM:%'"
+            " AND signal_type NOT LIKE 'ISM:Microchip-HCS%'"
+            " AND signal_type NOT LIKE 'ISM:Nice-%'"
+            " AND signal_type NOT LIKE 'ISM:CAME-%'"
+            " AND signal_type NOT LIKE 'ISM:FSK%'"
+            " AND COALESCE(json_extract(metadata, '$.type'), '') != 'TPMS')",
+            [],
+        )
 
     sigs = CATEGORIES.get(category, [])
     if not sigs:
@@ -145,7 +161,7 @@ def _row_to_detection_dict(row, transcripts=None):
     return {
         "timestamp": row["timestamp"] or "",
         "signal_type": sig,
-        "category": category_of(sig),
+        "category": category_of(sig, meta),
         "frequency_mhz": round(freq_hz / 1e6, 4) if freq_hz else 0,
         "channel": ch,
         "snr_db": round(snr, 1) if snr else None,
@@ -176,7 +192,7 @@ def fetch_detections_for_category(
     Args:
         db_path: path to a detections .db file.
         category: one of 'voice', 'drones', 'aircraft', 'vessels',
-                  'vehicles', 'cellular', 'other'.
+                  'keyfobs', 'tpms', 'cellular', 'ism', 'lora', 'pagers'.
         window_seconds: only rows newer than (now - window_seconds).
         limit: hard cap on rows returned (newest rows kept).
         now: override current time (for tests).

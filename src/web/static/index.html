@@ -49,6 +49,7 @@
 <div id="tab-live" class="tab-content active">
   <div class="section">
     <div class="section-title">Categories</div>
+    <div class="tab-desc">Overview of all detected signal categories with counts, unique emitters, and last-seen timestamps.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="categories" data-key="label">Category</th>
@@ -83,6 +84,7 @@
         <button onclick="mapFitAll()">Fit All</button>
       </div>
     </div>
+    <div class="tab-desc">GPS positions of aircraft (ADS-B), vessels (AIS), drones (RemoteID), and their operators on a live map.</div>
     <div id="map" style="height: 600px; width: 100%; background: #0a1020;"></div>
     <div id="map-summary" style="padding: 8px 16px; font-size: 12px; color: #888">
       loading map...
@@ -90,16 +92,19 @@
   </div>
 </div>
 
-<!-- Tab: Signals (groups Voice / Drones / Aircraft / Vessels / Vehicles / Cellular / Other) -->
+<!-- Tab: Signals (groups Voice / Drones / Aircraft / Vessels / Keyfobs / TPMS / Cellular / ISM / LoRa / Pagers) -->
 <div id="tab-signals" class="tab-content">
   <div class="tabs" style="margin-bottom:8px">
     <button class="sig-subtab-btn active" data-sub="voice">Voice</button>
     <button class="sig-subtab-btn" data-sub="drones">Drones</button>
     <button class="sig-subtab-btn" data-sub="aircraft">Aircraft</button>
     <button class="sig-subtab-btn" data-sub="vessels">Vessels</button>
-    <button class="sig-subtab-btn" data-sub="vehicles">Vehicles</button>
+    <button class="sig-subtab-btn" data-sub="keyfobs">Keyfobs</button>
+    <button class="sig-subtab-btn" data-sub="tpms">TPMS</button>
     <button class="sig-subtab-btn" data-sub="cellular">Cellular</button>
-    <button class="sig-subtab-btn" data-sub="other">Other</button>
+    <button class="sig-subtab-btn" data-sub="ism">ISM</button>
+    <button class="sig-subtab-btn" data-sub="lora">LoRa</button>
+    <button class="sig-subtab-btn" data-sub="pagers">Pagers</button>
   </div>
 
 <!-- Sub-pane: Voice -->
@@ -111,6 +116,7 @@
         <button onclick="loadCategory('voice')">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">Analog FM voice on PMR446, FRS, Marine VHF, and amateur bands. Includes optional speech-to-text transcripts.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="voice-body" data-key="timestamp">Time</th>
@@ -138,6 +144,7 @@
         <button onclick="loadCategory('drones')">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">Drones broadcasting Open Drone ID (ASTM F3411) via BLE or WiFi, plus FPV control links (ELRS/Crossfire) and video downlinks.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="drones-body" data-key="signal_type">Type</th>
@@ -166,6 +173,7 @@
         <button onclick="loadCategory('aircraft')">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">Aircraft broadcasting ADS-B position reports on 1090 MHz. Shows ICAO address, callsign, altitude, speed, and heading.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="aircraft-body" data-key="icao">ICAO</th>
@@ -193,6 +201,7 @@
         <button onclick="loadCategory('vessels')">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">Marine vessels broadcasting AIS position reports on VHF channels 87B/88B (162 MHz). Shows MMSI, name, type, and navigation status.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="vessels-body" data-key="mmsi">MMSI</th>
@@ -212,28 +221,54 @@
   </div>
 </div>
 
-<!-- Sub-pane: Vehicles -->
-<div class="sig-subpane" data-sub="vehicles" style="display:none">
+<!-- Sub-pane: Keyfobs -->
+<div class="sig-subpane" data-sub="keyfobs" style="display:none">
   <div class="section">
     <div class="section-title">
-      <span>Vehicles (TPMS + Keyfobs)</span>
+      <span>Keyfobs</span>
       <div class="filter-bar">
-        <button onclick="loadCategory('vehicles')">Refresh</button>
+        <button onclick="loadCategory('keyfobs')">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">Car keyfob and gate remote transmissions on 433/315 MHz. OOK and FSK modulation with rolling or fixed codes.</div>
     <table>
       <thead><tr>
-        <th class="sortable" data-tbl="vehicles-body" data-key="kind">Kind</th>
-        <th class="sortable" data-tbl="vehicles-body" data-key="id">ID</th>
-        <th class="sortable" data-tbl="vehicles-body" data-key="protocol">Protocol</th>
-        <th class="sortable num" data-tbl="vehicles-body" data-key="frequency_mhz">Freq</th>
-        <th class="sortable num" data-tbl="vehicles-body" data-key="pressure_kpa">Pressure</th>
-        <th class="sortable num" data-tbl="vehicles-body" data-key="temperature_c">Temp</th>
-        <th class="sortable num" data-tbl="vehicles-body" data-key="count">Count</th>
-        <th class="sortable" data-tbl="vehicles-body" data-key="last_seen">Last Seen</th>
+        <th class="sortable" data-tbl="keyfobs-body" data-key="id">ID</th>
+        <th class="sortable" data-tbl="keyfobs-body" data-key="protocol">Protocol</th>
+        <th class="sortable num" data-tbl="keyfobs-body" data-key="frequency_mhz">Freq</th>
+        <th class="sortable num" data-tbl="keyfobs-body" data-key="snr_db">SNR</th>
+        <th class="sortable num" data-tbl="keyfobs-body" data-key="count">Count</th>
+        <th class="sortable" data-tbl="keyfobs-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
-      <tbody id="vehicles-body">
-        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+      <tbody id="keyfobs-body">
+        <tr><td colspan="6" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Sub-pane: TPMS -->
+<div class="sig-subpane" data-sub="tpms" style="display:none">
+  <div class="section">
+    <div class="section-title">
+      <span>TPMS</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('tpms')">Refresh</button>
+      </div>
+    </div>
+    <div class="tab-desc">Tire pressure monitoring sensors on 433/315 MHz. Each sensor has a unique ID that is trackable across sightings.</div>
+    <table>
+      <thead><tr>
+        <th class="sortable" data-tbl="tpms-body" data-key="id">Sensor ID</th>
+        <th class="sortable" data-tbl="tpms-body" data-key="protocol">Protocol</th>
+        <th class="sortable num" data-tbl="tpms-body" data-key="frequency_mhz">Freq</th>
+        <th class="sortable num" data-tbl="tpms-body" data-key="pressure_kpa">Pressure</th>
+        <th class="sortable num" data-tbl="tpms-body" data-key="temperature_c">Temp</th>
+        <th class="sortable num" data-tbl="tpms-body" data-key="count">Count</th>
+        <th class="sortable" data-tbl="tpms-body" data-key="last_seen">Last Seen</th>
+      </tr></thead>
+      <tbody id="tpms-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
       </tbody>
     </table>
   </div>
@@ -248,6 +283,7 @@
         <button onclick="loadCategory('cellular')">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">GSM/LTE uplink energy from nearby phones transmitting to cell towers. Detects aggregate activity, not individual devices.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="cellular-body" data-key="technology">Technology</th>
@@ -265,26 +301,81 @@
   </div>
 </div>
 
-<!-- Sub-pane: Other -->
-<div class="sig-subpane" data-sub="other" style="display:none">
+<!-- Sub-pane: ISM -->
+<div class="sig-subpane" data-sub="ism" style="display:none">
   <div class="section">
     <div class="section-title">
-      <span>Other (ISM, LoRa, POCSAG)</span>
+      <span>ISM Devices</span>
       <div class="filter-bar">
-        <button onclick="loadCategory('other')">Refresh</button>
+        <button onclick="loadCategory('ism')">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">ISM band devices on 433/868/915 MHz decoded by rtl_433. Weather stations, door sensors, remotes, and other IoT devices.</div>
     <table>
       <thead><tr>
-        <th class="sortable" data-tbl="other-body" data-key="timestamp">Time</th>
-        <th class="sortable" data-tbl="other-body" data-key="signal_type">Type</th>
-        <th class="sortable" data-tbl="other-body" data-key="channel">Channel</th>
-        <th class="sortable num" data-tbl="other-body" data-key="frequency_mhz">Freq (MHz)</th>
-        <th class="sortable num" data-tbl="other-body" data-key="snr_db">SNR</th>
-        <th class="sortable" data-tbl="other-body" data-key="model">Model / Protocol</th>
-        <th class="sortable" data-tbl="other-body" data-key="detail">Detail</th>
+        <th class="sortable" data-tbl="ism-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="ism-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="ism-body" data-key="channel">ID</th>
+        <th class="sortable num" data-tbl="ism-body" data-key="frequency_mhz">Freq (MHz)</th>
+        <th class="sortable num" data-tbl="ism-body" data-key="snr_db">SNR</th>
+        <th class="sortable" data-tbl="ism-body" data-key="model">Model</th>
+        <th class="sortable" data-tbl="ism-body" data-key="detail">Detail</th>
       </tr></thead>
-      <tbody id="other-body">
+      <tbody id="ism-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Sub-pane: LoRa -->
+<div class="sig-subpane" data-sub="lora" style="display:none">
+  <div class="section">
+    <div class="section-title">
+      <span>LoRa / Meshtastic</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('lora')">Refresh</button>
+      </div>
+    </div>
+    <div class="tab-desc">LoRa chirp spread spectrum energy detections on 868 MHz (EU) or 915 MHz (US). Includes Meshtastic mesh network nodes.</div>
+    <table>
+      <thead><tr>
+        <th class="sortable" data-tbl="lora-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="lora-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="lora-body" data-key="channel">Channel</th>
+        <th class="sortable num" data-tbl="lora-body" data-key="frequency_mhz">Freq (MHz)</th>
+        <th class="sortable num" data-tbl="lora-body" data-key="snr_db">SNR</th>
+        <th class="sortable" data-tbl="lora-body" data-key="protocol">Protocol</th>
+        <th class="sortable" data-tbl="lora-body" data-key="detail">Detail</th>
+      </tr></thead>
+      <tbody id="lora-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Sub-pane: Pagers -->
+<div class="sig-subpane" data-sub="pagers" style="display:none">
+  <div class="section">
+    <div class="section-title">
+      <span>Pagers (POCSAG)</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('pagers')">Refresh</button>
+      </div>
+    </div>
+    <div class="tab-desc">POCSAG pager messages on 153-170 MHz. Used by emergency services and hospitals in some regions.</div>
+    <table>
+      <thead><tr>
+        <th class="sortable" data-tbl="pagers-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="pagers-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="pagers-body" data-key="channel">Channel</th>
+        <th class="sortable num" data-tbl="pagers-body" data-key="frequency_mhz">Freq (MHz)</th>
+        <th class="sortable num" data-tbl="pagers-body" data-key="snr_db">SNR</th>
+        <th class="sortable" data-tbl="pagers-body" data-key="model">Protocol</th>
+        <th class="sortable" data-tbl="pagers-body" data-key="detail">Detail</th>
+      </tr></thead>
+      <tbody id="pagers-body">
         <tr><td colspan="7" class="empty">select tab to load...</td></tr>
       </tbody>
     </table>
@@ -302,6 +393,7 @@
         <button onclick="loadCorrelations()">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">Devices that consistently appear together across signal types. Links a phone's WiFi, BLE, and TPMS into one entity.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="corr-body" data-key="device_a">Device A</th>
@@ -335,6 +427,7 @@
         <button onclick="loadDetections()">Refresh</button>
       </div>
     </div>
+    <div class="tab-desc">Raw detection log from all scanners. Every signal event with timestamp, frequency, SNR, and metadata.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="det-body" data-key="timestamp">Time</th>
@@ -357,6 +450,8 @@
 
 <!-- Tab: Devices -->
 <div id="tab-devices" class="tab-content">
+  <div class="tab-desc" style="margin-bottom:8px">Persistent device fingerprints from BLE advertisements and WiFi probe requests. Tracks devices across MAC rotations using protocol signatures.</div>
+
   <!-- Summary cards -->
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap" id="dev-stats"></div>
 
@@ -443,6 +538,7 @@
 <div id="tab-config" class="tab-content">
   <div class="section">
     <div class="section-title">Capture Configuration</div>
+    <div class="tab-desc">Active capture devices, frequency coverage, and health status. Shows HackRF channelizer channels and standalone scanner subprocesses.</div>
     <div class="section-body" id="captures"><div class="empty">loading...</div></div>
   </div>
 </div>
@@ -451,6 +547,7 @@
 <div id="tab-timeline" class="tab-content">
   <div class="section">
     <div class="section-title">Activity (last 60 minutes)</div>
+    <div class="tab-desc">Detection count per minute across all signal types. Helps spot bursts of activity or quiet periods.</div>
     <div class="chart-container" id="activity-chart">
       <div class="empty">loading...</div>
     </div>

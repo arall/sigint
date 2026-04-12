@@ -138,7 +138,7 @@ class LTEScanner:
                         self._calibrating = False
                         print("\nCalibration complete. Monitoring...\n")
                 else:
-                    parser.handle_frame(samples)
+                    parser.handle_frame(samples, center_freq=center_freq)
 
         self._sweep_count += 1
         n_freqs = len(self.capture.frequencies)

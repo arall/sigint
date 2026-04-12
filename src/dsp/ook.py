@@ -98,18 +98,6 @@ def detect_ook_signal(samples, sample_rate, threshold_db=10):
 # FSK detection (car keyfobs)
 # ---------------------------------------------------------------------------
 
-# Car keyfob FSK profiles: (deviation_khz_min, deviation_khz_max, datarate_min, datarate_max, brand, chip)
-# Deviation and datarate vary with SDR sample rate — rtl_433's 250 kHz capture
-# clips high-deviation signals, so ranges must cover both native (2 MHz) and
-# rtl_433 (250 kHz) measurements.
-# Profiles are matched top-down; put the most specific first.
-CAR_FSK_PROFILES = [
-    # Measured: Land Rover Defender 2023 = ±127 kHz @ 2 MHz, ±65-89 kHz @ 250 kHz
-    # Short burst (~260ms): ±65-90 kHz, ~41 kbps. Long burst (~786ms): ±87 kHz, ~37 kbps.
-    (60, 160, 20000, 65000, "Land Rover / JLR", "NXP NCF29xx/Hitag AES"),
-    (20, 60, 5000, 15000, "Toyota / Lexus", "Texas Instruments"),
-    (30, 70, 8000, 20000, "Volvo", "Hitag2"),
-]
 
 
 def detect_fsk_signal(samples, sample_rate, threshold_db=8):
@@ -224,30 +212,10 @@ def fingerprint_fsk_car(fsk_result, frequency_hz):
         'datarate_hz': int(datarate),
     }
 
-    # Match against car profiles
-    matches = []
-    for dev_min, dev_max, dr_min, dr_max, brand, chip in CAR_FSK_PROFILES:
-        dev_match = dev_min <= dev_khz <= dev_max
-        dr_match = dr_min <= datarate <= dr_max
-        if dev_match and dr_match:
-            matches.append((brand, chip))
-
-    if matches:
-        brands = " / ".join(set(m[0] for m in matches))
-        chips = " / ".join(set(m[1] for m in matches))
-        result['protocol'] = f"FSK ({chips})"
-        result['confidence'] = 'medium' if len(matches) <= 3 else 'low'
-        result['details'] = (
-            f"FSK car keyfob, dev=±{dev_khz:.0f}kHz, "
-            f"rate=~{datarate/1000:.0f}kbps, dur={duration:.0f}ms, "
-            f"matches: {brands}"
-        )
-        result['device_brands'] = brands
-    else:
-        result['details'] = (
-            f"FSK signal, dev=±{dev_khz:.0f}kHz, "
-            f"rate=~{datarate/1000:.0f}kbps, dur={duration:.0f}ms"
-        )
+    result['details'] = (
+        f"FSK signal, dev=\u00b1{dev_khz:.0f}kHz, "
+        f"rate=~{datarate/1000:.0f}kbps, dur={duration:.0f}ms"
+    )
 
     return result
 
@@ -576,10 +544,7 @@ def classify_device(protocol, code_type, frequency_hz, fingerprint=None):
     is_eu = abs(freq_mhz - 433.92) < 5 or abs(freq_mhz - 868) < 5
 
     if fingerprint and fingerprint.get('modulation') == 'FSK':
-        brands = fingerprint.get('device_brands', '')
-        if brands:
-            return f"Car keyfob - {brands}", "🚗"
-        return "Car keyfob (FSK rolling code)", "🚗"
+        return "Car keyfob (FSK)", "🚗"
 
     if 'KeeLoq' in protocol or 'HCS' in protocol:
         region = "US" if is_us else "EU" if is_eu else ""

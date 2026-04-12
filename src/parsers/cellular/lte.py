@@ -26,9 +26,11 @@ class LTEPowerParser(BaseParser):
     """
 
     def __init__(self, logger, sample_rate, band_name="Band-8",
-                 activity_threshold_db=3.0, holdover_seconds=3.0):
+                 activity_threshold_db=3.0, holdover_seconds=3.0,
+                 center_freq=0):
         super().__init__(logger)
         self.sample_rate = sample_rate
+        self.center_freq = center_freq
         self.band_name = band_name
         self.activity_threshold_db = activity_threshold_db
         self.holdover_seconds = holdover_seconds
@@ -67,8 +69,10 @@ class LTEPowerParser(BaseParser):
             return True
         return False
 
-    def handle_frame(self, samples):
+    def handle_frame(self, samples, center_freq=None):
         """Process IQ samples for LTE power density measurement."""
+        if center_freq is not None:
+            self.center_freq = center_freq
         result = measure_power_spectrum(samples, self.sample_rate)
         self._last_result = result
 
@@ -104,7 +108,7 @@ class LTEPowerParser(BaseParser):
 
                 detection = SignalDetection.create(
                     signal_type=f"LTE-UPLINK-{self.band_name}",
-                    frequency_hz=strongest_seg['freq_offset'],
+                    frequency_hz=self.center_freq + strongest_seg['freq_offset'],
                     power_db=result['overall_power_db'],
                     noise_floor_db=self._baseline,
                     channel=self.band_name,

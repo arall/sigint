@@ -217,8 +217,7 @@ class ISMScanner:
             device_type, icon = classify_device(
                 fp['protocol'], fp['code_type'], self.frequency, fp)
 
-            brands = fp.get('device_brands', '')
-            model_name = f"FSK:{brands}" if brands else "FSK:unknown"
+            model_name = "FSK"
             device_key = model_name
             self._devices[device_key] += 1
             self._detection_count += 1

@@ -799,7 +799,7 @@ function onSessionChange() {
   // Refresh the active category tab, if any
   const activeBtn = document.querySelector('.tab-btn.active');
   const tab = activeBtn ? activeBtn.dataset.tab : null;
-  if (tab && ['voice','drones','aircraft','vessels','vehicles','cellular','other'].includes(tab)) {
+  if (tab && ['voice','drones','aircraft','vessels','keyfobs','tpms','cellular','ism','lora','pagers'].includes(tab)) {
     loadCategory(tab);
   }
 }
@@ -827,15 +827,18 @@ document.querySelectorAll('.sig-subtab-btn').forEach(btn => {
   btn.addEventListener('click', () => switchSigSubtab(btn.dataset.sub));
 });
 
-// --- Category Tabs (Voice / Drones / Aircraft / Vessels / Vehicles / Cellular / Other) ---
+// --- Category Tabs ---
 const _CATEGORY_BODY_IDS = {
   voice:    'voice-body',
   drones:   'drones-body',
   aircraft: 'aircraft-body',
   vessels:  'vessels-body',
-  vehicles: 'vehicles-body',
+  keyfobs:  'keyfobs-body',
+  tpms:     'tpms-body',
   cellular: 'cellular-body',
-  other:    'other-body',
+  ism:      'ism-body',
+  lora:     'lora-body',
+  pagers:   'pagers-body',
 };
 
 async function loadCategory(name) {
@@ -952,15 +955,28 @@ function renderVessels(rows) {
   }).join('');
 }
 
-function renderVehicles(rows) {
-  const tbody = document.getElementById('vehicles-body');
-  if (!rows.length) { _emptyRow('vehicles-body', 8, 'no TPMS / keyfob detections yet'); return; }
+function renderKeyfobs(rows) {
+  const tbody = document.getElementById('keyfobs-body');
+  if (!rows.length) { _emptyRow('keyfobs-body', 6, 'no keyfob detections yet'); return; }
+  tbody.innerHTML = rows.map(r => {
+    return '<tr>'
+      + '<td style="font-family:monospace">'+esc(r.id)+'</td>'
+      + '<td>'+esc(r.protocol||'')+'</td>'
+      + '<td class="num">'+(r.frequency_mhz ? r.frequency_mhz.toFixed(3) : '-')+'</td>'
+      + '<td class="num">'+(r.snr_db != null ? r.snr_db+' dB' : '-')+'</td>'
+      + '<td class="num">'+r.count+'</td>'
+      + '<td style="font-size:11px">'+(r.last_seen||'-')+'</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderTpms(rows) {
+  const tbody = document.getElementById('tpms-body');
+  if (!rows.length) { _emptyRow('tpms-body', 7, 'no TPMS detections yet'); return; }
   tbody.innerHTML = rows.map(r => {
     const pressure = r.pressure_kpa != null ? r.pressure_kpa.toFixed(0)+' kPa' : '-';
     const temp     = r.temperature_c != null ? r.temperature_c.toFixed(0)+' \u00b0C' : '-';
-    const kindCol  = r.kind === 'TPMS' ? '#4fc3f7' : '#ffb74d';
     return '<tr>'
-      + '<td style="color:'+kindCol+';font-weight:600">'+esc(r.kind)+'</td>'
       + '<td style="font-family:monospace">'+esc(r.id)+'</td>'
       + '<td>'+esc(r.protocol||'')+'</td>'
       + '<td class="num">'+(r.frequency_mhz ? r.frequency_mhz.toFixed(3) : '-')+'</td>'
@@ -988,9 +1004,9 @@ function renderCellular(rows) {
   }).join('');
 }
 
-function renderOther(rows) {
-  const tbody = document.getElementById('other-body');
-  if (!rows.length) { _emptyRow('other-body', 7, 'no other detections'); return; }
+function _renderSignalRows(tbodyId, rows, emptyMsg) {
+  const tbody = document.getElementById(tbodyId);
+  if (!rows.length) { _emptyRow(tbodyId, 7, emptyMsg); return; }
   tbody.innerHTML = rows.map(r => {
     const ts = r.timestamp ? r.timestamp.split('T')[1].split('.')[0] : '-';
     const color = TYPE_COLORS[r.signal_type] || '#ccc';
@@ -1007,14 +1023,21 @@ function renderOther(rows) {
   }).join('');
 }
 
+function renderIsm(rows)    { _renderSignalRows('ism-body', rows, 'no ISM detections yet'); }
+function renderLora(rows)   { _renderSignalRows('lora-body', rows, 'no LoRa detections yet'); }
+function renderPagers(rows) { _renderSignalRows('pagers-body', rows, 'no pager messages yet'); }
+
 const _CATEGORY_RENDERERS = {
   voice:    renderVoice,
   drones:   renderDrones,
   aircraft: renderAircraft,
   vessels:  renderVessels,
-  vehicles: renderVehicles,
+  keyfobs:  renderKeyfobs,
+  tpms:     renderTpms,
   cellular: renderCellular,
-  other:    renderOther,
+  ism:      renderIsm,
+  lora:     renderLora,
+  pagers:   renderPagers,
 };
 
 // --- Activity Tab ---
@@ -1102,7 +1125,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
 // Category names resolve into the Signals parent + a sub-tab switch.
 // Everything else is a plain top-tab click.
-const _SIGNAL_CATEGORIES = ['voice','drones','aircraft','vessels','vehicles','cellular','other'];
+const _SIGNAL_CATEGORIES = ['voice','drones','aircraft','vessels','keyfobs','tpms','cellular','ism','lora','pagers'];
 
 function goToTab(name) {
   if (_SIGNAL_CATEGORIES.includes(name)) {

@@ -364,6 +364,12 @@ def _try_float(v):
         return None
 
 
+def _psi_to_kpa(psi):
+    """Convert PSI to kPa, or None if not a number."""
+    v = _try_float(psi)
+    return round(v * 6.89476, 1) if v is not None else None
+
+
 def _load_voice(detections):
     """Each voice detection already represents one finalized transmission —
     one row per detection, newest first."""
@@ -566,53 +572,80 @@ def _load_vessels(detections):
     return out
 
 
-def _load_vehicles(detections):
-    """TPMS sensors and keyfob bursts. One row per unique sensor / burst
-    pattern. Groups TPMS by sensor_id, keyfob by data_hex."""
+def _load_keyfobs(detections):
+    """Keyfob bursts from native parser and ISM/rtl_433. Groups by device ID."""
     items = {}
     for d in detections:
         sig = d["signal_type"]
         meta = d.get("meta") or {}
-        if sig == "tpms":
-            sid = meta.get("sensor_id")
-            if not sid:
-                continue
-            key = f"tpms:{sid}"
-            rec = items.get(key) or {
-                "kind": "TPMS",
-                "id": sid,
-                "first_seen": d["timestamp"],
-                "last_seen":  d["timestamp"],
-                "count": 0,
-                "protocol": meta.get("protocol", ""),
-                "pressure_kpa": None,
-                "temperature_c": None,
-                "frequency_mhz": d["frequency_mhz"],
-            }
-            rec["count"] += 1
-            if d["timestamp"] > rec["last_seen"]:
-                rec["last_seen"] = d["timestamp"]
-            rec["pressure_kpa"]  = _try_float(meta.get("pressure_kpa"))  or rec["pressure_kpa"]
-            rec["temperature_c"] = _try_float(meta.get("temperature_c")) or rec["temperature_c"]
-            items[key] = rec
-        elif sig == "keyfob":
+        # Native keyfob parser
+        if sig == "keyfob":
             dhex = meta.get("data_hex", "")
             key = f"kf:{dhex or d['frequency_mhz']}"
-            rec = items.get(key) or {
-                "kind": "Keyfob",
-                "id": dhex or f"{d['frequency_mhz']} MHz",
-                "first_seen": d["timestamp"],
-                "last_seen":  d["timestamp"],
-                "count": 0,
-                "protocol": meta.get("protocol", ""),
-                "frequency_mhz": d["frequency_mhz"],
-                "pressure_kpa": None,
-                "temperature_c": None,
-            }
-            rec["count"] += 1
-            if d["timestamp"] > rec["last_seen"]:
-                rec["last_seen"] = d["timestamp"]
-            items[key] = rec
+            dev_id = dhex or f"{d['frequency_mhz']} MHz"
+            protocol = meta.get("protocol", "")
+        # ISM keyfob (HCS200, FSK, etc.)
+        elif sig.startswith("ISM:"):
+            dev_id = d.get("channel") or meta.get("encrypted", "") or sig
+            key = f"ism:{dev_id}"
+            protocol = sig.replace("ISM:", "")
+        else:
+            continue
+        rec = items.get(key) or {
+            "id": dev_id,
+            "first_seen": d["timestamp"],
+            "last_seen":  d["timestamp"],
+            "count": 0,
+            "protocol": protocol,
+            "frequency_mhz": d["frequency_mhz"],
+            "snr_db": d.get("snr_db"),
+        }
+        rec["count"] += 1
+        if d["timestamp"] > rec["last_seen"]:
+            rec["last_seen"] = d["timestamp"]
+            rec["snr_db"] = d.get("snr_db")
+        items[key] = rec
+    out = list(items.values())
+    out.sort(key=lambda r: r["last_seen"], reverse=True)
+    return out
+
+
+def _load_tpms(detections):
+    """TPMS sensors from native parser and ISM/rtl_433. One row per unique sensor_id."""
+    items = {}
+    for d in detections:
+        meta = d.get("meta") or {}
+        sig = d["signal_type"]
+        # Native TPMS parser
+        if sig == "tpms":
+            sid = meta.get("sensor_id")
+        # ISM TPMS (rtl_433 decoded, e.g. ISM:Ford)
+        elif sig.startswith("ISM:") and meta.get("type") == "TPMS":
+            sid = d.get("channel") or meta.get("code", "")
+            meta.setdefault("pressure_kpa", _psi_to_kpa(meta.get("pressure_PSI")))
+            meta.setdefault("temperature_c", meta.get("temperature_C"))
+            meta.setdefault("protocol", sig.replace("ISM:", ""))
+        else:
+            continue
+        if not sid:
+            continue
+        key = f"tpms:{sid}"
+        rec = items.get(key) or {
+            "id": sid,
+            "first_seen": d["timestamp"],
+            "last_seen":  d["timestamp"],
+            "count": 0,
+            "protocol": meta.get("protocol", ""),
+            "pressure_kpa": None,
+            "temperature_c": None,
+            "frequency_mhz": d["frequency_mhz"],
+        }
+        rec["count"] += 1
+        if d["timestamp"] > rec["last_seen"]:
+            rec["last_seen"] = d["timestamp"]
+        rec["pressure_kpa"]  = _try_float(meta.get("pressure_kpa"))  or rec["pressure_kpa"]
+        rec["temperature_c"] = _try_float(meta.get("temperature_c")) or rec["temperature_c"]
+        items[key] = rec
     out = list(items.values())
     out.sort(key=lambda r: r["last_seen"], reverse=True)
     return out
@@ -646,11 +679,11 @@ def _load_cellular(detections):
     return out
 
 
-def _load_other(detections):
-    """Catch-all for ISM / LoRa / POCSAG and anything uncategorized."""
+def _load_generic_signals(detections, category):
+    """Generic loader for signal categories — returns timestamped rows."""
     rows = []
     for d in reversed(detections):
-        if d["category"] != "other":
+        if d.get("category") != category:
             continue
         meta = d.get("meta") or {}
         rows.append({
@@ -668,12 +701,30 @@ def _load_other(detections):
     return rows
 
 
+def _load_ism(detections):
+    """ISM band devices (rtl_433 decoded + native FSK/OOK)."""
+    return _load_generic_signals(detections, "ism")
+
+
+def _load_lora(detections):
+    """LoRa / Meshtastic chirp detections."""
+    return _load_generic_signals(detections, "lora")
+
+
+def _load_pagers(detections):
+    """POCSAG pager messages."""
+    return _load_generic_signals(detections, "pagers")
+
+
 CATEGORY_LOADERS = {
     "voice":    _load_voice,
     "drones":   _load_drones,
     "aircraft": _load_aircraft,
     "vessels":  _load_vessels,
-    "vehicles": _load_vehicles,
+    "keyfobs":  _load_keyfobs,
+    "tpms":     _load_tpms,
     "cellular": _load_cellular,
-    "other":    _load_other,
+    "ism":      _load_ism,
+    "lora":     _load_lora,
+    "pagers":   _load_pagers,
 }

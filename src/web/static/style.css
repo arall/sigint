@@ -51,6 +51,7 @@ th.sortable.sort-desc::after { content: " \25bc"; color: #4fc3f7; font-size: 9px
   display: flex; justify-content: space-between; align-items: center;
 }
 .section-body { padding: 8px 16px; }
+.tab-desc { padding: 4px 16px 6px; font-size: 11px; color: #555; }
 
 .capture-line { padding: 2px 0; color: #aaa; white-space: pre-wrap; }
 
