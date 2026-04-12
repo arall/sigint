@@ -1400,16 +1400,18 @@ setInterval(() => {
 // visible; historical session freezes the map like other category tabs.
 let _map = null;
 const _mapLayers = {
-  aircraft:  null,
-  vessels:   null,
-  drones:    null,
-  operators: null,
+  aircraft:   null,
+  vessels:    null,
+  drones:     null,
+  operators:  null,
+  meshtastic: null,
 };
 const _MAP_COLORS = {
-  aircraft:  '#2196f3',
-  vessels:   '#4caf50',
-  drones:    '#f44336',
-  operators: '#ff9800',
+  aircraft:   '#2196f3',
+  vessels:    '#4caf50',
+  drones:     '#f44336',
+  operators:  '#ff9800',
+  meshtastic: '#ab47bc',
 };
 
 function initMap() {
@@ -1467,13 +1469,13 @@ function _planeMarker(lat, lon, color, heading, popup) {
 async function loadMap() {
   if (!_map) return;
   const qs = _selectedSession ? ('?session=' + encodeURIComponent(_selectedSession)) : '';
-  const tabs = ['aircraft', 'vessels', 'drones'];
+  const tabs = ['aircraft', 'vessels', 'drones', 'meshtastic'];
   try {
     const results = await Promise.all(tabs.map(t =>
       fetch('/api/cat/' + t + qs).then(r => r.json()).catch(() => ({rows: []}))
     ));
-    const [aircraft, vessels, drones] = results.map(d => d.rows || []);
-    _renderMap({aircraft, vessels, drones});
+    const [aircraft, vessels, drones, meshtastic] = results.map(d => d.rows || []);
+    _renderMap({aircraft, vessels, drones, meshtastic});
   } catch (e) {}
 }
 
@@ -1537,12 +1539,36 @@ function _renderMap(data) {
     }
   });
 
+  // Meshtastic nodes — deduplicate by node_id, keep latest position
+  const meshNodes = {};
+  (data.meshtastic || []).forEach(m => {
+    if (m.latitude == null || m.longitude == null) return;
+    const id = m.node_id || m.detail;
+    if (!id) return;
+    const prev = meshNodes[id];
+    if (!prev || m.timestamp > prev.timestamp) meshNodes[id] = m;
+  });
+  Object.values(meshNodes).forEach(m => {
+    const popup = '<b>' + esc(m.node_name || m.node_id) + '</b><br>'
+      + '<span style="font-family:monospace;font-size:11px">' + esc(m.node_id || '') + '</span><br>'
+      + esc(m.subtype || '') + '<br>'
+      + (m.snr != null ? 'SNR ' + m.snr.toFixed(1) + ' dB' : '')
+      + (m.hops != null ? ' · ' + m.hops + ' hop(s)' : '')
+      + (m.detail ? '<br>' + esc(m.detail) : '');
+    _mapMarker(m.latitude, m.longitude, _MAP_COLORS.meshtastic, popup)
+      .addTo(_mapLayers.meshtastic);
+    bounds.push([m.latitude, m.longitude]);
+    positioned++;
+  });
+  const meshCount = Object.keys(meshNodes).length;
+
   // Summary line
   const el = document.getElementById('map-summary');
   if (el) {
     el.textContent = positioned > 0
       ? positioned + ' position(s) on map (' + (data.aircraft.length) + ' aircraft, '
-          + (data.vessels.length) + ' vessels, ' + (data.drones.length) + ' drones)'
+          + (data.vessels.length) + ' vessels, ' + (data.drones.length) + ' drones'
+          + (meshCount > 0 ? ', ' + meshCount + ' mesh nodes' : '') + ')'
       : 'no GPS positions in the current session — run a capture with GPS, or wait for RemoteID / ADS-B / AIS';
   }
 

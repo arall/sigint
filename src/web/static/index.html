@@ -80,11 +80,12 @@
         <label><input type="checkbox" id="map-show-vessels" checked> <span style="color:#4caf50">Vessels</span></label>
         <label><input type="checkbox" id="map-show-drones" checked> <span style="color:#f44336">Drones</span></label>
         <label><input type="checkbox" id="map-show-operators" checked> <span style="color:#ff9800">Operators</span></label>
+        <label><input type="checkbox" id="map-show-meshtastic" checked> <span style="color:#ab47bc">Mesh</span></label>
         <button onclick="loadMap()">Refresh</button>
         <button onclick="mapFitAll()">Fit All</button>
       </div>
     </div>
-    <div class="tab-desc">GPS positions of aircraft (ADS-B), vessels (AIS), drones (RemoteID), and their operators on a live map.</div>
+    <div class="tab-desc">GPS positions of aircraft (ADS-B), vessels (AIS), drones (RemoteID), Meshtastic mesh nodes, and drone operators on a live map.</div>
     <div id="map" style="height: 600px; width: 100%; background: #0a1020;"></div>
     <div id="map-summary" style="padding: 8px 16px; font-size: 12px; color: #888">
       loading map...
