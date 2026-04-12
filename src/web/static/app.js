@@ -1247,8 +1247,8 @@ const _mapLayers = {
   operators: null,
 };
 const _MAP_COLORS = {
-  aircraft:  '#4caf50',
-  vessels:   '#2196f3',
+  aircraft:  '#2196f3',
+  vessels:   '#4caf50',
   drones:    '#f44336',
   operators: '#ff9800',
 };
