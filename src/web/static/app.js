@@ -1159,13 +1159,20 @@ let _fpvPollTimer = null;
 
 function fpvCheckFrame() {
   // Probe if fpv_latest.png exists, show/hide section accordingly
-  fetch('/api/fpv/frame', {method: 'HEAD'}).then(r => {
-    const section = document.getElementById('fpv-section');
-    if (r.ok) {
-      section.style.display = '';
-      if (!_fpvStreaming) fpvLoadFrame();
-    }
-  }).catch(() => {});
+  const section = document.getElementById('fpv-section');
+  if (!section) return;
+  const img = document.getElementById('fpv-frame');
+  const empty = document.getElementById('fpv-empty');
+  if (_fpvStreaming) return;
+  // Load frame directly — if it succeeds, show the section
+  const test = new Image();
+  test.onload = () => {
+    section.style.display = '';
+    img.src = test.src;
+    img.style.display = '';
+    empty.style.display = 'none';
+  };
+  test.src = '/api/fpv/frame?t=' + Date.now();
 }
 
 function fpvLoadFrame() {
