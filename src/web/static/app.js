@@ -852,8 +852,9 @@ const _CATEGORY_BODY_IDS = {
   tpms:     'tpms-body',
   cellular: 'cellular-body',
   ism:      'ism-body',
-  lora:     'lora-body',
-  pagers:   'pagers-body',
+  lora:       'lora-body',
+  meshtastic: 'meshtastic-body',
+  pagers:     'pagers-body',
 };
 
 // Raw rows cache for client-side filtering

@@ -196,13 +196,16 @@ class WebHandler(BaseHTTPRequestHandler):
 
         tailer = self.server.tailer
 
-        # Time window for SQL fetch, in hours; default 6h, capped at 168 (1wk).
-        try:
-            window_hours = float(qs.get("window", [6])[0])
-        except (ValueError, TypeError):
-            window_hours = 6
-        window_hours = max(0.1, min(window_hours, 168))
-        window_seconds = int(window_hours * 3600)
+        # Time window for SQL fetch, in hours. Default: no window (rely on
+        # the row LIMIT). Pass ?window=N to restrict to the last N hours.
+        window_seconds = None
+        raw = qs.get("window", [None])[0]
+        if raw is not None:
+            try:
+                window_hours = max(0.1, min(float(raw), 168))
+                window_seconds = int(window_hours * 3600)
+            except (ValueError, TypeError):
+                window_seconds = None
 
         # Session override: ?session=<filename> picks a single historical
         # .db. Default is LIVE mode, which unions every .db in the output
@@ -242,7 +245,7 @@ class WebHandler(BaseHTTPRequestHandler):
             "rows": rows,
             "total": len(rows),
             "session": session_resolved,
-            "window_hours": window_hours,
+            "window_hours": (window_seconds / 3600) if window_seconds else None,
         })
 
     def _serve_sessions(self):

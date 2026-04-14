@@ -122,9 +122,15 @@ class HackRFCaptureSource(BaseCaptureSource):
         """Signal the capture to stop."""
         self._stop_event.set()
 
+    # Ignore drops in the first few seconds after start — parsers are still
+    # initialising (loading models, opening DBs, first numpy allocations),
+    # which produces a harmless transient drop before steady state.
+    WARMUP_SECONDS = 10
+
     def _pipe_reader(self, sample_queue):
         """Dedicated thread: read raw bytes from pipe and convert to complex64."""
         bytes_per_block = self.block_size * 2  # 2 bytes per IQ sample (int8 I + int8 Q)
+        warmup_deadline = time.time() + self.WARMUP_SECONDS
 
         while not self._stop_event.is_set():
             try:
@@ -154,11 +160,14 @@ class HackRFCaptureSource(BaseCaptureSource):
                         sample_queue.put_nowait(samples)
                     except queue.Full:
                         pass
+                    now = time.time()
+                    if now < warmup_deadline:
+                        # Startup transient — don't surface as "degraded".
+                        continue
                     if not hasattr(self, '_drop_count'):
                         self._drop_count = 0
-                        self._drop_first = time.time()
+                        self._drop_first = now
                     self._drop_count += 1
-                    now = time.time()
                     # Log every 50 drops to avoid spam
                     if self._drop_count % 50 == 1:
                         print(f"  [WARN] HackRF can't keep up — dropped {self._drop_count} blocks "

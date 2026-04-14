@@ -1194,14 +1194,35 @@ class ServerOrchestrator:
         print(f"\n[SERVER] Stopped. Uptime: {uptime}. Total detections: {total}.")
 
     def _run_capture(self, name, capture):
-        """Run a capture source (blocking) in a thread."""
-        self._set_status(name, "running", "")
-        try:
-            capture.start()
-        except Exception as e:
-            if not self._stop_event.is_set():
+        """Run a capture source (blocking) with auto-restart on failure."""
+        backoff = 5
+        attempt = 0
+        while not self._stop_event.is_set():
+            attempt += 1
+            # Reset transient state so a retried capture starts clean.
+            capture._process = None
+            capture._drop_count = 0
+            capture._reported_drops = 0
+            if hasattr(capture, "_drop_first"):
+                del capture._drop_first
+
+            status_msg = "" if attempt == 1 else f"restart #{attempt - 1}"
+            self._set_status(name, "running", status_msg)
+            try:
+                capture.start()
+                reason = "capture ended unexpectedly"
+            except Exception as e:
+                if self._stop_event.is_set():
+                    return
                 print(f"\n  [ERROR] {name}: {e}")
-                self._set_status(name, "failed", str(e)[:200])
+                reason = str(e)[:180]
+
+            if self._stop_event.is_set():
+                return
+            self._set_status(name, "failed", f"{reason} — retrying in {backoff}s")
+            if self._stop_event.wait(backoff):
+                return
+            backoff = min(backoff * 2, 60)
 
     def _run_standalone(self, name, entry):
         """Run a standalone scanner in a subprocess."""

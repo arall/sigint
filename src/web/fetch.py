@@ -23,7 +23,7 @@ from .categories import CATEGORIES, CATEGORY_LABELS, CATEGORY_ORDER, category_of
 from .tailer import _extract_detail, _extract_uid
 
 
-DEFAULT_WINDOW_SECONDS = 6 * 3600   # 6 hours
+DEFAULT_WINDOW_SECONDS = None   # no time window — rely on DEFAULT_LIMIT
 DEFAULT_LIMIT = 5000
 
 
@@ -201,14 +201,22 @@ def fetch_detections_for_category(
         list of dicts shaped like DBTailer._detections entries.
     """
     predicate, params = _category_predicate(category)
-    since_epoch = (now if now is not None else time.time()) - window_seconds
 
-    sql = (
-        f"SELECT * FROM detections "
-        f"WHERE {predicate} AND ts_epoch >= ? "
-        f"ORDER BY id DESC LIMIT ?"
-    )
-    full_params = list(params) + [since_epoch, int(limit)]
+    if window_seconds is None:
+        sql = (
+            f"SELECT * FROM detections "
+            f"WHERE {predicate} "
+            f"ORDER BY id DESC LIMIT ?"
+        )
+        full_params = list(params) + [int(limit)]
+    else:
+        since_epoch = (now if now is not None else time.time()) - window_seconds
+        sql = (
+            f"SELECT * FROM detections "
+            f"WHERE {predicate} AND ts_epoch >= ? "
+            f"ORDER BY id DESC LIMIT ?"
+        )
+        full_params = list(params) + [since_epoch, int(limit)]
 
     try:
         conn = _db.connect(db_path, readonly=True)
