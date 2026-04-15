@@ -115,7 +115,11 @@ class ISMScanner:
         """Build rtl_433 command line."""
         cmd = ["rtl_433"]
 
-        if not self.hop:
+        if self.hop:
+            for freq in ISM_FREQUENCIES.values():
+                cmd += ["-f", str(int(freq))]
+            cmd += ["-H", "60"]
+        else:
             cmd += ["-f", str(int(self.frequency))]
 
         cmd += ["-g", str(self.gain)]
