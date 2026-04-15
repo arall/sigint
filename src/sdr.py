@@ -1620,18 +1620,44 @@ def _run_server(args, gps, tak_client):
         web_port=web_port,
     )
 
+    import threading as _threading
+    _shutting_down = _threading.Event()
+
     def _signal_handler(signum, frame):
-        server.stop()
+        if _shutting_down.is_set():
+            os.write(2, b"\n[SERVER] Force-exit.\n")
+            os._exit(130)
+        _shutting_down.set()
+        os.write(2, b"\n[SERVER] Shutdown requested - finishing cleanup (Ctrl+C again to force).\n")
+        server._stop_event.set()
     sig.signal(sig.SIGINT, _signal_handler)
     sig.signal(sig.SIGTERM, _signal_handler)
+
+    # Snapshot terminal state so we can restore it if a subprocess mangles it
+    # (e.g. hcitool/hcidump disabling ISIG, which would swallow Ctrl+C).
+    _tty_state = None
+    try:
+        import termios
+        if sys.stdin.isatty():
+            _tty_state = termios.tcgetattr(sys.stdin.fileno())
+    except Exception:
+        pass
+
+    def _restore_tty():
+        if _tty_state is not None:
+            try:
+                import termios
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _tty_state)
+            except Exception:
+                pass
 
     server.setup()
     try:
         server.start()
-    except KeyboardInterrupt:
-        pass
     finally:
+        _restore_tty()
         server.stop()
+        _restore_tty()
 
 
 def _run_single_scanner(entry, output_dir, use_gps, gps_port, min_snr):

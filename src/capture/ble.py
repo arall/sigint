@@ -68,6 +68,7 @@ class BLECaptureSource(BaseCaptureSource):
         """Start hcitool lescan and verify it launched."""
         proc = subprocess.Popen(
             ["sudo", "hcitool", "-i", self.adapter, "lescan", "--duplicates"],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
         time.sleep(1.0)
@@ -83,6 +84,7 @@ class BLECaptureSource(BaseCaptureSource):
         """Start hcidump for raw HCI packets."""
         return subprocess.Popen(
             ["sudo", "hcidump", "-i", self.adapter, "--raw"],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
 

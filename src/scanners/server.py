@@ -1167,7 +1167,7 @@ class ServerOrchestrator:
                 capture.stop()
 
         for t in self._threads:
-            t.join(timeout=5)
+            t.join(timeout=2)
 
         # Flush channelizer coalesce buffers so parsers see final samples
         for ch in self._channelizers:
@@ -1264,7 +1264,9 @@ class ServerOrchestrator:
         try:
             proc = sp.Popen(
                 cmd, cwd=src_dir,
+                stdin=sp.DEVNULL,
                 stdout=sp.PIPE, stderr=sp.PIPE,
+                start_new_session=True,
             )
             print(f"  [standalone] {name}: pid {proc.pid}, cmd: {' '.join(cmd)}")
             self._set_status(name, "running", f"pid {proc.pid}")
