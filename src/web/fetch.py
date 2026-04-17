@@ -728,6 +728,13 @@ def fetch_active_bssids(output_dir, minutes=5, now=None):
     return active
 
 
+_CORR_CACHE = {}
+_CORR_CACHE_TTL_S = 60.0
+_CORR_LOOKBACK_S = 6 * 3600.0
+_CORR_SKIP_SIGNALS = {"ADS-B", "AIS"}
+_CORR_MAX_PAIRS = 500
+
+
 def fetch_correlations(output_dir, window_s=30.0, threshold=0.5):
     """Compute device correlations on demand from every session .db in
     the output directory.
@@ -744,15 +751,33 @@ def fetch_correlations(output_dir, window_s=30.0, threshold=0.5):
         {timestamp, window_s, threshold, total_devices,
          correlated_pairs, clusters}
     """
+    import time as _time
     from utils.correlator import DeviceCorrelator
     from datetime import datetime as _dt
 
+    now = _time.time()
+    cache_key = (round(window_s, 3), round(threshold, 3))
+    cached = _CORR_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _CORR_CACHE_TTL_S:
+        return cached[1]
+
+    since_epoch = now - _CORR_LOOKBACK_S
     c = DeviceCorrelator(window_s=window_s, threshold=threshold)
     for db_path in _iter_db_paths(output_dir):
         try:
-            c.load_db(db_path)
+            if os.path.getmtime(db_path) < since_epoch:
+                continue
+        except OSError:
+            continue
+        try:
+            c.load_db(db_path, since_epoch=since_epoch)
         except Exception:
             continue
+
+    for sig in _CORR_SKIP_SIGNALS:
+        prefix = f"{sig}:"
+        for uid in [u for u in c._observations if u.startswith(prefix)]:
+            del c._observations[uid]
 
     try:
         pairs = c.correlate()
@@ -762,12 +787,19 @@ def fetch_correlations(output_dir, window_s=30.0, threshold=0.5):
         clusters = c.find_clusters()
     except Exception:
         clusters = []
+    total_pairs = len(pairs)
+    if total_pairs > _CORR_MAX_PAIRS:
+        pairs = pairs[:_CORR_MAX_PAIRS]
 
-    return {
+    result = {
         "timestamp": _dt.now().isoformat(),
         "window_s": window_s,
         "threshold": threshold,
+        "lookback_s": _CORR_LOOKBACK_S,
         "total_devices": c.device_count,
+        "total_pairs": total_pairs,
         "correlated_pairs": pairs,
         "clusters": clusters,
     }
+    _CORR_CACHE[cache_key] = (now, result)
+    return result

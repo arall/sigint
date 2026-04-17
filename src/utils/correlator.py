@@ -89,11 +89,11 @@ class DeviceCorrelator:
         # device_id → list of (timestamp_epoch, lat, lon, signal_type)
         self._observations: Dict[str, List[Tuple[float, Optional[float], Optional[float], str]]] = defaultdict(list)
 
-    def load_db(self, path: str):
+    def load_db(self, path: str, since_epoch: Optional[float] = None):
         """Load detections from a .db file."""
         conn = _db.connect(path, readonly=True)
         try:
-            for r in _db.iter_detections(conn):
+            for r in _db.iter_detections(conn, since_epoch=since_epoch):
                 row = _db.row_to_dict(r)
                 uid = _extract_uid(row)
                 if not uid:
