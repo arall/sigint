@@ -830,8 +830,8 @@ Examples:
         "agent",
         help="Run as a remote Meshtastic C2 agent",
     )
-    agent_parser.add_argument("--config", default="/etc/sigint/agent.conf",
-                              help="Path to agent.conf")
+    agent_parser.add_argument("--config", default="configs/agent.json",
+                              help="Path to agent.json")
     agent_parser.add_argument("--state-dir", default=None)
     agent_parser.add_argument("--meshtastic-port", default=None)
     agent_parser.add_argument("--agent-id", default=None)
@@ -1434,7 +1434,7 @@ def _dispatch_scanner(args):
         if args.meshtastic_port: argv += ["--meshtastic-port", args.meshtastic_port]
         if args.agent_id: argv += ["--agent-id", args.agent_id]
         # Forward the top-level --gps-port only when --gps was explicitly set,
-        # so the default "/dev/ttyACM0" doesn't silently override agent.conf.
+        # so the default "/dev/ttyACM0" doesn't silently override agent.json.
         if args.gps: argv += ["--gps-port", args.gps_port]
         return agent_run(argv)
 

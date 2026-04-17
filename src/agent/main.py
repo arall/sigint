@@ -15,8 +15,8 @@ from comms.meshlink import MeshLink
 
 def run(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="sdr.py agent")
-    ap.add_argument("--config", default="/etc/sigint/agent.conf",
-                    help="Path to agent.conf")
+    ap.add_argument("--config", default="configs/agent.json",
+                    help="Path to agent.json")
     ap.add_argument("--state-dir", default=None,
                     help="Override state dir (defaults from config)")
     ap.add_argument("--meshtastic-port", default=None,

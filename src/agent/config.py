@@ -1,13 +1,13 @@
-"""agent.conf loader (INI-style, very small)."""
+"""agent.json loader."""
 from __future__ import annotations
 
-import configparser
+import json
 import os
 from dataclasses import dataclass
 from typing import Optional
 
 
-DEFAULT_CONF_PATH = "/etc/sigint/agent.conf"
+DEFAULT_CONF_PATH = "configs/agent.json"
 
 
 @dataclass
@@ -20,17 +20,14 @@ class AgentConfig:
 
     @classmethod
     def load(cls, path: str = DEFAULT_CONF_PATH) -> "AgentConfig":
-        cp = configparser.ConfigParser()
-        cp.read_dict({"agent": {}})
+        data: dict = {}
         if os.path.exists(path):
-            cp.read(path)
-        sec = cp["agent"] if "agent" in cp else {}
-        agent_id = sec.get("agent_id") or os.environ.get("SIGINT_AGENT_ID", "N00")
-        port = sec.get("meshtastic_port") or os.environ.get("SIGINT_MESHTASTIC_PORT")
+            with open(path) as f:
+                data = json.load(f)
         return cls(
-            agent_id=agent_id,
-            meshtastic_port=port,
-            mesh_channel_index=int(sec.get("mesh_channel_index", 0)),
-            state_dir=sec.get("state_dir", "/var/lib/sigint"),
-            gps_port=sec.get("gps_port"),
+            agent_id=data.get("agent_id") or os.environ.get("SIGINT_AGENT_ID", "N00"),
+            meshtastic_port=data.get("meshtastic_port") or os.environ.get("SIGINT_MESHTASTIC_PORT"),
+            mesh_channel_index=int(data.get("mesh_channel_index", 0)),
+            state_dir=data.get("state_dir", "/var/lib/sigint"),
+            gps_port=data.get("gps_port"),
         )
