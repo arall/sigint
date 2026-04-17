@@ -477,12 +477,26 @@ class WebHandler(BaseHTTPRequestHandler):
         Server position comes from server_info.json's server_position key
         (written from config). Agent positions come from their most recent
         geo-tagged DET.
+
+        Accepts ?window=<hours> to restrict detections to rows newer than
+        (now - window). Node positions are always the most recent
+        geo-tagged row so a node stays on the map even after its last
+        detection falls outside the window.
         """
         try:
             per_source = int(qs.get('limit', ['200'])[0])
         except (TypeError, ValueError):
             per_source = 200
         per_source = max(1, min(per_source, 1000))
+
+        window_seconds = None
+        raw = qs.get("window", [None])[0]
+        if raw:
+            try:
+                window_hours = max(0.01, min(float(raw), 168))
+                window_seconds = int(window_hours * 3600)
+            except (ValueError, TypeError):
+                window_seconds = None
 
         out_dir = self.server.output_dir
         # Server fixed position from server_info.json
@@ -497,7 +511,11 @@ class WebHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-        by_src = fetch_detections_by_source(out_dir, limit_per_source=per_source)
+        by_src = fetch_detections_by_source(
+            out_dir,
+            limit_per_source=per_source,
+            window_seconds=window_seconds,
+        )
         agent_positions = fetch_agent_last_positions(out_dir)
 
         mgr = getattr(self.server, 'agent_manager', None)

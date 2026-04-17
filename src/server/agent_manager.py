@@ -136,6 +136,10 @@ class AgentManager:
                 ts_unix = int(fields.get("ts_unix") or 0)
                 if ts_unix > 0:
                     det.timestamp = datetime.fromtimestamp(ts_unix).isoformat()
+                    # Keep ts_epoch in lockstep with timestamp so age filters
+                    # and any `WHERE ts_epoch >= ?` queries see the original
+                    # detection time, not our ingest time.
+                    det.ts_epoch = float(ts_unix)
             except Exception:
                 pass
             with self._lock:

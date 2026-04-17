@@ -1515,6 +1515,9 @@ function initMap() {
       else _map.removeLayer(_mapLayers[k]);
     });
   }
+  // Age filter: refetch on change.
+  const ageSel = document.getElementById('map-age-limit');
+  if (ageSel) ageSel.addEventListener('change', () => loadMap());
   // Force Leaflet to recompute its size once the container is visible
   setTimeout(() => { if (_map) _map.invalidateSize(); }, 100);
 }
@@ -1545,9 +1548,20 @@ function _planeMarker(lat, lon, color, heading, popup) {
   }).bindPopup(popup);
 }
 
+function _mapAgeWindowHours() {
+  const sel = document.getElementById('map-age-limit');
+  if (!sel || sel.value === '') return null;
+  const h = parseFloat(sel.value);
+  return Number.isFinite(h) && h > 0 ? h : null;
+}
+
 async function loadMap() {
   if (!_map) return;
-  const qs = _selectedSession ? ('?session=' + encodeURIComponent(_selectedSession)) : '';
+  const windowHours = _mapAgeWindowHours();
+  const params = [];
+  if (_selectedSession) params.push('session=' + encodeURIComponent(_selectedSession));
+  if (windowHours != null) params.push('window=' + windowHours);
+  const qs = params.length ? '?' + params.join('&') : '';
   const tabs = ['aircraft', 'vessels', 'drones', 'meshtastic'];
   try {
     const results = await Promise.all(tabs.map(t =>
@@ -1555,9 +1569,13 @@ async function loadMap() {
     ));
     const [aircraft, vessels, drones, meshtastic] = results.map(d => d.rows || []);
     // Sources are session-independent — always union across all DBs.
+    // The window filter applies to their detections, not to their node
+    // positions (we want nodes pinned even if their last hit is stale).
     let sources = [];
     try {
-      const s = await fetch('/api/map/sources?limit=100').then(r => r.json());
+      const srcQs = windowHours != null
+        ? '?limit=100&window=' + windowHours : '?limit=100';
+      const s = await fetch('/api/map/sources' + srcQs).then(r => r.json());
       sources = s.sources || [];
     } catch (e) {}
     _renderMap({aircraft, vessels, drones, meshtastic, sources});

@@ -384,7 +384,8 @@ def _row_for_map(r):
     }
 
 
-def fetch_detections_by_source(output_dir, limit_per_source=200):
+def fetch_detections_by_source(output_dir, limit_per_source=200,
+                                window_seconds=None, now=None):
     """Group recent detections by data source (where the RF was captured).
 
     Two kinds of source:
@@ -394,13 +395,12 @@ def fetch_detections_by_source(output_dir, limit_per_source=200):
         remote agent. These live exclusively in agents_*.db, where
         AgentManager sets device_id to the agent_id it received from.
 
-    This deliberately ignores the per-row device_id outside agents_*.db
-    because for BLE/WiFi/Mesh scanners that column holds the detected
-    device's identity (BSSID, mesh node id, ...), not where it was heard.
+    `window_seconds`, if set, restricts to rows newer than (now - window).
+    Uses ts_epoch so it follows the user's notion of "when the emitter
+    was heard", which for DET rows is the agent's original detection
+    time (outbox retries carry the original ts_unix).
 
-    Returns {source_id: [rows newest-first]}, capped per source. Unions
-    across every session DB in `output_dir`, newest session first so we
-    fill from recent activity before older sessions.
+    Returns {source_id: [rows newest-first]}, capped per source.
     """
     from .sessions import is_session_db_name
     try:
@@ -410,6 +410,10 @@ def fetch_detections_by_source(output_dir, limit_per_source=200):
         )
     except OSError:
         return {}
+    if now is None:
+        import time as _time
+        now = _time.time()
+    since = (now - window_seconds) if window_seconds else None
     out: dict = {}
     for name in names:
         path = os.path.join(output_dir, name)
@@ -419,12 +423,20 @@ def fetch_detections_by_source(output_dir, limit_per_source=200):
         except Exception:
             continue
         try:
-            cur = conn.execute(
-                "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
-                "power_db, snr_db, channel, device_id FROM detections "
-                "ORDER BY id DESC LIMIT ?",
-                (limit_per_source * 4,),
-            )
+            if since is not None:
+                cur = conn.execute(
+                    "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
+                    "power_db, snr_db, channel, device_id FROM detections "
+                    "WHERE ts_epoch >= ? ORDER BY id DESC LIMIT ?",
+                    (since, limit_per_source * 4),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
+                    "power_db, snr_db, channel, device_id FROM detections "
+                    "ORDER BY id DESC LIMIT ?",
+                    (limit_per_source * 4,),
+                )
             for r in cur:
                 if is_agent_db:
                     key = r["device_id"] or "server"
