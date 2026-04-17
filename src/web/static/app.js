@@ -1409,18 +1409,22 @@ setInterval(() => {
 // visible; historical session freezes the map like other category tabs.
 let _map = null;
 const _mapLayers = {
-  aircraft:   null,
-  vessels:    null,
-  drones:     null,
-  operators:  null,
-  meshtastic: null,
+  aircraft:    null,
+  vessels:     null,
+  drones:      null,
+  operators:   null,
+  meshtastic:  null,
+  nodes:       null,
+  agent_dets:  null,
 };
 const _MAP_COLORS = {
-  aircraft:   '#2196f3',
-  vessels:    '#4caf50',
-  drones:     '#f44336',
-  operators:  '#ff9800',
-  meshtastic: '#ab47bc',
+  aircraft:    '#2196f3',
+  vessels:     '#4caf50',
+  drones:      '#f44336',
+  operators:   '#ff9800',
+  meshtastic:  '#ab47bc',
+  nodes:       '#ffd54f',
+  agent_dets:  '#ffee58',
 };
 
 function initMap() {
@@ -1484,7 +1488,19 @@ async function loadMap() {
       fetch('/api/cat/' + t + qs).then(r => r.json()).catch(() => ({rows: []}))
     ));
     const [aircraft, vessels, drones, meshtastic] = results.map(d => d.rows || []);
-    _renderMap({aircraft, vessels, drones, meshtastic});
+    // Agents data is session-independent (always unions across all
+    // agents_*.db). Fetch in parallel; tolerate failure.
+    let agents = {approved: {}, info: {}};
+    let agent_dets = [];
+    try {
+      const [a, d] = await Promise.all([
+        fetch('/api/agents').then(r => r.json()),
+        fetch('/api/agents/detections?limit=200').then(r => r.json()),
+      ]);
+      agents = a;
+      agent_dets = d.detections || [];
+    } catch (e) {}
+    _renderMap({aircraft, vessels, drones, meshtastic, agents, agent_dets});
   } catch (e) {}
 }
 
@@ -1571,13 +1587,71 @@ function _renderMap(data) {
   });
   const meshCount = Object.keys(meshNodes).length;
 
+  // Agent nodes: one marker per approved agent at its last-known position.
+  let nodeCount = 0;
+  const agents = data.agents || {};
+  const approvedMap = agents.approved || {};
+  const infoMap = agents.info || {};
+  Object.keys(approvedMap).forEach(aid => {
+    const pos = (infoMap[aid] || {}).last_position;
+    if (!pos || pos.lat == null || pos.lon == null) return;
+    const info = infoMap[aid] || {};
+    const ageS = pos.ts_epoch ? Math.max(0, (Date.now() / 1000) - pos.ts_epoch) : null;
+    const ageTxt = ageS != null
+      ? (ageS < 60 ? ageS.toFixed(0) + 's ago'
+        : ageS < 3600 ? (ageS / 60).toFixed(0) + 'm ago'
+        : (ageS / 3600).toFixed(1) + 'h ago')
+      : '';
+    const popup = '<b>' + esc(aid) + '</b><br>'
+      + 'scanner: ' + esc(info.scanner || 'idle') + '<br>'
+      + 'position from last DET' + (ageTxt ? ' (' + ageTxt + ')' : '') + '<br>'
+      + pos.lat.toFixed(4) + ', ' + pos.lon.toFixed(4);
+    L.circleMarker([pos.lat, pos.lon], {
+      radius: 9,
+      color: _MAP_COLORS.nodes,
+      fillColor: _MAP_COLORS.nodes,
+      fillOpacity: 0.9,
+      weight: 3,
+    }).bindPopup(popup).bindTooltip(aid, {permanent: true, direction: 'top', offset: [0, -10]})
+      .addTo(_mapLayers.nodes);
+    bounds.push([pos.lat, pos.lon]);
+    positioned++;
+    nodeCount++;
+  });
+
+  // Agent-forwarded detections (one marker per DET with lat/lon)
+  let agentDetCount = 0;
+  (data.agent_dets || []).forEach(r => {
+    if (r.latitude == null || r.longitude == null) return;
+    const ts = r.timestamp ? (r.timestamp.split('T')[1]?.split('.')[0] || r.timestamp) : '';
+    const popup = '<b>' + esc(r.agent_id || '?') + ' · ' + esc(r.signal_type || '') + '</b><br>'
+      + (r.channel ? esc(r.channel) + '<br>' : '')
+      + (r.freq_mhz ? r.freq_mhz.toFixed(4) + ' MHz<br>' : '')
+      + (r.power_db != null ? 'RSSI ' + r.power_db.toFixed(1) + ' dB' : '')
+      + (r.snr_db != null ? ' · SNR ' + r.snr_db.toFixed(1) + ' dB' : '')
+      + (ts ? '<br>' + ts : '');
+    L.circleMarker([r.latitude, r.longitude], {
+      radius: 4,
+      color: _MAP_COLORS.agent_dets,
+      fillColor: _MAP_COLORS.agent_dets,
+      fillOpacity: 0.7,
+      weight: 1,
+    }).bindPopup(popup).addTo(_mapLayers.agent_dets);
+    bounds.push([r.latitude, r.longitude]);
+    positioned++;
+    agentDetCount++;
+  });
+
   // Summary line
   const el = document.getElementById('map-summary');
   if (el) {
     el.textContent = positioned > 0
       ? positioned + ' position(s) on map (' + (data.aircraft.length) + ' aircraft, '
           + (data.vessels.length) + ' vessels, ' + (data.drones.length) + ' drones'
-          + (meshCount > 0 ? ', ' + meshCount + ' mesh nodes' : '') + ')'
+          + (meshCount > 0 ? ', ' + meshCount + ' mesh nodes' : '')
+          + (nodeCount > 0 ? ', ' + nodeCount + ' agent node(s)' : '')
+          + (agentDetCount > 0 ? ', ' + agentDetCount + ' agent detection(s)' : '')
+          + ')'
       : 'no GPS positions in the current session — run a capture with GPS, or wait for RemoteID / ADS-B / AIS';
   }
 

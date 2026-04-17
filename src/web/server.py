@@ -34,6 +34,7 @@ from .fetch import (
     fetch_active_dev_sigs,
     fetch_activity_histogram,
     fetch_agent_detections,
+    fetch_agent_last_positions,
     fetch_correlations,
     fetch_detections_for_category,
     fetch_detections_for_category_all,
@@ -428,10 +429,21 @@ class WebHandler(BaseHTTPRequestHandler):
             self._send_json({"approved": {}, "pending": {}, "info": {}})
             return
         approved = mgr.approved()
+        info = {aid: mgr.agent_info(aid) for aid in approved}
+        # Overlay each approved agent's last known position from agents_*.db
+        # so the map can place a marker even before we wire agent-side GPS
+        # into STAT messages.
+        try:
+            positions = fetch_agent_last_positions(self.server.output_dir)
+            for aid, pos in positions.items():
+                if aid in info:
+                    info[aid]["last_position"] = pos
+        except Exception:
+            pass
         self._send_json({
             "approved": approved,
             "pending": mgr.pending(),
-            "info": {aid: mgr.agent_info(aid) for aid in approved},
+            "info": info,
         })
 
     def _serve_agent_detections(self, qs):

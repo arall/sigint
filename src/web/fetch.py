@@ -316,6 +316,56 @@ def _iter_db_paths(output_dir):
         yield os.path.join(output_dir, name)
 
 
+def fetch_agent_last_positions(output_dir):
+    """Return {agent_id: {lat, lon, ts_epoch}} using the newest GPS-tagged
+    detection each agent has ever forwarded.
+
+    Scans agents_*.db newest-first, short-circuits as soon as every agent
+    it's seen has a position."""
+    try:
+        names = sorted(
+            (f for f in os.listdir(output_dir)
+             if f.startswith("agents_") and f.endswith(".db")),
+            reverse=True,
+        )
+    except OSError:
+        return {}
+    out: dict = {}
+    for name in names:
+        path = os.path.join(output_dir, name)
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            continue
+        try:
+            cur = conn.execute(
+                "SELECT device_id, MAX(ts_epoch) AS ts, latitude, longitude "
+                "FROM detections "
+                "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
+                "GROUP BY device_id"
+            )
+            for r in cur:
+                aid = r["device_id"]
+                if not aid:
+                    continue
+                existing = out.get(aid)
+                ts = r["ts"] or 0
+                if existing is None or ts > (existing.get("ts_epoch") or 0):
+                    out[aid] = {
+                        "lat": r["latitude"],
+                        "lon": r["longitude"],
+                        "ts_epoch": ts,
+                    }
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return out
+
+
 def fetch_agent_detections(output_dir, limit=200):
     """Return the most recent detections forwarded from mesh agents.
 
