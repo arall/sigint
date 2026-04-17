@@ -1694,6 +1694,39 @@ async function fetchAgents() {
   } catch (e) {
     // leave existing rows in place on error
   }
+  try {
+    const res2 = await fetch('/api/agents/detections?limit=200');
+    const data2 = await res2.json();
+    renderAgentDetections(data2.detections || []);
+  } catch (e) {
+    // leave existing rows in place on error
+  }
+}
+
+function renderAgentDetections(rows) {
+  const tbody = document.getElementById('agents-detections');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">no detections from agents yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const ts = r.timestamp ? (r.timestamp.split('T')[1]?.split('.')[0] || r.timestamp) : '';
+    const geo = (r.latitude != null && r.longitude != null)
+      ? `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}` : '';
+    const rssi = (r.power_db != null) ? r.power_db.toFixed(1) : '';
+    const snr = (r.snr_db != null) ? r.snr_db.toFixed(1) : '';
+    return `<tr>
+      <td>${esc(ts)}</td>
+      <td>${esc(r.agent_id || '')}</td>
+      <td>${esc(r.signal_type || '')}</td>
+      <td>${esc(r.channel || '')}</td>
+      <td>${r.freq_mhz ? r.freq_mhz.toFixed(4) : ''}</td>
+      <td>${esc(rssi)}</td>
+      <td>${esc(snr)}</td>
+      <td>${esc(geo)}</td>
+    </tr>`;
+  }).join('');
 }
 
 function renderPendingAgents(pending) {

@@ -316,6 +316,59 @@ def _iter_db_paths(output_dir):
         yield os.path.join(output_dir, name)
 
 
+def fetch_agent_detections(output_dir, limit=200):
+    """Return the most recent detections forwarded from mesh agents.
+
+    Scopes to `agents_*.db` only so server-local captures don't show up.
+    Shape: list of dicts with timestamp, agent_id, signal_type, freq_mhz,
+    power_db, snr_db, latitude, longitude, channel — sorted newest first.
+    """
+    try:
+        names = sorted(
+            f for f in os.listdir(output_dir)
+            if f.startswith("agents_") and f.endswith(".db")
+        )
+    except OSError:
+        return []
+    rows = []
+    for name in names:
+        path = os.path.join(output_dir, name)
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            continue
+        try:
+            cur = conn.execute(
+                "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
+                "power_db, snr_db, latitude, longitude, channel, device_id "
+                "FROM detections ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            for r in cur:
+                freq_hz = r["frequency_hz"] or 0
+                rows.append({
+                    "timestamp": r["timestamp"] or "",
+                    "ts_epoch": r["ts_epoch"] or 0,
+                    "agent_id": r["device_id"] or "",
+                    "signal_type": r["signal_type"] or "",
+                    "freq_mhz": round(freq_hz / 1e6, 4) if freq_hz else 0,
+                    "power_db": r["power_db"],
+                    "snr_db": round(r["snr_db"], 1) if r["snr_db"] is not None else None,
+                    "latitude": r["latitude"],
+                    "longitude": r["longitude"],
+                    "channel": r["channel"] or "",
+                })
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    rows.sort(key=lambda r: r["ts_epoch"] or 0, reverse=True)
+    return rows[:limit]
+
+
 def fetch_recent_detections(
     output_dir,
     limit=50,

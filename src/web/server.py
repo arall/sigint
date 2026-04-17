@@ -33,6 +33,7 @@ from .fetch import (
     fetch_active_bssids,
     fetch_active_dev_sigs,
     fetch_activity_histogram,
+    fetch_agent_detections,
     fetch_correlations,
     fetch_detections_for_category,
     fetch_detections_for_category_all,
@@ -111,6 +112,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_category(path[len('/api/cat/'):], qs)
         elif path == '/api/agents':
             self._serve_agents()
+        elif path == '/api/agents/detections':
+            self._serve_agent_detections(qs)
         elif path == '/api/fpv/frame':
             self._serve_fpv_frame()
         elif path == '/api/fpv/stream':
@@ -430,6 +433,16 @@ class WebHandler(BaseHTTPRequestHandler):
             "pending": mgr.pending(),
             "info": {aid: mgr.agent_info(aid) for aid in approved},
         })
+
+    def _serve_agent_detections(self, qs):
+        """Serve recent detections forwarded from mesh agents."""
+        try:
+            limit = int(qs.get('limit', ['200'])[0])
+        except (TypeError, ValueError):
+            limit = 200
+        limit = max(1, min(limit, 1000))
+        rows = fetch_agent_detections(self.server.output_dir, limit=limit)
+        self._send_json({"detections": rows, "total": len(rows)})
 
     def _agents_approve(self, data):
         """Approve a pending agent."""
