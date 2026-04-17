@@ -366,6 +366,10 @@ class ServerOrchestrator:
         self._capture_status = {}
         self._status_lock = threading.Lock()
 
+        # Optional Meshtastic C2 link
+        self._agent_manager = None
+        self._meshlink = None
+
         # Global flags to pass to standalone subprocesses
         self._output_dir = output_dir
         self._use_gps = use_gps
@@ -486,6 +490,27 @@ class ServerOrchestrator:
 
     def setup(self):
         """Parse config and create all captures, channelizers, and parsers."""
+        # Optional Meshtastic C2 link
+        meshcfg = self.config.get("meshlink")
+        if meshcfg:
+            try:
+                from comms.meshlink import MeshLink
+                from server.agent_manager import AgentManager
+                port = meshcfg.get("port")
+                channel_index = int(meshcfg.get("channel_index", 0))
+                self._meshlink = MeshLink.from_serial(port=port, channel_index=channel_index)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                agents_db = os.path.join(self._output_dir, f"agents_{ts}.db")
+                state_dir = os.path.join(self._output_dir, "agents_state")
+                self._agent_manager = AgentManager(
+                    link=self._meshlink,
+                    state_dir=state_dir,
+                    detection_db_path=agents_db,
+                )
+                self._set_status("meshlink", "running", f"port={port} db={os.path.basename(agents_db)}")
+            except Exception as e:
+                self._set_status("meshlink", "failed", str(e)[:200])
+
         captures_cfg = self.config.get("captures", [])
 
         # Check if any capture needs root
@@ -751,6 +776,15 @@ class ServerOrchestrator:
             "started": datetime.now().isoformat(),
             "captures": captures,
         }
+
+        if self._agent_manager is not None:
+            info["agents"] = {
+                "approved": self._agent_manager.approved(),
+                "pending": self._agent_manager.pending(),
+                "info": {aid: self._agent_manager.agent_info(aid)
+                         for aid in self._agent_manager.approved()},
+            }
+
         info_path = os.path.join(self._output_dir, "server_info.json")
         try:
             with open(info_path, "w") as f:
