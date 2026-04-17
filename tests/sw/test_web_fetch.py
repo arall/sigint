@@ -43,7 +43,7 @@ def _make_db_with_signals(signals, ts_offsets=None):
             power_db=-50,
             noise_floor_db=-90,
             channel=ch,
-            metadata='{"icao":"ABC"}' if sig == "ADS-B" else "",
+            metadata='{"icao":"ABC"}' if sig == "ADS-B" else "{}",
         )
         # Override timestamp for age filtering tests
         if ts_offsets is not None:
@@ -91,27 +91,6 @@ def test_cellular_wildcard_matching():
     assert "PMR446" not in types
 
 
-def test_other_category_excludes_known():
-    """'other' must catch ISM / LoRa / POCSAG AND unknown types, but
-    NOT collapse with anything in another category — including cellular."""
-    from web.fetch import fetch_detections_for_category
-
-    path, now = _make_db_with_signals([
-        ("ISM", "433"),
-        ("lora", "868"),
-        ("pocsag", "466"),
-        ("weird-new-signal", ""),           # unknown → other
-        ("PMR446", "CH1"),                  # voice, should NOT match
-        ("ADS-B", "ICAO"),                  # aircraft, should NOT match
-        ("LTE-UPLINK-BAND7", "EARFCN0"),    # cellular, should NOT match
-        ("BLE-Adv", ""),                    # devices, should NOT match
-    ])
-    rows = fetch_detections_for_category(path, "other", now=now + 1)
-    types = {r["signal_type"] for r in rows}
-    assert types == {"ISM", "lora", "pocsag", "weird-new-signal"}, \
-        f"other predicate leaked known types: {types}"
-
-
 def test_window_filtering():
     """Rows older than window_seconds must be excluded."""
     from web.fetch import fetch_detections_for_category
@@ -147,12 +126,12 @@ def test_limit_cap():
 def test_shape_compat_with_loaders():
     """Fetched rows must flow through the pure loaders unchanged."""
     from web.fetch import fetch_detections_for_category
-    from web.loaders import _load_voice, _load_aircraft, _load_other
+    from web.loaders import _load_voice, _load_aircraft, _load_ism
 
     path, now = _make_db_with_signals([
         ("PMR446", "CH1"),
         ("ADS-B", "icao"),
-        ("ISM", "433"),
+        ("ISM:Bresser", "433"),
     ])
 
     voice = _load_voice(fetch_detections_for_category(path, "voice", now=now + 1))
@@ -163,9 +142,9 @@ def test_shape_compat_with_loaders():
     assert len(ac) == 1
     assert ac[0]["icao"] == "ABC"
 
-    other = _load_other(fetch_detections_for_category(path, "other", now=now + 1))
-    assert len(other) == 1
-    assert other[0]["signal_type"] == "ISM"
+    ism = _load_ism(fetch_detections_for_category(path, "ism", now=now + 1))
+    assert len(ism) == 1
+    assert ism[0]["signal_type"] == "ISM:Bresser"
 
 
 def test_unknown_category_returns_empty():
@@ -296,7 +275,6 @@ def run_tests():
     tests = [
         ("Voice predicate",             test_voice_predicate_matches_only_voice_types),
         ("Cellular wildcard",           test_cellular_wildcard_matching),
-        ("Other excludes known",        test_other_category_excludes_known),
         ("Window filtering",            test_window_filtering),
         ("Limit cap",                   test_limit_cap),
         ("Loader shape compat",         test_shape_compat_with_loaders),

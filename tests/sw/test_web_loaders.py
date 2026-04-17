@@ -67,12 +67,12 @@ def test_category_of_direct_match():
     assert category_of("DroneVideo") == "drones"
     assert category_of("ADS-B") == "aircraft"
     assert category_of("AIS") == "vessels"
-    assert category_of("tpms") == "vehicles"
-    assert category_of("keyfob") == "vehicles"
+    assert category_of("tpms") == "tpms"
+    assert category_of("keyfob") == "keyfobs"
     assert category_of("BLE-Adv") == "devices"
     assert category_of("WiFi-Probe") == "devices"
     assert category_of("WiFi-AP") == "devices"
-    assert category_of("ISM") == "other"
+    assert category_of("ISM") == "ism"
 
 
 def test_category_of_wildcards():
@@ -189,10 +189,10 @@ def test_load_vessels_by_mmsi():
              latitude=41.4, longitude=2.1,
              meta={"mmsi": "224123456", "name": "CARGO SHIP",
                    "ship_type": "Cargo", "nav_status": "Under way",
-                   "speed": 12.5, "course": 270.0}),
+                   "speed_kn": 12.5, "course": 270.0}),
         _det("AIS", timestamp="2026-04-11T12:00:30",
              latitude=41.41, longitude=2.11,
-             meta={"mmsi": "224123456", "speed": 13.0}),
+             meta={"mmsi": "224123456", "speed_kn": 13.0}),
     ]
     rows = _load_vessels(dets)
     assert len(rows) == 1
@@ -204,8 +204,8 @@ def test_load_vessels_by_mmsi():
     assert v["count"] == 2
 
 
-def test_load_vehicles_tpms_and_keyfob():
-    from web.loaders import _load_vehicles
+def test_load_tpms_groups_by_sensor_id():
+    from web.loaders import _load_tpms
 
     dets = [
         _det("tpms", frequency_mhz=433.92,
@@ -214,25 +214,30 @@ def test_load_vehicles_tpms_and_keyfob():
         _det("tpms", frequency_mhz=433.92,
              meta={"sensor_id": "ABCD1234", "protocol": "Ford",
                    "pressure_kpa": 221.0, "temperature_c": 26.0}),
-        _det("keyfob", frequency_mhz=433.92,
-             meta={"data_hex": "abcdef01", "protocol": "PT2262"}),
-        _det("keyfob", frequency_mhz=315.0,
-             meta={"data_hex": "abcdef01", "protocol": "PT2262"}),
     ]
-    rows = _load_vehicles(dets)
-    kinds = [r["kind"] for r in rows]
-    assert "TPMS" in kinds and "Keyfob" in kinds
-
-    tpms = next(r for r in rows if r["kind"] == "TPMS")
+    rows = _load_tpms(dets)
+    assert len(rows) == 1
+    tpms = rows[0]
     assert tpms["id"] == "ABCD1234"
     assert tpms["count"] == 2
     assert tpms["pressure_kpa"] == 221.0
     assert tpms["temperature_c"] == 26.0
 
-    # Same data_hex on different frequencies → same burst fingerprint, one row
-    kf = [r for r in rows if r["kind"] == "Keyfob"]
-    assert len(kf) == 1
-    assert kf[0]["count"] == 2
+
+def test_load_keyfobs_groups_by_data_hex():
+    from web.loaders import _load_keyfobs
+
+    dets = [
+        _det("keyfob", frequency_mhz=433.92,
+             meta={"data_hex": "abcdef01", "protocol": "PT2262"}),
+        _det("keyfob", frequency_mhz=315.0,
+             meta={"data_hex": "abcdef01", "protocol": "PT2262"}),
+    ]
+    rows = _load_keyfobs(dets)
+    # Same data_hex on different frequencies → one row
+    assert len(rows) == 1
+    assert rows[0]["count"] == 2
+    assert rows[0]["protocol"] == "PT2262"
 
 
 def test_load_cellular_wildcard_grouping():
@@ -252,20 +257,30 @@ def test_load_cellular_wildcard_grouping():
     assert gsm["count"] == 2
 
 
-def test_load_other_catchall():
-    from web.loaders import _load_other
+def test_load_ism_returns_category_rows():
+    from web.loaders import _load_ism
 
     dets = [
         _det("ISM", frequency_mhz=433.92,
              meta={"model": "WeatherStation", "protocol": "Bresser"}),
+        _det("PMR446", channel="CH1"),  # voice — filtered out
+    ]
+    rows = _load_ism(dets)
+    assert len(rows) == 1
+    assert rows[0]["signal_type"] == "ISM"
+    assert rows[0]["model"] == "WeatherStation"
+
+
+def test_load_lora_returns_category_rows():
+    from web.loaders import _load_lora
+
+    dets = [
         _det("lora", frequency_mhz=868.1),
         _det("PMR446", channel="CH1"),  # voice — filtered out
     ]
-    rows = _load_other(dets)
-    types = {r["signal_type"] for r in rows}
-    assert types == {"ISM", "lora"}
-    ism = next(r for r in rows if r["signal_type"] == "ISM")
-    assert ism["model"] == "WeatherStation"
+    rows = _load_lora(dets)
+    assert len(rows) == 1
+    assert rows[0]["signal_type"] == "lora"
 
 
 # ---- Device loaders ----
@@ -391,9 +406,11 @@ def run_tests():
         ("Drones grouped by serial",        test_load_drones_by_serial),
         ("Aircraft grouped by ICAO",        test_load_aircraft_by_icao),
         ("Vessels grouped by MMSI",         test_load_vessels_by_mmsi),
-        ("Vehicles TPMS + keyfob",          test_load_vehicles_tpms_and_keyfob),
+        ("TPMS grouped by sensor_id",       test_load_tpms_groups_by_sensor_id),
+        ("Keyfobs grouped by data_hex",     test_load_keyfobs_groups_by_data_hex),
         ("Cellular wildcard grouping",      test_load_cellular_wildcard_grouping),
-        ("Other catch-all",                 test_load_other_catchall),
+        ("ISM category rows",               test_load_ism_returns_category_rows),
+        ("LoRa category rows",              test_load_lora_returns_category_rows),
         ("WiFi client label not SSID",      test_load_wifi_clients_label_is_not_ssid),
         ("BLE prefers apple_device",        test_load_ble_devices_prefers_apple_device),
         ("WiFi AP physical grouping",       test_load_wifi_aps_physical_ap_grouping),
