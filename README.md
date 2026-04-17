@@ -18,9 +18,4 @@ See **[docs/install.md](docs/install.md)** for system dependencies, SDR drivers,
 
 ## Documentation
 
-Full documentation lives in **[docs/](docs/)**. Start with the [wiki index](docs/README.md).
-
-## References
-
-- https://github.com/ATAKRR/atakrr
-- https://github.com/kamakauzy/ReconRaven
+Full documentation lives in **[docs/](docs/)**.
