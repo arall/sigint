@@ -23,6 +23,7 @@ Entry points, grouped by what you're trying to do.
 ## Under the hood
 
 - **[architecture.md](architecture.md)** — Hybrid autonomous + orchestrated model, capture/parser/scanner pipeline, analysis layer, design principles.
+- **[roadmap.md](roadmap.md)** — What's shipped, what's in flight, what's planned, and the speculative ideas list.
 - **[troubleshooting.md](troubleshooting.md)** — Common bring-up failures (PSK mismatch, radio stuck in debug mode, state-sync drift), SDR quirks, Pi-specific gotchas.
 
 ## Images
