@@ -49,7 +49,7 @@ if [[ -z "${SKIP_CONFIG:-}" && ! -f "${CONF}" ]]; then
   exit 1
 fi
 
-cp "$(dirname "$0")/sigint-server.service" /etc/systemd/system/
+sed "s|@PROJECT_DIR@|${PROJECT_DIR}|g" "$(dirname "$0")/sigint-server.service" > /etc/systemd/system/sigint-server.service
 systemctl daemon-reload
 if [[ -f "${CONF}" ]]; then
   systemctl enable --now sigint-server.service

@@ -6,8 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/arall/code/sigint
-ExecStart=/home/arall/code/sigint/venv/bin/python3 /home/arall/code/sigint/src/sdr.py server configs/server.json --web
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PROJECT_DIR@/venv/bin/python3 @PROJECT_DIR@/src/sdr.py server configs/server.json --web
 Restart=always
 RestartSec=5
 StandardOutput=journal

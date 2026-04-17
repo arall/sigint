@@ -41,7 +41,7 @@ cat > "${CONF}" <<EOF
 }
 EOF
 
-cp "$(dirname "$0")/sigint-agent.service" /etc/systemd/system/
+sed "s|@PROJECT_DIR@|${PROJECT_DIR}|g" "$(dirname "$0")/sigint-agent.service" > /etc/systemd/system/sigint-agent.service
 systemctl daemon-reload
 systemctl enable --now sigint-agent.service
 echo "Agent ${AGENT_ID} installed, config at ${CONF}."
