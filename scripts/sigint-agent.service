@@ -1,0 +1,17 @@
+[Unit]
+Description=SIGINT Meshtastic C2 Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/arall/code/sigint
+ExecStart=/home/arall/code/sigint/venv/bin/python3 /home/arall/code/sigint/src/sdr.py agent
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

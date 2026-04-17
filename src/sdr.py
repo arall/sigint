@@ -825,6 +825,17 @@ Examples:
         help="Output directory to serve (default: --output value)",
     )
 
+    # Meshtastic C2 agent
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Run as a remote Meshtastic C2 agent",
+    )
+    agent_parser.add_argument("--config", default="/etc/sigint/agent.conf",
+                              help="Path to agent.conf")
+    agent_parser.add_argument("--state-dir", default=None)
+    agent_parser.add_argument("--meshtastic-port", default=None)
+    agent_parser.add_argument("--agent-id", default=None)
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -1414,6 +1425,15 @@ def _dispatch_scanner(args):
         from web import run_web_server
         output_dir = getattr(args, 'dir', None) or args.output
         run_web_server(output_dir, port=args.port)
+
+    elif args.command == "agent":
+        from agent.main import run as agent_run
+        argv = []
+        if args.config: argv += ["--config", args.config]
+        if args.state_dir: argv += ["--state-dir", args.state_dir]
+        if args.meshtastic_port: argv += ["--meshtastic-port", args.meshtastic_port]
+        if args.agent_id: argv += ["--agent-id", args.agent_id]
+        return agent_run(argv)
 
     elif args.command == "multi":
         _run_multi(args)

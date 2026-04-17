@@ -42,6 +42,7 @@
   <button class="tab-btn" data-tab="correlations">Correlations</button>
   <button class="tab-btn" data-tab="log">Log</button>
   <button class="tab-btn" data-tab="config">Config</button>
+  <button class="tab-btn" data-tab="agents">Agents</button>
   <button class="tab-btn" data-tab="timeline">Timeline</button>
 </div>
 
@@ -605,6 +606,31 @@
     <div class="section-title">Capture Configuration</div>
     <div class="tab-desc">Active capture devices, frequency coverage, and health status. Shows HackRF channelizer channels and standalone scanner subprocesses.</div>
     <div class="section-body" id="captures"><div class="empty">loading...</div></div>
+  </div>
+</div>
+
+<!-- Tab: Agents -->
+<div id="tab-agents" class="tab-content">
+  <div class="section">
+    <div class="section-title">Pending agents</div>
+    <div class="tab-desc">Remote nodes broadcasting HELLO. Click Approve to allow.</div>
+    <table>
+      <thead><tr>
+        <th>Agent ID</th><th>Hardware</th><th>Version</th>
+        <th>First seen</th><th>Action</th>
+      </tr></thead>
+      <tbody id="agents-pending"><tr><td colspan="5" class="empty">no pending agents</td></tr></tbody>
+    </table>
+  </div>
+  <div class="section">
+    <div class="section-title">Approved agents</div>
+    <table>
+      <thead><tr>
+        <th>Agent ID</th><th>Scanner</th><th>State</th><th>GPS</th>
+        <th>CPU</th><th>Last seen</th><th>Action</th>
+      </tr></thead>
+      <tbody id="agents-approved"><tr><td colspan="7" class="empty">no approved agents</td></tr></tbody>
+    </table>
   </div>
 </div>
 

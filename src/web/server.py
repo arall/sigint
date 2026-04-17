@@ -109,12 +109,34 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_correlations()
         elif path.startswith('/api/cat/'):
             self._serve_category(path[len('/api/cat/'):], qs)
+        elif path == '/api/agents':
+            self._serve_agents()
         elif path == '/api/fpv/frame':
             self._serve_fpv_frame()
         elif path == '/api/fpv/stream':
             self._serve_fpv_stream()
         elif path.startswith('/audio/'):
             self._serve_audio(path[7:])
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length).decode('utf-8') if length else ''
+        try:
+            data = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            self.send_error(400, "bad json")
+            return
+
+        if path == '/api/agents/approve':
+            self._agents_approve(data)
+        elif path == '/api/agents/cmd':
+            self._agents_cmd(data)
+        elif path == '/api/agents/cfg':
+            self._agents_cfg(data)
         else:
             self.send_error(404)
 
@@ -396,6 +418,62 @@ class WebHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _serve_agents(self):
+        """Serve agent status (approved, pending, info)."""
+        mgr = getattr(self.server, 'agent_manager', None)
+        if not mgr:
+            self._send_json({"approved": {}, "pending": {}, "info": {}})
+            return
+        approved = mgr.approved()
+        self._send_json({
+            "approved": approved,
+            "pending": mgr.pending(),
+            "info": {aid: mgr.agent_info(aid) for aid in approved},
+        })
+
+    def _agents_approve(self, data):
+        """Approve a pending agent."""
+        mgr = getattr(self.server, 'agent_manager', None)
+        if not mgr:
+            self.send_error(503, "no agent manager")
+            return
+        aid = data.get('agent_id')
+        if not aid:
+            self.send_error(400, "agent_id required")
+            return
+        mgr.approve(aid)
+        self._send_json({"ok": True})
+
+    def _agents_cmd(self, data):
+        """Send a command to an agent."""
+        mgr = getattr(self.server, 'agent_manager', None)
+        if not mgr:
+            self.send_error(503, "no agent manager")
+            return
+        aid = data.get('agent_id')
+        verb = data.get('verb')
+        args = data.get('args') or []
+        if not aid or not verb:
+            self.send_error(400, "agent_id and verb required")
+            return
+        mgr.send_cmd(aid, verb, args)
+        self._send_json({"ok": True})
+
+    def _agents_cfg(self, data):
+        """Send a config parameter to an agent."""
+        mgr = getattr(self.server, 'agent_manager', None)
+        if not mgr:
+            self.send_error(503, "no agent manager")
+            return
+        aid = data.get('agent_id')
+        key = data.get('key')
+        value = data.get('value')
+        if not (aid and key):
+            self.send_error(400, "agent_id and key required")
+            return
+        mgr.send_cfg(aid, key, str(value))
+        self._send_json({"ok": True})
+
 
 # ---------------------------------------------------------------------------
 # Public entry points
@@ -428,8 +506,14 @@ def run_web_server(output_dir, port=8080):
     server.serve_forever()
 
 
-def start_web_server_background(output_dir, port=8080):
-    """Start web server in a background daemon thread (for embedding in server)."""
+def start_web_server_background(output_dir, port=8080, agent_manager=None):
+    """Start web server in a background daemon thread (for embedding in server).
+
+    Args:
+        output_dir: Directory to serve dashboard data from
+        port: HTTP port to listen on
+        agent_manager: Optional AgentManager instance to expose via /api/agents
+    """
     output_dir = str(output_dir)
     stop_event = threading.Event()
 
@@ -446,6 +530,7 @@ def start_web_server_background(output_dir, port=8080):
     server.tailer = tailer
     server.output_dir = output_dir
     server.stop_event = stop_event
+    server.agent_manager = agent_manager
 
     thread = threading.Thread(
         target=server.serve_forever,

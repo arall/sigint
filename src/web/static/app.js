@@ -1286,6 +1286,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       loadMap();
     }
     if (btn.dataset.tab === 'correlations') loadCorrelations();
+    if (btn.dataset.tab === 'agents') fetchAgents();
     if (btn.dataset.tab === 'signals') loadCategory(_sigSubtab);
   });
 });
@@ -1682,5 +1683,91 @@ setInterval(() => {
   const el = document.getElementById('tab-timeline');
   if (el && el.classList.contains('active')) loadActivity();
 }, 60000);
+
+// --- Agents tab ---
+async function fetchAgents() {
+  try {
+    const res = await fetch('/api/agents');
+    const data = await res.json();
+    renderPendingAgents(data.pending || {});
+    renderApprovedAgents(data.approved || {}, data.info || {});
+  } catch (e) {
+    // leave existing rows in place on error
+  }
+}
+
+function renderPendingAgents(pending) {
+  const tbody = document.getElementById('agents-pending');
+  const ids = Object.keys(pending).sort();
+  if (!ids.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">no pending agents</td></tr>';
+    return;
+  }
+  tbody.innerHTML = ids.map(id => {
+    const p = pending[id] || {};
+    const seen = p.first_seen_at ? new Date(p.first_seen_at * 1000).toLocaleTimeString() : '';
+    return `<tr>
+      <td>${esc(id)}</td><td>${esc(p.hw || '')}</td><td>${esc(p.version || '')}</td>
+      <td>${seen}</td>
+      <td><button onclick="approveAgent('${esc(id)}')">Approve</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderApprovedAgents(approved, info) {
+  const tbody = document.getElementById('agents-approved');
+  const ids = Object.keys(approved).sort();
+  if (!ids.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">no approved agents</td></tr>';
+    return;
+  }
+  tbody.innerHTML = ids.map(id => {
+    const a = approved[id] || {};
+    const i = info[id] || {};
+    const lastSeen = a.last_seen_at ? new Date(a.last_seen_at * 1000).toLocaleTimeString() : '';
+    const gps = (i.lat != null && i.lon != null) ? `${i.lat.toFixed(3)},${i.lon.toFixed(3)}` : '';
+    return `<tr>
+      <td>${esc(id)}</td><td>${esc(i.scanner || '')}</td><td>${esc(i.state || '')}</td>
+      <td>${esc(gps)}</td><td>${esc(i.cpu || '')}</td><td>${lastSeen}</td>
+      <td>
+        <button onclick="sendAgentCmd('${esc(id)}','STOP',[])">Stop</button>
+        <button onclick="promptAgentStart('${esc(id)}')">Start...</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function approveAgent(id) {
+  await fetch('/api/agents/approve', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({agent_id: id}),
+  });
+  fetchAgents();
+}
+
+async function sendAgentCmd(id, verb, args) {
+  await fetch('/api/agents/cmd', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({agent_id: id, verb: verb, args: args}),
+  });
+}
+
+function promptAgentStart(id) {
+  const scanner = prompt(`Scanner to start on ${id} (e.g. pmr, ism, wifi):`);
+  if (!scanner) return;
+  const extra = prompt('Extra args (space-separated, optional):', '') || '';
+  const args = [scanner].concat(extra.trim().split(/\s+/).filter(Boolean));
+  sendAgentCmd(id, 'START', args);
+}
+
+// Poll agents tab when it's active
+setInterval(() => {
+  const tab = document.querySelector('.tab-btn.active');
+  if (tab && tab.dataset.tab === 'agents') fetchAgents();
+}, 3000);
+
+// Trigger initial load when the Agents tab is selected
+document.querySelectorAll('.tab-btn[data-tab="agents"]').forEach(btn =>
+  btn.addEventListener('click', fetchAgents));
 
 connectSSE();

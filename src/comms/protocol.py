@@ -1,0 +1,184 @@
+"""Wire protocol for Meshtastic C2 messages.
+
+Messages are plain text, pipe-delimited. First field is the tag that identifies
+the message type. Literal '|' inside a text field is escaped as '%7C'.
+
+Two acknowledgement forms:
+- ACK (central -> agent): acknowledges a sequenced message (DET/STAT/LOG) by seq
+- RES (agent -> central): reports the result of a command (CMD/CFG/APPROVE)
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
+
+
+class ProtocolError(ValueError):
+    """Raised when a message cannot be parsed."""
+
+
+_TAGS = {"CMD", "CFG", "APPROVE", "ACK", "RES", "HELLO", "STAT", "DET", "LOG"}
+
+
+def _esc(s: str) -> str:
+    return str(s).replace("|", "%7C")
+
+
+def _unesc(s: str) -> str:
+    return s.replace("%7C", "|")
+
+
+@dataclass
+class Message:
+    tag: str
+    agent_id: str
+    seq: Optional[int]          # set for DET/STAT/LOG/ACK, None otherwise
+    fields: Dict[str, Any]
+    raw: str
+
+
+# -- encoders ---------------------------------------------------------------
+
+def encode_cmd(target_id: str, verb: str, args: List[str]) -> str:
+    parts = ["CMD", target_id, verb] + [_esc(a) for a in args]
+    return "|".join(parts)
+
+
+def encode_cfg(target_id: str, key: str, value: str) -> str:
+    return f"CFG|{target_id}|{_esc(key)}|{_esc(value)}"
+
+
+def encode_approve(agent_id: str) -> str:
+    return f"APPROVE|{agent_id}"
+
+
+def encode_ack(agent_id: str, seq: int, status: str = "ok") -> str:
+    return f"ACK|{agent_id}|{seq}|{_esc(status)}"
+
+
+def encode_res(agent_id: str, verb: str, result: str, msg: str = "") -> str:
+    return f"RES|{agent_id}|{_esc(verb)}|{_esc(result)}|{_esc(msg)}"
+
+
+def encode_hello(agent_id: str, version: str, hw: str) -> str:
+    return f"HELLO|{agent_id}|{_esc(version)}|{_esc(hw)}"
+
+
+def encode_stat(agent_id: str, seq: int, scanner: str, state: str,
+                lat: Optional[float], lon: Optional[float],
+                sats: int, cpu: int, uptime_sec: int) -> str:
+    lat_s = f"{lat:.4f}" if lat is not None else ""
+    lon_s = f"{lon:.4f}" if lon is not None else ""
+    return (f"STAT|{agent_id}|{seq}|{_esc(scanner)}|{_esc(state)}|"
+            f"{lat_s}|{lon_s}|{sats}|{cpu}|{uptime_sec}")
+
+
+def encode_det(agent_id: str, seq: int, type_: str, freq_mhz: float,
+               rssi: int, lat: Optional[float], lon: Optional[float],
+               ts_unix: int, summary: str = "") -> str:
+    lat_s = f"{lat:.4f}" if lat is not None else ""
+    lon_s = f"{lon:.4f}" if lon is not None else ""
+    return (f"DET|{agent_id}|{seq}|{_esc(type_)}|{freq_mhz:.5f}|{rssi}|"
+            f"{lat_s}|{lon_s}|{ts_unix}|{_esc(summary)}")
+
+
+def encode_det_truncated(agent_id: str, seq: int, type_: str, freq_mhz: float,
+                          rssi: int, lat: Optional[float], lon: Optional[float],
+                          ts_unix: int, summary: str, max_bytes: int = 200) -> str:
+    """Encode DET, progressively dropping optional tail fields if oversized.
+
+    Drop order: summary -> lat/lon -> ts_unix (field becomes empty)."""
+    attempts = [
+        (summary, lat, lon, ts_unix),
+        ("", lat, lon, ts_unix),
+        ("", None, None, ts_unix),
+        ("", None, None, 0),
+    ]
+    for s, la, lo, ts in attempts:
+        ts_eff = ts if ts else 0
+        wire = encode_det(agent_id, seq, type_, freq_mhz, rssi, la, lo, ts_eff, s)
+        if len(wire.encode("utf-8")) <= max_bytes:
+            return wire
+    return wire  # best effort
+
+
+def encode_log(agent_id: str, seq: int, level: str, text: str) -> str:
+    return f"LOG|{agent_id}|{seq}|{_esc(level)}|{_esc(text)}"
+
+
+# -- decoder ----------------------------------------------------------------
+
+def decode(wire: str) -> Message:
+    if not wire:
+        raise ProtocolError("empty message")
+    parts = wire.split("|")
+    tag = parts[0]
+    if tag not in _TAGS:
+        raise ProtocolError(f"unknown tag: {tag!r}")
+    try:
+        if tag == "CMD":
+            _check_min(parts, 3)
+            return Message(tag, parts[1], None,
+                           {"verb": parts[2], "args": [_unesc(p) for p in parts[3:]]},
+                           raw=wire)
+        if tag == "CFG":
+            _check_min(parts, 4)
+            return Message(tag, parts[1], None,
+                           {"key": _unesc(parts[2]), "value": _unesc(parts[3])},
+                           raw=wire)
+        if tag == "APPROVE":
+            _check_min(parts, 2)
+            return Message(tag, parts[1], None, {}, raw=wire)
+        if tag == "ACK":
+            _check_min(parts, 4)
+            return Message(tag, parts[1], int(parts[2]),
+                           {"seq": int(parts[2]), "status": _unesc(parts[3])},
+                           raw=wire)
+        if tag == "RES":
+            _check_min(parts, 4)
+            return Message(tag, parts[1], None,
+                           {"verb": _unesc(parts[2]),
+                            "result": _unesc(parts[3]),
+                            "msg": _unesc(parts[4]) if len(parts) > 4 else ""},
+                           raw=wire)
+        if tag == "HELLO":
+            _check_min(parts, 4)
+            return Message(tag, parts[1], None,
+                           {"version": _unesc(parts[2]), "hw": _unesc(parts[3])},
+                           raw=wire)
+        if tag == "STAT":
+            _check_min(parts, 10)
+            return Message(tag, parts[1], int(parts[2]),
+                           {"scanner": _unesc(parts[3]),
+                            "state": _unesc(parts[4]),
+                            "lat": float(parts[5]) if parts[5] else None,
+                            "lon": float(parts[6]) if parts[6] else None,
+                            "sats": int(parts[7]) if parts[7] else 0,
+                            "cpu": int(parts[8]) if parts[8] else 0,
+                            "uptime_sec": int(parts[9]) if parts[9] else 0},
+                           raw=wire)
+        if tag == "DET":
+            _check_min(parts, 10)
+            return Message(tag, parts[1], int(parts[2]),
+                           {"type": _unesc(parts[3]),
+                            "freq_mhz": float(parts[4]) if parts[4] else 0.0,
+                            "rssi": int(parts[5]) if parts[5] else 0,
+                            "lat": float(parts[6]) if parts[6] else None,
+                            "lon": float(parts[7]) if parts[7] else None,
+                            "ts_unix": int(parts[8]) if parts[8] else 0,
+                            "summary": _unesc(parts[9]) if len(parts) > 9 else ""},
+                           raw=wire)
+        if tag == "LOG":
+            _check_min(parts, 5)
+            return Message(tag, parts[1], int(parts[2]),
+                           {"level": _unesc(parts[3]),
+                            "text": _unesc(parts[4])},
+                           raw=wire)
+    except (ValueError, IndexError) as e:
+        raise ProtocolError(f"malformed {tag}: {e}") from e
+    raise ProtocolError(f"unhandled tag: {tag}")
+
+
+def _check_min(parts: List[str], n: int) -> None:
+    if len(parts) < n:
+        raise ProtocolError(f"expected >= {n} fields, got {len(parts)}")
