@@ -909,7 +909,39 @@ def _start_gps(args):
         print(f"[GPS] Fix acquired: {lat:.6f}, {lon:.6f}")
     else:
         print(f"[GPS] Waiting for fix on {port}...")
+    # Drop a sidecar JSON so the agent process can read the latest fix
+    # without competing for the serial port. Only meaningful when this
+    # scanner is being driven by an agent (which sets --output to its
+    # state_dir/scanner), but always cheap to write.
+    _start_gps_sidecar(gps, args.output)
     return gps
+
+
+def _start_gps_sidecar(gps, output_dir):
+    import json as _json
+    import os as _os
+    import threading as _threading
+    import time as _time
+    path = _os.path.join(output_dir, "gps.json")
+    def _writer():
+        while True:
+            try:
+                lat, lon = gps.position
+                payload = {
+                    "lat": lat,
+                    "lon": lon,
+                    "sats": getattr(gps, "satellites", 0) or 0,
+                    "ts": _time.time(),
+                }
+                tmp = path + ".tmp"
+                with open(tmp, "w") as f:
+                    _json.dump(payload, f)
+                _os.replace(tmp, path)
+            except Exception:
+                pass
+            _time.sleep(5)
+    t = _threading.Thread(target=_writer, daemon=True, name="gps-sidecar")
+    t.start()
 
 
 def _start_tak(args):

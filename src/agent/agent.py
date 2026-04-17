@@ -1,6 +1,7 @@
 """Agent: wires MeshLink, ScannerManager, Outbox, and AgentState together."""
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -26,6 +27,12 @@ class Agent:
         self._scanner_mgr = scanner_mgr
         self._stop = threading.Event()
         self._threads: List[threading.Thread] = []
+        # Process start timestamp for the STAT uptime field.
+        self._start_ts = time.time()
+        # Path the scanner subprocess drops a {lat, lon, sats, ts} sidecar
+        # into. Agent polls it for STAT — avoids holding the GPS port
+        # concurrently with the scanner.
+        self._gps_sidecar = os.path.join(state_dir, "scanner", "gps.json")
         self._link.on_message(self._on_msg)
 
     # -- public API -------------------------------------------------------
@@ -184,9 +191,34 @@ class Agent:
         seq = self._outbox.enqueue("STAT", "")
         scanner = (self._state.current_scanner or {}).get("type", "idle")
         state = "running" if (self._scanner_mgr and self._scanner_mgr.is_running()) else "idle"
+
+        # GPS from the scanner-side sidecar (None if it hasn't been
+        # written yet, or the file is older than 60 s).
+        lat, lon, sats = None, None, 0
+        try:
+            st = os.stat(self._gps_sidecar)
+            if (time.time() - st.st_mtime) < 60:
+                with open(self._gps_sidecar) as f:
+                    g = json.load(f)
+                lat = g.get("lat")
+                lon = g.get("lon")
+                sats = int(g.get("sats", 0) or 0)
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+
+        # 1-minute load average normalised to a percentage of total cores.
+        cpu = 0
+        try:
+            ncpu = os.cpu_count() or 1
+            cpu = int(round((os.getloadavg()[0] / ncpu) * 100))
+        except (OSError, AttributeError):
+            pass
+
+        uptime_sec = int(time.time() - self._start_ts)
+
         payload = P.encode_stat(self._state.agent_id, seq, scanner, state,
-                                 lat=None, lon=None, sats=0, cpu=0,
-                                 uptime_sec=int(time.time()))
+                                 lat=lat, lon=lon, sats=sats, cpu=cpu,
+                                 uptime_sec=uptime_sec)
         self._outbox.update_payload(seq, payload)
 
     def _hello_loop(self, interval: float) -> None:

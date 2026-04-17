@@ -2013,21 +2013,42 @@ function renderPendingAgents(pending) {
   }).join('');
 }
 
+function _fmtUptime(s) {
+  if (s == null || s <= 0) return '';
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  return Math.floor(s / 86400) + 'd ' + Math.floor((s % 86400) / 3600) + 'h';
+}
+
 function renderApprovedAgents(approved, info) {
   const tbody = document.getElementById('agents-approved');
   const ids = Object.keys(approved).sort();
   if (!ids.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">no approved agents</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">no approved agents</td></tr>';
     return;
   }
   tbody.innerHTML = ids.map(id => {
     const a = approved[id] || {};
     const i = info[id] || {};
     const lastSeen = a.last_seen_at ? new Date(a.last_seen_at * 1000).toLocaleTimeString() : '';
-    const gps = (i.lat != null && i.lon != null) ? `${i.lat.toFixed(3)},${i.lon.toFixed(3)}` : '';
+    // Prefer the live GPS from STAT (i.lat/i.lon); fall back to the
+    // last-known position from a forwarded DET so the cell isn't blank
+    // while the agent's GPS sidecar is still warming up.
+    let gpsLat = i.lat, gpsLon = i.lon;
+    if ((gpsLat == null || gpsLon == null) && i.last_position) {
+      gpsLat = i.last_position.lat;
+      gpsLon = i.last_position.lon;
+    }
+    const gps = (gpsLat != null && gpsLon != null)
+      ? `${gpsLat.toFixed(4)},${gpsLon.toFixed(4)}` : '';
+    const sats = (i.sats != null && i.sats > 0) ? i.sats : '';
+    const cpu = (i.cpu != null && i.cpu > 0) ? i.cpu + '%' : '';
+    const uptime = _fmtUptime(i.uptime_sec);
     return `<tr>
       <td>${esc(id)}</td><td>${esc(i.scanner || '')}</td><td>${esc(i.state || '')}</td>
-      <td>${esc(gps)}</td><td>${esc(i.cpu || '')}</td><td>${lastSeen}</td>
+      <td>${esc(gps)}</td><td>${esc(sats)}</td><td>${esc(cpu)}</td>
+      <td>${esc(uptime)}</td><td>${lastSeen}</td>
       <td>
         <button onclick="sendAgentCmd('${esc(id)}','STOP',[])">Stop</button>
         <button onclick="promptAgentStart('${esc(id)}')">Start...</button>
