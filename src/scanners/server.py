@@ -1134,7 +1134,11 @@ class ServerOrchestrator:
         # Start web UI if configured
         if self._web_port:
             from web import start_web_server_background
-            start_web_server_background(self._output_dir, port=self._web_port)
+            start_web_server_background(
+                self._output_dir,
+                port=self._web_port,
+                agent_manager=self._agent_manager,
+            )
             print(f"  [+] Web UI: http://0.0.0.0:{self._web_port}/")
 
         print(f"\n{_col('bold', '[SERVER]')} All captures running. {_col('dim', 'Ctrl+C to stop.')}")
