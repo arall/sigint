@@ -114,11 +114,17 @@ class AgentManager:
                 self._seen_dedup[agent_id] = set(list(dedup)[-25000:])
 
         try:
+            rssi = float(fields["rssi"])
+            snr = fields.get("snr")
+            # If the agent sent SNR, reconstruct the noise floor exactly so
+            # SignalDetection.create() recomputes the same SNR. If not, fall
+            # back to the old assumption of SNR=10.
+            noise_floor = rssi - (float(snr) if snr is not None else 10.0)
             det = SignalDetection.create(
                 signal_type=fields["type"],
                 frequency_hz=float(fields["freq_mhz"]) * 1e6,
-                power_db=float(fields["rssi"]),
-                noise_floor_db=float(fields["rssi"]) - 10,  # unknown noise floor — record SNR=10
+                power_db=rssi,
+                noise_floor_db=noise_floor,
                 channel=fields.get("summary") or None,
                 latitude=fields.get("lat"),
                 longitude=fields.get("lon"),

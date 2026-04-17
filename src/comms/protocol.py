@@ -75,19 +75,27 @@ def encode_stat(agent_id: str, seq: int, scanner: str, state: str,
 
 def encode_det(agent_id: str, seq: int, type_: str, freq_mhz: float,
                rssi: int, lat: Optional[float], lon: Optional[float],
-               ts_unix: int, summary: str = "") -> str:
+               ts_unix: int, summary: str = "",
+               snr: Optional[int] = None) -> str:
     lat_s = f"{lat:.4f}" if lat is not None else ""
     lon_s = f"{lon:.4f}" if lon is not None else ""
-    return (f"DET|{agent_id}|{seq}|{_esc(type_)}|{freq_mhz:.5f}|{rssi}|"
+    base = (f"DET|{agent_id}|{seq}|{_esc(type_)}|{freq_mhz:.5f}|{rssi}|"
             f"{lat_s}|{lon_s}|{ts_unix}|{_esc(summary)}")
+    if snr is None:
+        return base
+    return f"{base}|{snr}"
 
 
 def encode_det_truncated(agent_id: str, seq: int, type_: str, freq_mhz: float,
                           rssi: int, lat: Optional[float], lon: Optional[float],
-                          ts_unix: int, summary: str, max_bytes: int = 200) -> str:
+                          ts_unix: int, summary: str,
+                          snr: Optional[int] = None,
+                          max_bytes: int = 200) -> str:
     """Encode DET, progressively dropping optional tail fields if oversized.
 
-    Drop order: summary -> lat/lon -> ts_unix (field becomes empty)."""
+    Drop order: summary -> lat/lon -> ts_unix (field becomes empty). SNR is
+    preserved across drops — it's small and the server needs it to compute
+    the real noise floor."""
     attempts = [
         (summary, lat, lon, ts_unix),
         ("", lat, lon, ts_unix),
@@ -96,7 +104,8 @@ def encode_det_truncated(agent_id: str, seq: int, type_: str, freq_mhz: float,
     ]
     for s, la, lo, ts in attempts:
         ts_eff = ts if ts else 0
-        wire = encode_det(agent_id, seq, type_, freq_mhz, rssi, la, lo, ts_eff, s)
+        wire = encode_det(agent_id, seq, type_, freq_mhz, rssi, la, lo,
+                          ts_eff, s, snr=snr)
         if len(wire.encode("utf-8")) <= max_bytes:
             return wire
     return wire  # best effort
@@ -159,6 +168,12 @@ def decode(wire: str) -> Message:
                            raw=wire)
         if tag == "DET":
             _check_min(parts, 10)
+            snr = None
+            if len(parts) > 10 and parts[10]:
+                try:
+                    snr = int(parts[10])
+                except ValueError:
+                    snr = None
             return Message(tag, parts[1], int(parts[2]),
                            {"type": _unesc(parts[3]),
                             "freq_mhz": float(parts[4]) if parts[4] else 0.0,
@@ -166,7 +181,8 @@ def decode(wire: str) -> Message:
                             "lat": float(parts[6]) if parts[6] else None,
                             "lon": float(parts[7]) if parts[7] else None,
                             "ts_unix": int(parts[8]) if parts[8] else 0,
-                            "summary": _unesc(parts[9]) if len(parts) > 9 else ""},
+                            "summary": _unesc(parts[9]) if len(parts) > 9 else "",
+                            "snr": snr},
                            raw=wire)
         if tag == "LOG":
             _check_min(parts, 5)

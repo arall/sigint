@@ -61,10 +61,13 @@ def run(argv=None) -> int:
             freq_mhz = float(row["frequency_hz"]) / 1e6
             rssi = int(float(row["power_db"]))
             ts_unix = int(float(row["ts_epoch"]))
+            snr_raw = row.get("snr_db")
+            snr = int(round(float(snr_raw))) if snr_raw is not None else None
             agent.enqueue_det(
                 type_=row["signal_type"], freq_mhz=freq_mhz, rssi=rssi,
                 lat=row.get("latitude"), lon=row.get("longitude"),
                 ts_unix=ts_unix, summary=row.get("channel") or "",
+                snr=snr,
             )
         except Exception:
             pass

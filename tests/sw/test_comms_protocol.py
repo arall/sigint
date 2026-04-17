@@ -35,6 +35,20 @@ def test_encode_det_roundtrip():
     assert msg.fields["lon"] == 2.4567
     assert msg.fields["ts_unix"] == 1744812345
     assert msg.fields["summary"] == "ch3"
+    assert msg.fields["snr"] is None  # absent in wire -> None
+
+
+def test_encode_det_with_snr_roundtrip():
+    from comms.protocol import encode_det, decode
+    wire = encode_det(
+        agent_id="N01", seq=1, type_="pmr", freq_mhz=446.00625,
+        rssi=-58, lat=48.1234, lon=2.4567, ts_unix=1744812345, summary="ch3",
+        snr=27,
+    )
+    assert wire.endswith("|27")
+    msg = decode(wire)
+    assert msg.fields["rssi"] == -58
+    assert msg.fields["snr"] == 27
 
 
 def test_encode_stat_roundtrip():

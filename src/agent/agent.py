@@ -67,11 +67,12 @@ class Agent:
 
     def enqueue_det(self, type_: str, freq_mhz: float, rssi: int,
                     lat: Optional[float], lon: Optional[float],
-                    ts_unix: int, summary: str = "") -> int:
+                    ts_unix: int, summary: str = "",
+                    snr: Optional[int] = None) -> int:
         seq = self._outbox.enqueue("DET", "")  # seq allocated first
         payload = P.encode_det_truncated(self._state.agent_id, seq, type_,
                                          freq_mhz, rssi, lat, lon, ts_unix,
-                                         summary)
+                                         summary, snr=snr)
         self._outbox.update_payload(seq, payload)
         return seq
 
