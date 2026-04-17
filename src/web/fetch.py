@@ -320,29 +320,35 @@ def fetch_agent_detections(output_dir, limit=200):
     """Return the most recent detections forwarded from mesh agents.
 
     Scopes to `agents_*.db` only so server-local captures don't show up.
-    Shape: list of dicts with timestamp, agent_id, signal_type, freq_mhz,
-    power_db, snr_db, latitude, longitude, channel — sorted newest first.
+    Sorted by **arrival** (newest session DB first, newest rowid within),
+    not detection timestamp — outbox retries can carry hours-old ts_unix
+    values, which would otherwise hide freshly-ingested rows behind
+    ancient re-forwarded ones.
     """
     try:
         names = sorted(
-            f for f in os.listdir(output_dir)
-            if f.startswith("agents_") and f.endswith(".db")
+            (f for f in os.listdir(output_dir)
+             if f.startswith("agents_") and f.endswith(".db")),
+            reverse=True,
         )
     except OSError:
         return []
     rows = []
     for name in names:
+        if len(rows) >= limit:
+            break
         path = os.path.join(output_dir, name)
         try:
             conn = _db.connect(path, readonly=True)
         except Exception:
             continue
         try:
+            remaining = limit - len(rows)
             cur = conn.execute(
                 "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
                 "power_db, snr_db, latitude, longitude, channel, device_id "
                 "FROM detections ORDER BY id DESC LIMIT ?",
-                (limit,),
+                (remaining,),
             )
             for r in cur:
                 freq_hz = r["frequency_hz"] or 0
@@ -365,7 +371,6 @@ def fetch_agent_detections(output_dir, limit=200):
                 conn.close()
             except Exception:
                 pass
-    rows.sort(key=lambda r: r["ts_epoch"] or 0, reverse=True)
     return rows[:limit]
 
 
