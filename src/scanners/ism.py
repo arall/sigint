@@ -134,6 +134,9 @@ class ISMScanner:
         # Save unknown signals as .cu8 files for native analysis
         cmd += ["-S", "unknown"]
 
+        # Pulse-level analysis of unknown signals (printed to stdout)
+        cmd += ["-A"]
+
         return cmd
 
     def _parse_event(self, line):
@@ -313,13 +316,27 @@ class ISMScanner:
                             continue
                         self._processed_files.add(f)
                         self._analyze_unknown_signal(f)
-                        try:
-                            os.remove(f)
-                        except OSError:
-                            pass
+                        # Keep .cu8 files for offline analysis; prune oldest
+                        # when more than 50 accumulate to avoid filling disk.
+                        self._prune_cu8_files(max_keep=50)
             except Exception:
                 pass
             time.sleep(0.3)
+
+    def _prune_cu8_files(self, max_keep=50):
+        """Remove oldest .cu8 files when count exceeds max_keep."""
+        try:
+            files = sorted(
+                glob.glob(os.path.join(self._unknown_dir, "*.cu8")),
+                key=os.path.getmtime,
+            )
+            for f in files[:-max_keep]:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        except Exception:
+            pass
 
     def _print_display(self):
         """Print the scanner display."""
