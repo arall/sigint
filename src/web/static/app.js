@@ -830,16 +830,22 @@ document.querySelectorAll('.sig-subtab-btn').forEach(btn => {
   btn.addEventListener('click', () => switchSigSubtab(btn.dataset.sub));
 });
 
-// Category filter change events — re-render without refetch
+// Category filter change events — re-render without refetch. Reset
+// pagination to page 1 so the user isn't stranded on an offset that's
+// past the filtered dataset's end.
+function _onFilterChange(cat) {
+  _categoryOffset[cat] = 0;
+  _renderFiltered(cat);
+}
 ['voice','drones','cellular','ism'].forEach(cat => {
   const typeSel = document.getElementById(cat + '-filter-type');
-  if (typeSel) typeSel.addEventListener('change', () => _renderFiltered(cat));
+  if (typeSel) typeSel.addEventListener('change', () => _onFilterChange(cat));
   const chSel = document.getElementById(cat + '-filter-ch');
-  if (chSel) chSel.addEventListener('change', () => _renderFiltered(cat));
+  if (chSel) chSel.addEventListener('change', () => _onFilterChange(cat));
   const audioChk = document.getElementById(cat + '-filter-audio');
-  if (audioChk) audioChk.addEventListener('change', () => _renderFiltered(cat));
+  if (audioChk) audioChk.addEventListener('change', () => _onFilterChange(cat));
   const txChk = document.getElementById(cat + '-filter-transcript');
-  if (txChk) txChk.addEventListener('change', () => _renderFiltered(cat));
+  if (txChk) txChk.addEventListener('change', () => _onFilterChange(cat));
 });
 
 // --- Category Tabs ---
@@ -859,6 +865,9 @@ const _CATEGORY_BODY_IDS = {
 
 // Raw rows cache for client-side filtering
 const _categoryRows = {};
+// Per-category pagination offset (in rows, not pages)
+const _categoryOffset = {};
+const _CATEGORY_PAGE_SIZE = 50;
 
 async function loadCategory(name) {
   try {
@@ -878,9 +887,23 @@ async function loadCategory(name) {
 function _renderFiltered(name) {
   const rows = _categoryRows[name] || [];
   const filtered = _applyFilters(name, rows);
+  const total = filtered.length;
+  const limit = _CATEGORY_PAGE_SIZE;
+  // Clamp the saved offset after filters shrink the dataset
+  let offset = _categoryOffset[name] || 0;
+  if (offset >= total) offset = Math.max(0, total - limit);
+  _categoryOffset[name] = offset;
+  const page = filtered.slice(offset, offset + limit);
   const fn = _CATEGORY_RENDERERS[name];
   const bodyId = _CATEGORY_BODY_IDS[name];
-  if (fn && bodyId) setTable(bodyId, filtered, fn);
+  if (fn && bodyId) setTable(bodyId, page, fn);
+  _renderPager(name + '-pager', {
+    total, offset, limit,
+    onChange: (newOffset) => {
+      _categoryOffset[name] = Math.max(0, Math.min(newOffset, Math.max(0, total - 1)));
+      _renderFiltered(name);
+    },
+  });
 }
 
 function _populateFilters(name, rows) {
@@ -1854,6 +1877,43 @@ setInterval(() => {
   if (el && el.classList.contains('active')) loadActivity();
 }, 60000);
 
+// --- Generic pager helper ---
+// Renders First/Prev/Next/Last controls + "n-m of TOTAL (page X/Y)"
+// label into `containerId`. Calls `onChange(newOffset)` when the user
+// clicks a control. Safe to call with total <= limit (renders just the
+// count, no navigation).
+function _renderPager(containerId, opts) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const total = opts.total || 0;
+  const limit = opts.limit || 50;
+  const offset = Math.max(0, Math.min(opts.offset || 0, Math.max(0, total - 1)));
+  const visible = Math.min(limit, Math.max(0, total - offset));
+  if (total <= limit) {
+    el.innerHTML = total
+      ? `<span style="color:#888">${total} row${total === 1 ? '' : 's'}</span>`
+      : '';
+    return;
+  }
+  const pageCount = Math.ceil(total / limit);
+  const currentPage = Math.floor(offset / limit) + 1;
+  const first = offset + 1;
+  const last = offset + visible;
+  const prev = offset <= 0 ? 'disabled' : '';
+  const next = last >= total ? 'disabled' : '';
+  // Expose a stable global so inline onclick can call back. Each call
+  // overrides the previous binding for this container.
+  const slot = '__pager_' + containerId.replace(/-/g, '_');
+  window[slot] = opts.onChange;
+  el.innerHTML =
+    `<button ${prev} onclick="window['${slot}'](0)">« First</button>` +
+    `<button ${prev} onclick="window['${slot}'](${offset - limit})">‹ Prev</button>` +
+    `<span style="padding: 0 8px; color:#888">${first}–${last} of ${total} (page ${currentPage}/${pageCount})</span>` +
+    `<button ${next} onclick="window['${slot}'](${offset + limit})">Next ›</button>` +
+    `<button ${next} onclick="window['${slot}'](${(pageCount - 1) * limit})">Last »</button>`;
+}
+
+
 // --- Agents tab ---
 let _agentDetPage = 0;
 const _AGENT_DET_PAGE_SIZE = 50;
@@ -1911,27 +1971,10 @@ function renderAgentDetections(data) {
       </tr>`;
     }).join('');
   }
-  const pager = document.getElementById('agents-detections-pager');
-  if (pager) {
-    if (total <= limit) {
-      pager.innerHTML = total
-        ? `<span style="color:#888">${total} row${total === 1 ? '' : 's'}</span>`
-        : '';
-      return;
-    }
-    const pageCount = Math.ceil(total / limit);
-    const currentPage = Math.floor(offset / limit) + 1;
-    const first = offset + 1;
-    const last = Math.min(offset + rows.length, total);
-    const prevDisabled = offset <= 0 ? 'disabled' : '';
-    const nextDisabled = last >= total ? 'disabled' : '';
-    pager.innerHTML =
-      `<button ${prevDisabled} onclick="loadAgentDetectionsPage(0)">« First</button>` +
-      `<button ${prevDisabled} onclick="loadAgentDetectionsPage(${_agentDetPage - 1})">‹ Prev</button>` +
-      `<span style="padding: 0 8px; color:#888">${first}–${last} of ${total} (page ${currentPage}/${pageCount})</span>` +
-      `<button ${nextDisabled} onclick="loadAgentDetectionsPage(${_agentDetPage + 1})">Next ›</button>` +
-      `<button ${nextDisabled} onclick="loadAgentDetectionsPage(${pageCount - 1})">Last »</button>`;
-  }
+  _renderPager('agents-detections-pager', {
+    total, offset, limit,
+    onChange: (newOffset) => loadAgentDetectionsPage(Math.floor(newOffset / limit)),
+  });
 }
 
 function renderPendingAgents(pending) {
