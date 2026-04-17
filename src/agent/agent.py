@@ -72,17 +72,10 @@ class Agent:
         payload = P.encode_det_truncated(self._state.agent_id, seq, type_,
                                          freq_mhz, rssi, lat, lon, ts_unix,
                                          summary)
-        self._outbox_update_payload(seq, payload)
+        self._outbox.update_payload(seq, payload)
         return seq
 
     # -- internals --------------------------------------------------------
-
-    def _outbox_update_payload(self, seq: int, payload: str) -> None:
-        # small utility: we want payload encoded AFTER we know the seq
-        with self._outbox._lock:
-            self._outbox._conn.execute(
-                "UPDATE outbox SET payload=? WHERE seq=?", (payload, seq),
-            )
 
     def _on_msg(self, text: str) -> None:
         try:
@@ -193,7 +186,7 @@ class Agent:
         payload = P.encode_stat(self._state.agent_id, seq, scanner, state,
                                  lat=None, lon=None, sats=0, cpu=0,
                                  uptime_sec=int(time.time()))
-        self._outbox_update_payload(seq, payload)
+        self._outbox.update_payload(seq, payload)
 
     def _hello_loop(self, interval: float) -> None:
         while not self._stop.is_set():

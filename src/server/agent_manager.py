@@ -113,29 +113,32 @@ class AgentManager:
                 # trim oldest half — simple cap to keep memory bounded
                 self._seen_dedup[agent_id] = set(list(dedup)[-25000:])
 
-        det = SignalDetection.create(
-            signal_type=fields["type"],
-            frequency_hz=float(fields["freq_mhz"]) * 1e6,
-            power_db=float(fields["rssi"]),
-            noise_floor_db=float(fields["rssi"]) - 10,  # unknown noise floor — record SNR=10
-            channel=fields.get("summary") or None,
-            latitude=fields.get("lat"),
-            longitude=fields.get("lon"),
-            device_id=agent_id,
-            metadata=json.dumps({"mesh": True, "seq": seq,
-                                  "ts_unix": fields.get("ts_unix")}),
-        )
-        # Override timestamp to the detection-local time from the wire if provided
         try:
-            ts_unix = int(fields.get("ts_unix") or 0)
-            if ts_unix > 0:
-                det.timestamp = datetime.fromtimestamp(ts_unix).isoformat()
-        except Exception:
-            pass
-        with self._lock:
-            _db.insert_detection(self._conn, det)
-            if agent_id in self._approved:
-                self._approved[agent_id]["last_seen_at"] = time.time()
+            det = SignalDetection.create(
+                signal_type=fields["type"],
+                frequency_hz=float(fields["freq_mhz"]) * 1e6,
+                power_db=float(fields["rssi"]),
+                noise_floor_db=float(fields["rssi"]) - 10,  # unknown noise floor — record SNR=10
+                channel=fields.get("summary") or None,
+                latitude=fields.get("lat"),
+                longitude=fields.get("lon"),
+                device_id=agent_id,
+                metadata=json.dumps({"mesh": True, "seq": seq,
+                                      "ts_unix": fields.get("ts_unix")}),
+            )
+            try:
+                ts_unix = int(fields.get("ts_unix") or 0)
+                if ts_unix > 0:
+                    det.timestamp = datetime.fromtimestamp(ts_unix).isoformat()
+            except Exception:
+                pass
+            with self._lock:
+                _db.insert_detection(self._conn, det)
+                if agent_id in self._approved:
+                    self._approved[agent_id]["last_seen_at"] = time.time()
+        except Exception as e:
+            # Never let a bad payload stall the agent's outbox — log and still ACK
+            print(f"[agent {agent_id}] DET seq {seq} insertion failed: {e}")
         self._link.send(P.encode_ack(agent_id, seq))
 
     def _on_stat(self, agent_id: str, seq: Optional[int], fields: dict) -> None:

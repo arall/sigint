@@ -99,6 +99,12 @@ class Outbox:
         with self._lock:
             self._conn.execute("UPDATE outbox SET acked=1 WHERE seq=?", (seq,))
 
+    def update_payload(self, seq: int, payload: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE outbox SET payload=? WHERE seq=?", (payload, seq),
+            )
+
     def depth(self) -> int:
         with self._lock:
             cur = self._conn.execute("SELECT COUNT(*) FROM outbox WHERE acked=0")
