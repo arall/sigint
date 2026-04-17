@@ -1855,6 +1855,9 @@ setInterval(() => {
 }, 60000);
 
 // --- Agents tab ---
+let _agentDetPage = 0;
+const _AGENT_DET_PAGE_SIZE = 50;
+
 async function fetchAgents() {
   try {
     const res = await fetch('/api/agents');
@@ -1864,39 +1867,71 @@ async function fetchAgents() {
   } catch (e) {
     // leave existing rows in place on error
   }
+  await loadAgentDetectionsPage(_agentDetPage);
+}
+
+async function loadAgentDetectionsPage(page) {
+  _agentDetPage = Math.max(0, page);
+  const offset = _agentDetPage * _AGENT_DET_PAGE_SIZE;
   try {
-    const res2 = await fetch('/api/agents/detections?limit=200');
-    const data2 = await res2.json();
-    renderAgentDetections(data2.detections || []);
+    const res = await fetch('/api/agents/detections?limit='
+      + _AGENT_DET_PAGE_SIZE + '&offset=' + offset);
+    const data = await res.json();
+    renderAgentDetections(data);
   } catch (e) {
     // leave existing rows in place on error
   }
 }
 
-function renderAgentDetections(rows) {
+function renderAgentDetections(data) {
   const tbody = document.getElementById('agents-detections');
   if (!tbody) return;
+  const rows = data.detections || [];
+  const total = data.total || 0;
+  const limit = data.limit || _AGENT_DET_PAGE_SIZE;
+  const offset = data.offset || 0;
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="8" class="empty">no detections from agents yet</td></tr>';
-    return;
+  } else {
+    tbody.innerHTML = rows.map(r => {
+      const ts = r.timestamp ? (r.timestamp.split('T')[1]?.split('.')[0] || r.timestamp) : '';
+      const geo = (r.latitude != null && r.longitude != null)
+        ? `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}` : '';
+      const rssi = (r.power_db != null) ? r.power_db.toFixed(1) : '';
+      const snr = (r.snr_db != null) ? r.snr_db.toFixed(1) : '';
+      return `<tr>
+        <td>${esc(ts)}</td>
+        <td>${esc(r.agent_id || '')}</td>
+        <td>${esc(r.signal_type || '')}</td>
+        <td>${esc(r.channel || '')}</td>
+        <td>${r.freq_mhz ? r.freq_mhz.toFixed(4) : ''}</td>
+        <td>${esc(rssi)}</td>
+        <td>${esc(snr)}</td>
+        <td>${esc(geo)}</td>
+      </tr>`;
+    }).join('');
   }
-  tbody.innerHTML = rows.map(r => {
-    const ts = r.timestamp ? (r.timestamp.split('T')[1]?.split('.')[0] || r.timestamp) : '';
-    const geo = (r.latitude != null && r.longitude != null)
-      ? `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}` : '';
-    const rssi = (r.power_db != null) ? r.power_db.toFixed(1) : '';
-    const snr = (r.snr_db != null) ? r.snr_db.toFixed(1) : '';
-    return `<tr>
-      <td>${esc(ts)}</td>
-      <td>${esc(r.agent_id || '')}</td>
-      <td>${esc(r.signal_type || '')}</td>
-      <td>${esc(r.channel || '')}</td>
-      <td>${r.freq_mhz ? r.freq_mhz.toFixed(4) : ''}</td>
-      <td>${esc(rssi)}</td>
-      <td>${esc(snr)}</td>
-      <td>${esc(geo)}</td>
-    </tr>`;
-  }).join('');
+  const pager = document.getElementById('agents-detections-pager');
+  if (pager) {
+    if (total <= limit) {
+      pager.innerHTML = total
+        ? `<span style="color:#888">${total} row${total === 1 ? '' : 's'}</span>`
+        : '';
+      return;
+    }
+    const pageCount = Math.ceil(total / limit);
+    const currentPage = Math.floor(offset / limit) + 1;
+    const first = offset + 1;
+    const last = Math.min(offset + rows.length, total);
+    const prevDisabled = offset <= 0 ? 'disabled' : '';
+    const nextDisabled = last >= total ? 'disabled' : '';
+    pager.innerHTML =
+      `<button ${prevDisabled} onclick="loadAgentDetectionsPage(0)">« First</button>` +
+      `<button ${prevDisabled} onclick="loadAgentDetectionsPage(${_agentDetPage - 1})">‹ Prev</button>` +
+      `<span style="padding: 0 8px; color:#888">${first}–${last} of ${total} (page ${currentPage}/${pageCount})</span>` +
+      `<button ${nextDisabled} onclick="loadAgentDetectionsPage(${_agentDetPage + 1})">Next ›</button>` +
+      `<button ${nextDisabled} onclick="loadAgentDetectionsPage(${pageCount - 1})">Last »</button>`;
+  }
 }
 
 function renderPendingAgents(pending) {

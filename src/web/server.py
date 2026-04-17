@@ -452,12 +452,23 @@ class WebHandler(BaseHTTPRequestHandler):
     def _serve_agent_detections(self, qs):
         """Serve recent detections forwarded from mesh agents."""
         try:
-            limit = int(qs.get('limit', ['200'])[0])
+            limit = int(qs.get('limit', ['50'])[0])
         except (TypeError, ValueError):
-            limit = 200
+            limit = 50
+        try:
+            offset = int(qs.get('offset', ['0'])[0])
+        except (TypeError, ValueError):
+            offset = 0
         limit = max(1, min(limit, 1000))
-        rows = fetch_agent_detections(self.server.output_dir, limit=limit)
-        self._send_json({"detections": rows, "total": len(rows)})
+        offset = max(0, offset)
+        rows, total = fetch_agent_detections(
+            self.server.output_dir, limit=limit, offset=offset)
+        self._send_json({
+            "detections": rows,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        })
 
     def _serve_map_sources(self, qs):
         """Serve all detection sources (server + agents) for the Map tab.

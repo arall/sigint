@@ -317,11 +317,16 @@ def _iter_db_paths(output_dir):
 
 
 def fetch_agent_last_positions(output_dir):
-    """Return {agent_id: {lat, lon, ts_epoch}} using the newest GPS-tagged
-    detection each agent has ever forwarded.
+    """Return {agent_id: {lat, lon, ts_epoch}} from each agent's most
+    recently *inserted* geo-tagged detection.
 
-    Scans agents_*.db newest-first, short-circuits as soon as every agent
-    it's seen has a position."""
+    Iterates agents_*.db newest-first and picks the first match per
+    agent by rowid DESC — that's deterministic even when multiple rows
+    share the same ts_epoch (outbox retries on the same original
+    detection) and avoids the SQLite `MAX() + bare-columns` quirk
+    where the returned lat/lon can come from a different row than the
+    one with the max timestamp.
+    """
     try:
         names = sorted(
             (f for f in os.listdir(output_dir)
@@ -331,6 +336,7 @@ def fetch_agent_last_positions(output_dir):
     except OSError:
         return {}
     out: dict = {}
+    seen_ids: set = set()
     for name in names:
         path = os.path.join(output_dir, name)
         try:
@@ -338,24 +344,23 @@ def fetch_agent_last_positions(output_dir):
         except Exception:
             continue
         try:
+            # Pull the newest geo-tagged row per agent in this DB.
             cur = conn.execute(
-                "SELECT device_id, MAX(ts_epoch) AS ts, latitude, longitude "
+                "SELECT device_id, ts_epoch, latitude, longitude "
                 "FROM detections "
                 "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
-                "GROUP BY device_id"
+                "ORDER BY id DESC"
             )
             for r in cur:
                 aid = r["device_id"]
-                if not aid:
+                if not aid or aid in seen_ids:
                     continue
-                existing = out.get(aid)
-                ts = r["ts"] or 0
-                if existing is None or ts > (existing.get("ts_epoch") or 0):
-                    out[aid] = {
-                        "lat": r["latitude"],
-                        "lon": r["longitude"],
-                        "ts_epoch": ts,
-                    }
+                seen_ids.add(aid)
+                out[aid] = {
+                    "lat": r["latitude"],
+                    "lon": r["longitude"],
+                    "ts_epoch": r["ts_epoch"] or 0,
+                }
         except Exception:
             pass
         finally:
@@ -439,14 +444,20 @@ def fetch_detections_by_source(output_dir, limit_per_source=200):
     return out
 
 
-def fetch_agent_detections(output_dir, limit=200):
-    """Return the most recent detections forwarded from mesh agents.
+def fetch_agent_detections(output_dir, limit=50, offset=0):
+    """Return a page of detections forwarded from mesh agents.
 
     Scopes to `agents_*.db` only so server-local captures don't show up.
     Sorted by **arrival** (newest session DB first, newest rowid within),
     not detection timestamp — outbox retries can carry hours-old ts_unix
     values, which would otherwise hide freshly-ingested rows behind
     ancient re-forwarded ones.
+
+    Pagination: skip the first `offset` arrival-ordered rows, then
+    return the next `limit`. Also returns the total count across every
+    agents_*.db so the UI can render page controls.
+
+    Returns (rows, total).
     """
     try:
         names = sorted(
@@ -455,23 +466,53 @@ def fetch_agent_detections(output_dir, limit=200):
             reverse=True,
         )
     except OSError:
-        return []
-    rows = []
+        return [], 0
+
+    # Pre-count so the UI knows how many pages exist without a second RTT.
+    total = 0
+    per_db_counts = []
     for name in names:
-        if len(rows) >= limit:
-            break
         path = os.path.join(output_dir, name)
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            per_db_counts.append((path, 0))
+            continue
+        try:
+            n = conn.execute("SELECT COUNT(*) FROM detections").fetchone()[0]
+            per_db_counts.append((path, n))
+            total += n
+        except Exception:
+            per_db_counts.append((path, 0))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # Walk DBs newest-first, skipping `offset` rows total, then collecting
+    # up to `limit`. SQLite OFFSET is cheap enough on the indexed id DESC
+    # path; we tell each DB how many to skip and how many to take.
+    rows = []
+    skip = max(0, offset)
+    want = max(0, limit)
+    for path, count in per_db_counts:
+        if want <= 0:
+            break
+        if skip >= count:
+            skip -= count
+            continue
+        take = min(want, count - skip)
         try:
             conn = _db.connect(path, readonly=True)
         except Exception:
             continue
         try:
-            remaining = limit - len(rows)
             cur = conn.execute(
                 "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
                 "power_db, snr_db, latitude, longitude, channel, device_id "
-                "FROM detections ORDER BY id DESC LIMIT ?",
-                (remaining,),
+                "FROM detections ORDER BY id DESC LIMIT ? OFFSET ?",
+                (take, skip),
             )
             for r in cur:
                 freq_hz = r["frequency_hz"] or 0
@@ -487,6 +528,8 @@ def fetch_agent_detections(output_dir, limit=200):
                     "longitude": r["longitude"],
                     "channel": r["channel"] or "",
                 })
+            want -= take
+            skip = 0
         except Exception:
             pass
         finally:
@@ -494,7 +537,7 @@ def fetch_agent_detections(output_dir, limit=200):
                 conn.close()
             except Exception:
                 pass
-    return rows[:limit]
+    return rows, total
 
 
 def fetch_recent_detections(
