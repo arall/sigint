@@ -23,15 +23,23 @@ def run(argv=None) -> int:
                     help="Override meshtastic serial port")
     ap.add_argument("--agent-id", default=None,
                     help="Override agent id")
+    ap.add_argument("--gps-port", default=None,
+                    help="Override GPS serial port (NMEA)")
     args = ap.parse_args(argv)
 
     cfg = AgentConfig.load(args.config)
     agent_id = args.agent_id or cfg.agent_id
     state_dir = args.state_dir or cfg.state_dir
     port = args.meshtastic_port or cfg.meshtastic_port
+    gps_port = args.gps_port or cfg.gps_port
     if not port:
         print("ERROR: meshtastic_port not configured", file=sys.stderr)
         return 2
+
+    # GPS is owned by the scanner subprocess (see ScannerManager.start).
+    # Only one process can read a given /dev/ttyACM* at a time, so the
+    # agent itself does not open the port — detections carry lat/lon
+    # stamped by the scanner's logger, and DET messages forward them.
 
     link = MeshLink.from_serial(port=port, channel_index=cfg.mesh_channel_index)
     src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,7 +47,7 @@ def run(argv=None) -> int:
     scanner_mgr = ScannerManager(
         python_exe=sys.executable, sdr_py=sdr_py,
         output_dir=os.path.join(state_dir, "scanner"),
-        device_id=agent_id, gps_port=cfg.gps_port,
+        device_id=agent_id, gps_port=gps_port,
     )
 
     agent = Agent(state_dir=state_dir, agent_id=agent_id,

@@ -1433,6 +1433,9 @@ def _dispatch_scanner(args):
         if args.state_dir: argv += ["--state-dir", args.state_dir]
         if args.meshtastic_port: argv += ["--meshtastic-port", args.meshtastic_port]
         if args.agent_id: argv += ["--agent-id", args.agent_id]
+        # Forward the top-level --gps-port only when --gps was explicitly set,
+        # so the default "/dev/ttyACM0" doesn't silently override agent.conf.
+        if args.gps: argv += ["--gps-port", args.gps_port]
         return agent_run(argv)
 
     elif args.command == "multi":
