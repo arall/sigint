@@ -82,14 +82,20 @@
         <label><input type="checkbox" id="map-show-drones" checked> <span style="color:#f44336">Drones</span></label>
         <label><input type="checkbox" id="map-show-operators" checked> <span style="color:#ff9800">Operators</span></label>
         <label><input type="checkbox" id="map-show-meshtastic" checked> <span style="color:#ab47bc">Mesh</span></label>
-        <label><input type="checkbox" id="map-show-nodes" checked> <span style="color:#ffd54f">Nodes</span></label>
-        <label><input type="checkbox" id="map-show-agent_dets" checked> <span style="color:#ffee58">Agent detections</span></label>
         <button onclick="loadMap()">Refresh</button>
         <button onclick="mapFitAll()">Fit All</button>
       </div>
     </div>
-    <div class="tab-desc">GPS positions of aircraft (ADS-B), vessels (AIS), drones (RemoteID), Meshtastic mesh nodes, and drone operators on a live map.</div>
-    <div id="map" style="height: 600px; width: 100%; background: #0a1020;"></div>
+    <div class="tab-desc">GPS positions of aircraft (ADS-B), vessels (AIS), drones (RemoteID), Meshtastic mesh nodes, and drone operators on a live map. The right panel lists detection sources (server + agents); each has a checkbox to toggle its node + receive-rings.</div>
+    <div style="display: flex; gap: 12px; align-items: flex-start;">
+      <div style="flex: 1; min-width: 0;">
+        <div id="map" style="height: 600px; background: #0a1020;"></div>
+      </div>
+      <div id="map-sources" style="width: 240px; max-height: 600px; overflow-y: auto; background: #0e1420; border: 1px solid #1d2533; border-radius: 4px; padding: 8px; font-size: 12px;">
+        <div style="font-weight: 600; padding: 4px 4px 8px; border-bottom: 1px solid #1d2533; margin-bottom: 8px;">Sources</div>
+        <div id="map-sources-body" style="color: #888">loading…</div>
+      </div>
+    </div>
     <div id="map-summary" style="padding: 8px 16px; font-size: 12px; color: #888">
       loading map...
     </div>

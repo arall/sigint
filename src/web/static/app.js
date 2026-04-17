@@ -1414,8 +1414,6 @@ const _mapLayers = {
   drones:      null,
   operators:   null,
   meshtastic:  null,
-  nodes:       null,
-  agent_dets:  null,
 };
 const _MAP_COLORS = {
   aircraft:    '#2196f3',
@@ -1423,9 +1421,54 @@ const _MAP_COLORS = {
   drones:      '#f44336',
   operators:   '#ff9800',
   meshtastic:  '#ab47bc',
-  nodes:       '#ffd54f',
-  agent_dets:  '#ffee58',
 };
+
+// Source-based layers: one per detection source (server + each agent).
+// { id -> {color, position, detections, enabled, markerLayer, ringsLayer} }
+const _mapSources = {};
+// Stable colour assignment per source id.
+const _SOURCE_PALETTE = [
+  '#ffd54f', '#4dd0e1', '#f06292', '#81c784', '#ba68c8',
+  '#ff8a65', '#9fa8da', '#a1887f', '#dce775',
+];
+const _SERVER_COLOR = '#29b6f6';
+function _sourceColor(id, idx) {
+  if (id === 'server') return _SERVER_COLOR;
+  return _SOURCE_PALETTE[idx % _SOURCE_PALETTE.length];
+}
+
+// Per-signal-type path-loss parameters for the uncalibrated distance
+// estimate rendered as rings around each source. n is the path-loss
+// exponent; snr_ref_db is a rough SNR-at-1m baseline. Values borrowed
+// from docs/triangulation.md, adapted to SNR (rather than dBm RSSI,
+// which we can't trust without calibration).
+const _PATH_LOSS = {
+  'PMR446':   {n: 2.2, snr_1m: 40},
+  'dPMR':     {n: 2.2, snr_1m: 40},
+  '70cm':     {n: 2.2, snr_1m: 40},
+  '2m':       {n: 2.2, snr_1m: 40},
+  'FRS':      {n: 2.2, snr_1m: 40},
+  'MarineVHF':{n: 2.2, snr_1m: 40},
+  'FM_voice': {n: 2.2, snr_1m: 40},
+  'keyfob':   {n: 2.7, snr_1m: 35},
+  'tpms':     {n: 2.5, snr_1m: 30},
+  'GSM':      {n: 3.0, snr_1m: 40},
+  'LTE':      {n: 3.0, snr_1m: 40},
+  'BLE-Adv':  {n: 2.5, snr_1m: 40},
+  'WiFi-Probe':{n: 2.7, snr_1m: 40},
+  'WiFi-AP':  {n: 2.7, snr_1m: 40},
+  'lora':     {n: 2.3, snr_1m: 35},
+  '_default': {n: 2.5, snr_1m: 40},
+};
+function _distanceFromSnr(signal_type, snr_db) {
+  if (snr_db == null) return null;
+  const pl = _PATH_LOSS[signal_type] || _PATH_LOSS._default;
+  // distance = 10^((snr_1m - snr) / (10 * n))
+  const d = Math.pow(10, (pl.snr_1m - snr_db) / (10 * pl.n));
+  // clamp to something sane so a stray low-SNR hit doesn't paint a
+  // 50 km circle that dominates the map
+  return Math.max(1, Math.min(d, 5000));
+}
 
 function initMap() {
   if (_map || typeof L === 'undefined') return;
@@ -1488,20 +1531,122 @@ async function loadMap() {
       fetch('/api/cat/' + t + qs).then(r => r.json()).catch(() => ({rows: []}))
     ));
     const [aircraft, vessels, drones, meshtastic] = results.map(d => d.rows || []);
-    // Agents data is session-independent (always unions across all
-    // agents_*.db). Fetch in parallel; tolerate failure.
-    let agents = {approved: {}, info: {}};
-    let agent_dets = [];
+    // Sources are session-independent — always union across all DBs.
+    let sources = [];
     try {
-      const [a, d] = await Promise.all([
-        fetch('/api/agents').then(r => r.json()),
-        fetch('/api/agents/detections?limit=200').then(r => r.json()),
-      ]);
-      agents = a;
-      agent_dets = d.detections || [];
+      const s = await fetch('/api/map/sources?limit=100').then(r => r.json());
+      sources = s.sources || [];
     } catch (e) {}
-    _renderMap({aircraft, vessels, drones, meshtastic, agents, agent_dets});
+    _renderMap({aircraft, vessels, drones, meshtastic, sources});
   } catch (e) {}
+}
+
+function _syncSourcesState(sources) {
+  // Preserve the `enabled` flag across refreshes; default new sources to on.
+  const seen = new Set();
+  sources.forEach((s, idx) => {
+    seen.add(s.id);
+    let state = _mapSources[s.id];
+    if (!state) {
+      state = {
+        color: _sourceColor(s.id, idx),
+        enabled: true,
+        markerLayer: L.layerGroup(),
+        ringsLayer: L.layerGroup(),
+      };
+      state.markerLayer.addTo(_map);
+      state.ringsLayer.addTo(_map);
+      _mapSources[s.id] = state;
+    }
+    state.position = s.position;
+    state.detections = s.detections || [];
+    state.label = s.label || s.id;
+  });
+  // Drop sources that vanished from the API response.
+  Object.keys(_mapSources).forEach(id => {
+    if (!seen.has(id)) {
+      const st = _mapSources[id];
+      if (st.markerLayer) _map.removeLayer(st.markerLayer);
+      if (st.ringsLayer) _map.removeLayer(st.ringsLayer);
+      delete _mapSources[id];
+    }
+  });
+}
+
+function _renderSourcesPanel() {
+  const el = document.getElementById('map-sources-body');
+  if (!el) return;
+  const ids = Object.keys(_mapSources).sort((a, b) =>
+    (a === 'server' ? -1 : b === 'server' ? 1 : a.localeCompare(b)));
+  if (!ids.length) {
+    el.innerHTML = '<div class="empty">no sources yet</div>';
+    return;
+  }
+  el.innerHTML = ids.map(id => {
+    const s = _mapSources[id];
+    const hasPos = s.position && s.position.lat != null;
+    const latest = (s.detections && s.detections[0]) || null;
+    const latestTxt = latest
+      ? esc(latest.signal_type) + ' · SNR '
+        + (latest.snr_db != null ? latest.snr_db.toFixed(0) + ' dB' : '?')
+      : '<span style="color:#666">no detections</span>';
+    const posTxt = hasPos
+      ? s.position.lat.toFixed(4) + ', ' + s.position.lon.toFixed(4)
+      : '<span style="color:#666">no position</span>';
+    return `<label style="display:flex; align-items:flex-start; gap:6px; padding:4px; cursor:pointer;">
+      <input type="checkbox" data-src="${esc(id)}" ${s.enabled ? 'checked' : ''} style="margin-top:2px;">
+      <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${s.color}; margin-top:4px; flex-shrink:0;"></span>
+      <span style="flex:1; min-width:0;">
+        <div style="font-weight:600">${esc(s.label)}</div>
+        <div style="color:#888; font-size:11px">${latestTxt}</div>
+        <div style="color:#666; font-size:10px; font-family:monospace">${posTxt}</div>
+        <div style="color:#666; font-size:10px">${(s.detections || []).length} recent</div>
+      </span>
+    </label>`;
+  }).join('');
+  el.querySelectorAll('input[type="checkbox"][data-src]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const id = cb.dataset.src;
+      if (_mapSources[id]) {
+        _mapSources[id].enabled = cb.checked;
+        _drawSources();
+      }
+    });
+  });
+}
+
+function _drawSources() {
+  const bounds = [];
+  Object.keys(_mapSources).forEach(id => {
+    const s = _mapSources[id];
+    s.markerLayer.clearLayers();
+    s.ringsLayer.clearLayers();
+    if (!s.enabled || !s.position || s.position.lat == null) return;
+    const lat = s.position.lat, lon = s.position.lon;
+    bounds.push([lat, lon]);
+    // Node marker (bigger, permanent tooltip with the source id).
+    L.circleMarker([lat, lon], {
+      radius: 9, color: s.color, fillColor: s.color, fillOpacity: 0.9, weight: 3,
+    })
+      .bindPopup(`<b>${esc(s.label)}</b><br>${(s.detections || []).length} recent detections`)
+      .bindTooltip(s.label, {permanent: true, direction: 'top', offset: [0, -10]})
+      .addTo(s.markerLayer);
+    // One uncertainty ring per recent detection with an SNR value.
+    (s.detections || []).forEach(d => {
+      const r = _distanceFromSnr(d.signal_type, d.snr_db);
+      if (r == null) return;
+      const popup = `<b>${esc(s.label)} · ${esc(d.signal_type || '')}</b><br>`
+        + (d.channel ? esc(d.channel) + '<br>' : '')
+        + (d.freq_mhz ? d.freq_mhz.toFixed(4) + ' MHz<br>' : '')
+        + 'SNR ' + (d.snr_db != null ? d.snr_db.toFixed(1) + ' dB' : '?') + '<br>'
+        + '~' + r.toFixed(0) + ' m (uncalibrated estimate)<br>'
+        + '<span style="color:#888; font-size:10px">' + esc(d.timestamp || '') + '</span>';
+      L.circle([lat, lon], {
+        radius: r, color: s.color, fillColor: s.color, fillOpacity: 0.05, weight: 1,
+      }).bindPopup(popup).addTo(s.ringsLayer);
+    });
+  });
+  return bounds;
 }
 
 function _renderMap(data) {
@@ -1587,70 +1732,21 @@ function _renderMap(data) {
   });
   const meshCount = Object.keys(meshNodes).length;
 
-  // Agent nodes: one marker per approved agent at its last-known position.
-  let nodeCount = 0;
-  const agents = data.agents || {};
-  const approvedMap = agents.approved || {};
-  const infoMap = agents.info || {};
-  Object.keys(approvedMap).forEach(aid => {
-    const pos = (infoMap[aid] || {}).last_position;
-    if (!pos || pos.lat == null || pos.lon == null) return;
-    const info = infoMap[aid] || {};
-    const ageS = pos.ts_epoch ? Math.max(0, (Date.now() / 1000) - pos.ts_epoch) : null;
-    const ageTxt = ageS != null
-      ? (ageS < 60 ? ageS.toFixed(0) + 's ago'
-        : ageS < 3600 ? (ageS / 60).toFixed(0) + 'm ago'
-        : (ageS / 3600).toFixed(1) + 'h ago')
-      : '';
-    const popup = '<b>' + esc(aid) + '</b><br>'
-      + 'scanner: ' + esc(info.scanner || 'idle') + '<br>'
-      + 'position from last DET' + (ageTxt ? ' (' + ageTxt + ')' : '') + '<br>'
-      + pos.lat.toFixed(4) + ', ' + pos.lon.toFixed(4);
-    L.circleMarker([pos.lat, pos.lon], {
-      radius: 9,
-      color: _MAP_COLORS.nodes,
-      fillColor: _MAP_COLORS.nodes,
-      fillOpacity: 0.9,
-      weight: 3,
-    }).bindPopup(popup).bindTooltip(aid, {permanent: true, direction: 'top', offset: [0, -10]})
-      .addTo(_mapLayers.nodes);
-    bounds.push([pos.lat, pos.lon]);
-    positioned++;
-    nodeCount++;
-  });
-
-  // Agent-forwarded detections (one marker per DET with lat/lon)
-  let agentDetCount = 0;
-  (data.agent_dets || []).forEach(r => {
-    if (r.latitude == null || r.longitude == null) return;
-    const ts = r.timestamp ? (r.timestamp.split('T')[1]?.split('.')[0] || r.timestamp) : '';
-    const popup = '<b>' + esc(r.agent_id || '?') + ' · ' + esc(r.signal_type || '') + '</b><br>'
-      + (r.channel ? esc(r.channel) + '<br>' : '')
-      + (r.freq_mhz ? r.freq_mhz.toFixed(4) + ' MHz<br>' : '')
-      + (r.power_db != null ? 'RSSI ' + r.power_db.toFixed(1) + ' dB' : '')
-      + (r.snr_db != null ? ' · SNR ' + r.snr_db.toFixed(1) + ' dB' : '')
-      + (ts ? '<br>' + ts : '');
-    L.circleMarker([r.latitude, r.longitude], {
-      radius: 4,
-      color: _MAP_COLORS.agent_dets,
-      fillColor: _MAP_COLORS.agent_dets,
-      fillOpacity: 0.7,
-      weight: 1,
-    }).bindPopup(popup).addTo(_mapLayers.agent_dets);
-    bounds.push([r.latitude, r.longitude]);
-    positioned++;
-    agentDetCount++;
-  });
+  // Sources (server + agents): side panel + node markers + uncertainty rings
+  _syncSourcesState(data.sources || []);
+  _renderSourcesPanel();
+  const sourceBounds = _drawSources();
+  sourceBounds.forEach(b => bounds.push(b));
+  const sourceCount = Object.values(_mapSources).filter(s => s.enabled && s.position).length;
 
   // Summary line
   const el = document.getElementById('map-summary');
   if (el) {
-    el.textContent = positioned > 0
+    el.textContent = positioned + sourceCount > 0
       ? positioned + ' position(s) on map (' + (data.aircraft.length) + ' aircraft, '
           + (data.vessels.length) + ' vessels, ' + (data.drones.length) + ' drones'
           + (meshCount > 0 ? ', ' + meshCount + ' mesh nodes' : '')
-          + (nodeCount > 0 ? ', ' + nodeCount + ' agent node(s)' : '')
-          + (agentDetCount > 0 ? ', ' + agentDetCount + ' agent detection(s)' : '')
+          + (sourceCount > 0 ? ', ' + sourceCount + ' source(s)' : '')
           + ')'
       : 'no GPS positions in the current session — run a capture with GPS, or wait for RemoteID / ADS-B / AIS';
   }

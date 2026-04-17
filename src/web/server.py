@@ -36,6 +36,7 @@ from .fetch import (
     fetch_agent_detections,
     fetch_agent_last_positions,
     fetch_correlations,
+    fetch_detections_by_source,
     fetch_detections_for_category,
     fetch_detections_for_category_all,
     fetch_recent_detections,
@@ -115,6 +116,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_agents()
         elif path == '/api/agents/detections':
             self._serve_agent_detections(qs)
+        elif path == '/api/map/sources':
+            self._serve_map_sources(qs)
         elif path == '/api/fpv/frame':
             self._serve_fpv_frame()
         elif path == '/api/fpv/stream':
@@ -455,6 +458,59 @@ class WebHandler(BaseHTTPRequestHandler):
         limit = max(1, min(limit, 1000))
         rows = fetch_agent_detections(self.server.output_dir, limit=limit)
         self._send_json({"detections": rows, "total": len(rows)})
+
+    def _serve_map_sources(self, qs):
+        """Serve all detection sources (server + agents) for the Map tab.
+
+        Each source has: id, label, position (nullable), detections (list).
+        Server position comes from server_info.json's server_position key
+        (written from config). Agent positions come from their most recent
+        geo-tagged DET.
+        """
+        try:
+            per_source = int(qs.get('limit', ['200'])[0])
+        except (TypeError, ValueError):
+            per_source = 200
+        per_source = max(1, min(per_source, 1000))
+
+        out_dir = self.server.output_dir
+        # Server fixed position from server_info.json
+        server_pos = None
+        try:
+            info_path = os.path.join(out_dir, "server_info.json")
+            with open(info_path) as f:
+                sinfo = json.load(f)
+            sp = sinfo.get("server_position")
+            if sp and sp.get("lat") is not None and sp.get("lon") is not None:
+                server_pos = {"lat": float(sp["lat"]), "lon": float(sp["lon"])}
+        except Exception:
+            pass
+
+        by_src = fetch_detections_by_source(out_dir, limit_per_source=per_source)
+        agent_positions = fetch_agent_last_positions(out_dir)
+
+        mgr = getattr(self.server, 'agent_manager', None)
+        approved_ids = set(mgr.approved().keys()) if mgr else set()
+        # Union of sources that should appear in the panel: server + every
+        # approved agent + every source we actually have rows from.
+        source_ids = set(by_src.keys()) | approved_ids | {"server"}
+
+        sources = []
+        for sid in sorted(source_ids, key=lambda s: (s != "server", s)):
+            if sid == "server":
+                pos = server_pos
+                label = "Server"
+            else:
+                p = agent_positions.get(sid)
+                pos = {"lat": p["lat"], "lon": p["lon"]} if p else None
+                label = sid
+            sources.append({
+                "id": sid,
+                "label": label,
+                "position": pos,
+                "detections": by_src.get(sid, []),
+            })
+        self._send_json({"sources": sources})
 
     def _agents_approve(self, data):
         """Approve a pending agent."""

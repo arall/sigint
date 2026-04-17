@@ -1,4 +1,9 @@
 {
+  "server_position": {
+    "lat": 0.0,
+    "lon": 0.0,
+    "_comment": "optional: fixed lat/lon for the server, rendered as a marker on the Map tab"
+  },
   "captures": [
     {
       "name": "uhf",

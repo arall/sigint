@@ -366,6 +366,79 @@ def fetch_agent_last_positions(output_dir):
     return out
 
 
+def _row_for_map(r):
+    freq_hz = r["frequency_hz"] or 0
+    return {
+        "timestamp": r["timestamp"] or "",
+        "ts_epoch": r["ts_epoch"] or 0,
+        "signal_type": r["signal_type"] or "",
+        "freq_mhz": round(freq_hz / 1e6, 4) if freq_hz else 0,
+        "power_db": r["power_db"],
+        "snr_db": round(r["snr_db"], 1) if r["snr_db"] is not None else None,
+        "channel": r["channel"] or "",
+    }
+
+
+def fetch_detections_by_source(output_dir, limit_per_source=200):
+    """Group recent detections by data source (where the RF was captured).
+
+    Two kinds of source:
+      - "server": rows written by server-local captures. Anything in a
+        session DB whose filename doesn't start with "agents_".
+      - "<agent_id>": rows forwarded over the Meshtastic C2 mesh from a
+        remote agent. These live exclusively in agents_*.db, where
+        AgentManager sets device_id to the agent_id it received from.
+
+    This deliberately ignores the per-row device_id outside agents_*.db
+    because for BLE/WiFi/Mesh scanners that column holds the detected
+    device's identity (BSSID, mesh node id, ...), not where it was heard.
+
+    Returns {source_id: [rows newest-first]}, capped per source. Unions
+    across every session DB in `output_dir`, newest session first so we
+    fill from recent activity before older sessions.
+    """
+    from .sessions import is_session_db_name
+    try:
+        names = sorted(
+            (f for f in os.listdir(output_dir) if is_session_db_name(f)),
+            reverse=True,
+        )
+    except OSError:
+        return {}
+    out: dict = {}
+    for name in names:
+        path = os.path.join(output_dir, name)
+        is_agent_db = name.startswith("agents_")
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception:
+            continue
+        try:
+            cur = conn.execute(
+                "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
+                "power_db, snr_db, channel, device_id FROM detections "
+                "ORDER BY id DESC LIMIT ?",
+                (limit_per_source * 4,),
+            )
+            for r in cur:
+                if is_agent_db:
+                    key = r["device_id"] or "server"
+                else:
+                    key = "server"
+                lst = out.setdefault(key, [])
+                if len(lst) >= limit_per_source:
+                    continue
+                lst.append(_row_for_map(r))
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return out
+
+
 def fetch_agent_detections(output_dir, limit=200):
     """Return the most recent detections forwarded from mesh agents.
 

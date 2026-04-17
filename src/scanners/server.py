@@ -777,6 +777,19 @@ class ServerOrchestrator:
             "captures": captures,
         }
 
+        # Optional fixed server position. Meant for installations where
+        # the central server is stationary (pelican case, desk, tower).
+        # Consumed by the web UI to draw a server marker on the Map tab.
+        pos = self.config.get("server_position")
+        if isinstance(pos, dict) and pos.get("lat") is not None and pos.get("lon") is not None:
+            try:
+                info["server_position"] = {
+                    "lat": float(pos["lat"]),
+                    "lon": float(pos["lon"]),
+                }
+            except (TypeError, ValueError):
+                pass
+
         if self._agent_manager is not None:
             info["agents"] = {
                 "approved": self._agent_manager.approved(),
