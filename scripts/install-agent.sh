@@ -14,7 +14,14 @@ read -rp "Agent ID (e.g. N01): " AGENT_ID
 read -rp "Meshtastic serial port [/dev/ttyACM0]: " MESH_PORT
 MESH_PORT="${MESH_PORT:-/dev/ttyACM0}"
 
+read -rp "Meshtastic channel URL (optional, press Enter to keep current radio config): " MESH_URL
+
 read -rp "GPS serial port (optional, press Enter to skip): " GPS_PORT
+
+if [[ -n "${MESH_URL}" ]]; then
+  echo "Applying channel URL to radio on ${MESH_PORT}..."
+  "${PROJECT_DIR}/venv/bin/meshtastic" --port "${MESH_PORT}" --seturl "${MESH_URL}"
+fi
 
 mkdir -p "${PROJECT_DIR}/configs" /var/lib/sigint
 
