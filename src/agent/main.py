@@ -9,7 +9,7 @@ import threading
 
 from agent.config import AgentConfig
 from agent.agent import Agent
-from agent.scanner_mgr import ScannerManager
+from agent.scanner_mgr import ScannerManager, DBTailer
 from comms.meshlink import MeshLink
 
 
@@ -46,11 +46,33 @@ def run(argv=None) -> int:
                   meshlink=link, scanner_mgr=scanner_mgr)
     agent.start()
 
+    # Tail the scanner's per-session DB and forward each new detection
+    # as a DET message through the agent's outbox.
+    def _on_scanner_row(row):
+        try:
+            freq_mhz = float(row["frequency_hz"]) / 1e6
+            rssi = int(float(row["power_db"]))
+            ts_unix = int(float(row["ts_epoch"]))
+            agent.enqueue_det(
+                type_=row["signal_type"], freq_mhz=freq_mhz, rssi=rssi,
+                lat=row.get("latitude"), lon=row.get("longitude"),
+                ts_unix=ts_unix, summary=row.get("channel") or "",
+            )
+        except Exception:
+            pass
+
+    tailer = DBTailer(
+        db_dir=os.path.join(state_dir, "scanner"),
+        on_row=_on_scanner_row,
+    )
+    tailer.start()
+
     done = threading.Event()
     def _sig(_signo, _frame): done.set()
     signal.signal(signal.SIGINT, _sig)
     signal.signal(signal.SIGTERM, _sig)
     done.wait()
+    tailer.stop()
     agent.stop()
     return 0
 

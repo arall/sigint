@@ -9,6 +9,34 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 
+# Module-level registry of active backends keyed by id(). pypubsub listeners
+# must be module-level functions (not nested closures or bound methods of
+# nested classes) to avoid pypubsub 4.x silently dropping subscriptions.
+_BACKENDS: dict[int, "_BackendState"] = {}
+
+
+class _BackendState:
+    """Opaque per-backend state referenced from module-level pubsub callbacks."""
+
+    def __init__(self, channel_index: int):
+        self.channel_index = channel_index
+        self.iface = None
+        self.cb: Optional[Callable[[str], None]] = None
+
+
+def _on_receive_text(packet, interface):
+    """Module-level pubsub listener — survives pypubsub weakref quirks."""
+    text = packet.get("decoded", {}).get("text")
+    if not text:
+        return
+    for state in list(_BACKENDS.values()):
+        if state.cb:
+            try:
+                state.cb(text)
+            except Exception:
+                pass
+
+
 class MeshLink:
     def __init__(self, backend):
         self._backend = backend
@@ -22,29 +50,27 @@ class MeshLink:
         import meshtastic.serial_interface
         from pubsub import pub
 
+        state = _BackendState(channel_index=channel_index)
+        _BACKENDS[id(state)] = state
+
+        # Subscribe the module-level handler exactly once per process.
+        # pypubsub dedups multiple subscribes of the same function to the same
+        # topic, so it's safe to call on every from_serial() invocation.
+        pub.subscribe(_on_receive_text, "meshtastic.receive.text")
+
+        state.iface = meshtastic.serial_interface.SerialInterface(devPath=port)
+
         class _SerialBackend:
-            def __init__(self, port, channel_index):
-                self._iface = meshtastic.serial_interface.SerialInterface(devPath=port)
-                self._channel_index = channel_index
-                self._cb = None
-                pub.subscribe(self._on_receive, "meshtastic.receive.text")
+            def __init__(self, state):
+                self._state = state
 
             def set_callback(self, cb):
-                self._cb = cb
+                self._state.cb = cb
 
             def send_text(self, text):
-                self._iface.sendText(text, channelIndex=self._channel_index)
+                self._state.iface.sendText(text, channelIndex=self._state.channel_index)
 
-            def _on_receive(self, packet, interface):
-                try:
-                    decoded = packet.get("decoded", {})
-                    text = decoded.get("text")
-                    if text and self._cb:
-                        self._cb(text)
-                except Exception:
-                    pass
-
-        return cls(backend=_SerialBackend(port, channel_index))
+        return cls(backend=_SerialBackend(state))
 
     def on_message(self, handler: Callable[[str], None]) -> None:
         self._on_message = handler
