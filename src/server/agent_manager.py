@@ -44,6 +44,11 @@ class AgentManager:
         `direction` is "tx" (server -> agent) or "rx" (agent -> server).
         Tag and agent_id are extracted from `raw` so the UI can filter
         without re-parsing.
+
+        Deliberately does NOT acquire self._lock — several call sites
+        (e.g. _on_det, _on_stat) hit this from inside `with self._lock:`,
+        and the lock is non-reentrant. deque.append is atomic in CPython,
+        which is sufficient here.
         """
         tag = ""
         agent_id = ""
@@ -53,14 +58,13 @@ class AgentManager:
             agent_id = parts[1] if len(parts) > 1 else ""
         except Exception:
             pass
-        with self._lock:
-            self._comms_log.append({
-                "ts": time.time(),
-                "direction": direction,
-                "tag": tag,
-                "agent_id": agent_id,
-                "raw": raw,
-            })
+        self._comms_log.append({
+            "ts": time.time(),
+            "direction": direction,
+            "tag": tag,
+            "agent_id": agent_id,
+            "raw": raw,
+        })
 
     def _send(self, raw: str) -> None:
         """Send a message and record it in the comms log."""
@@ -71,8 +75,10 @@ class AgentManager:
 
     def comms_log(self, limit: int = 200, offset: int = 0) -> tuple:
         """Return a slice of the comms log, newest-first, plus the total."""
-        with self._lock:
-            snapshot = list(self._comms_log)
+        # list() over a deque is atomic snapshot — no lock needed for
+        # the reader either. May briefly include or exclude an entry
+        # being written, which is fine for a UI poll.
+        snapshot = list(self._comms_log)
         snapshot.reverse()
         total = len(snapshot)
         return snapshot[offset:offset + limit], total
