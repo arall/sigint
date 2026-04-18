@@ -29,9 +29,9 @@ Distributed C2 (this round of work):
 
 - Meshtastic mesh link (`MeshLink`, module-level pubsub listener after the pypubsub 4.x weakref bug)
 - Agent runtime with persistent state, outbox retry with exponential backoff, auto-resume of last-tasked scanner after reboot
-- Wire protocol (HELLO/APPROVE/CMD/CFG/RES/DET/STAT/LOG/ACK), SNR carried on DET
+- Wire protocol (HELLO/APPROVE/CMD/CFG/RES/DET/STAT/LOG/CFGINFO/ACK), SNR carried on DET, agent CFGINFO snapshot surfaced in the Agents tab
 - Agent `DBTailer` forwarding scanner detections with GPS over the mesh
-- Agents web tab: pending/approved lists, Approve/Start/Stop/Status controls, paginated detections table
+- Agents web tab: pending/approved lists, Approve/Start/Stop/Status controls, paginated detections table, click-to-expand row showing the agent's CFGINFO snapshot, CPU/uptime/GPS in the live STAT row
 - Map tab sources panel: server + every agent, per-source uncertainty rings sized by SNR + per-signal-type path-loss
 - Fixed-position `server_position` config
 - systemd service install for server and agent (`scripts/install-*.sh`, `@PROJECT_DIR@` templating)
