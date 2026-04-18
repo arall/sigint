@@ -5,12 +5,19 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime
-from typing import Dict, Optional, Set
+from typing import Deque, Dict, List, Optional, Set
 
 from comms import protocol as P
 from utils import db as _db
 from utils.logger import SignalDetection
+
+
+# Ring buffer cap for the C2 comms log. ~500 events covers an hour at
+# roughly the worst-case ACK + STAT + DET cadence and stays well under
+# a megabyte of memory.
+_COMMS_LOG_MAX = 500
 
 
 class AgentManager:
@@ -24,9 +31,51 @@ class AgentManager:
         self._pending: Dict[str, dict] = {}
         self._info: Dict[str, dict] = {}
         self._seen_dedup: Dict[str, Set[int]] = {}
+        self._comms_log: Deque[dict] = deque(maxlen=_COMMS_LOG_MAX)
         self._load_agents_json()
         self._conn = _db.connect(detection_db_path)
         link.on_message(self._on_msg)
+
+    # -- comms log --------------------------------------------------------
+
+    def _log_comm(self, direction: str, raw: str) -> None:
+        """Record a single C2 message for the dashboard's Logs sub-tab.
+
+        `direction` is "tx" (server -> agent) or "rx" (agent -> server).
+        Tag and agent_id are extracted from `raw` so the UI can filter
+        without re-parsing.
+        """
+        tag = ""
+        agent_id = ""
+        try:
+            parts = raw.split("|", 3)
+            tag = parts[0] if parts else ""
+            agent_id = parts[1] if len(parts) > 1 else ""
+        except Exception:
+            pass
+        with self._lock:
+            self._comms_log.append({
+                "ts": time.time(),
+                "direction": direction,
+                "tag": tag,
+                "agent_id": agent_id,
+                "raw": raw,
+            })
+
+    def _send(self, raw: str) -> None:
+        """Send a message and record it in the comms log."""
+        try:
+            self._link.send(raw)
+        finally:
+            self._log_comm("tx", raw)
+
+    def comms_log(self, limit: int = 200, offset: int = 0) -> tuple:
+        """Return a slice of the comms log, newest-first, plus the total."""
+        with self._lock:
+            snapshot = list(self._comms_log)
+        snapshot.reverse()
+        total = len(snapshot)
+        return snapshot[offset:offset + limit], total
 
     # -- public API -------------------------------------------------------
 
@@ -49,7 +98,7 @@ class AgentManager:
             entry["approved_at"] = time.time()
             self._approved[agent_id] = entry
             self._save_agents_json_locked()
-        self._link.send(P.encode_approve(agent_id))
+        self._send(P.encode_approve(agent_id))
         return True
 
     def revoke(self, agent_id: str) -> None:
@@ -58,14 +107,15 @@ class AgentManager:
             self._save_agents_json_locked()
 
     def send_cmd(self, agent_id: str, verb: str, args) -> None:
-        self._link.send(P.encode_cmd(agent_id, verb, list(args or [])))
+        self._send(P.encode_cmd(agent_id, verb, list(args or [])))
 
     def send_cfg(self, agent_id: str, key: str, value: str) -> None:
-        self._link.send(P.encode_cfg(agent_id, key, value))
+        self._send(P.encode_cfg(agent_id, key, value))
 
     # -- dispatch ---------------------------------------------------------
 
     def _on_msg(self, text: str) -> None:
+        self._log_comm("rx", text)
         try:
             msg = P.decode(text)
         except P.ProtocolError:
@@ -106,7 +156,7 @@ class AgentManager:
                 "received_at": time.time(),
             }
         if seq is not None:
-            self._link.send(P.encode_ack(agent_id, seq))
+            self._send(P.encode_ack(agent_id, seq))
 
     def _on_scaninfo(self, agent_id: str, seq: Optional[int], fields: dict) -> None:
         with self._lock:
@@ -121,7 +171,7 @@ class AgentManager:
                 "received_at": time.time(),
             }
         if seq is not None:
-            self._link.send(P.encode_ack(agent_id, seq))
+            self._send(P.encode_ack(agent_id, seq))
 
     def _on_hello(self, agent_id: str, fields: dict) -> None:
         with self._lock:
@@ -140,7 +190,7 @@ class AgentManager:
         with self._lock:
             dedup = self._seen_dedup.setdefault(agent_id, set())
             if seq in dedup:
-                self._link.send(P.encode_ack(agent_id, seq))
+                self._send(P.encode_ack(agent_id, seq))
                 return
             dedup.add(seq)
             if len(dedup) > 50000:
@@ -183,7 +233,7 @@ class AgentManager:
         except Exception as e:
             # Never let a bad payload stall the agent's outbox — log and still ACK
             print(f"[agent {agent_id}] DET seq {seq} insertion failed: {e}")
-        self._link.send(P.encode_ack(agent_id, seq))
+        self._send(P.encode_ack(agent_id, seq))
 
     def _on_stat(self, agent_id: str, seq: Optional[int], fields: dict) -> None:
         with self._lock:
@@ -201,7 +251,7 @@ class AgentManager:
             if agent_id in self._approved:
                 self._approved[agent_id]["last_seen_at"] = time.time()
         if seq is not None:
-            self._link.send(P.encode_ack(agent_id, seq))
+            self._send(P.encode_ack(agent_id, seq))
 
     def _on_log(self, agent_id: str, seq: Optional[int], fields: dict) -> None:
         # best-effort console log on central
@@ -210,7 +260,7 @@ class AgentManager:
         except Exception:
             pass
         if seq is not None:
-            self._link.send(P.encode_ack(agent_id, seq))
+            self._send(P.encode_ack(agent_id, seq))
 
     def _on_res(self, agent_id: str, fields: dict) -> None:
         with self._lock:

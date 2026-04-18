@@ -116,6 +116,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_agents()
         elif path == '/api/agents/detections':
             self._serve_agent_detections(qs)
+        elif path == '/api/agents/comms':
+            self._serve_agent_comms(qs)
         elif path == '/api/map/sources':
             self._serve_map_sources(qs)
         elif path == '/api/fpv/frame':
@@ -447,6 +449,30 @@ class WebHandler(BaseHTTPRequestHandler):
             "approved": approved,
             "pending": mgr.pending(),
             "info": info,
+        })
+
+    def _serve_agent_comms(self, qs):
+        """Serve the rolling C2 comms log (TX + RX)."""
+        mgr = getattr(self.server, 'agent_manager', None)
+        if not mgr:
+            self._send_json({"events": [], "total": 0, "limit": 0, "offset": 0})
+            return
+        try:
+            limit = int(qs.get('limit', ['100'])[0])
+        except (TypeError, ValueError):
+            limit = 100
+        try:
+            offset = int(qs.get('offset', ['0'])[0])
+        except (TypeError, ValueError):
+            offset = 0
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+        events, total = mgr.comms_log(limit=limit, offset=offset)
+        self._send_json({
+            "events": events,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
         })
 
     def _serve_agent_detections(self, qs):

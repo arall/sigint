@@ -645,38 +645,84 @@
 
 <!-- Tab: Agents -->
 <div id="tab-agents" class="tab-content">
-  <div class="section">
-    <div class="section-title">Pending agents</div>
-    <div class="tab-desc">Remote nodes broadcasting HELLO. Click Approve to allow.</div>
-    <table>
-      <thead><tr>
-        <th>Agent ID</th><th>Hardware</th><th>Version</th>
-        <th>First seen</th><th>Action</th>
-      </tr></thead>
-      <tbody id="agents-pending"><tr><td colspan="5" class="empty">no pending agents</td></tr></tbody>
-    </table>
+  <div class="sub-nav">
+    <button class="agent-subtab-btn active" data-sub="manage">Manage</button>
+    <button class="agent-subtab-btn" data-sub="dets">Detections</button>
+    <button class="agent-subtab-btn" data-sub="logs">C2 Logs</button>
   </div>
-  <div class="section">
-    <div class="section-title">Approved agents</div>
-    <table>
-      <thead><tr>
-        <th>Agent ID</th><th>Scanner</th><th>State</th><th>GPS</th>
-        <th>Sats</th><th>CPU</th><th>Uptime</th><th>Last seen</th><th>Action</th>
-      </tr></thead>
-      <tbody id="agents-approved"><tr><td colspan="9" class="empty">no approved agents</td></tr></tbody>
-    </table>
+
+  <!-- Sub-pane: Manage -->
+  <div class="agent-subpane" data-sub="manage">
+    <div class="section">
+      <div class="section-title">Pending agents</div>
+      <div class="tab-desc">Remote nodes broadcasting HELLO. Click Approve to allow.</div>
+      <table>
+        <thead><tr>
+          <th>Agent ID</th><th>Hardware</th><th>Version</th>
+          <th>First seen</th><th>Action</th>
+        </tr></thead>
+        <tbody id="agents-pending"><tr><td colspan="5" class="empty">no pending agents</td></tr></tbody>
+      </table>
+    </div>
+    <div class="section">
+      <div class="section-title">Approved agents</div>
+      <table>
+        <thead><tr>
+          <th>Agent ID</th><th>Scanner</th><th>State</th><th>GPS</th>
+          <th>Sats</th><th>CPU</th><th>Uptime</th><th>Last seen</th><th>Action</th>
+        </tr></thead>
+        <tbody id="agents-approved"><tr><td colspan="9" class="empty">no approved agents</td></tr></tbody>
+      </table>
+    </div>
   </div>
-  <div class="section">
-    <div class="section-title">Recent detections from agents</div>
-    <div class="tab-desc">Rows forwarded over the mesh from remote nodes. Server-local captures are not shown here — see the per-category tabs for those.</div>
-    <table>
-      <thead><tr>
-        <th>Time</th><th>Agent</th><th>Type</th><th>Channel</th>
-        <th>Freq (MHz)</th><th>RSSI (dB)</th><th>SNR (dB)</th><th>Lat, Lon</th>
-      </tr></thead>
-      <tbody id="agents-detections"><tr><td colspan="8" class="empty">no detections from agents yet</td></tr></tbody>
-    </table>
-    <div id="agents-detections-pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
+
+  <!-- Sub-pane: Detections -->
+  <div class="agent-subpane" data-sub="dets" style="display:none">
+    <div class="section">
+      <div class="section-title">Recent detections from agents</div>
+      <div class="tab-desc">Rows forwarded over the mesh from remote nodes. Server-local captures are not shown here — see the per-category tabs for those.</div>
+      <table>
+        <thead><tr>
+          <th>Time</th><th>Agent</th><th>Type</th><th>Channel</th>
+          <th>Freq (MHz)</th><th>RSSI (dB)</th><th>SNR (dB)</th><th>Lat, Lon</th>
+        </tr></thead>
+        <tbody id="agents-detections"><tr><td colspan="8" class="empty">no detections from agents yet</td></tr></tbody>
+      </table>
+      <div id="agents-detections-pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
+    </div>
+  </div>
+
+  <!-- Sub-pane: C2 Logs -->
+  <div class="agent-subpane" data-sub="logs" style="display:none">
+    <div class="section">
+      <div class="section-title">
+        <span>C2 message log</span>
+        <div class="filter-bar">
+          <label><input type="checkbox" id="agents-comms-tx" checked> TX (server → agent)</label>
+          <label><input type="checkbox" id="agents-comms-rx" checked> RX (agent → server)</label>
+          <label>Tag:
+            <select id="agents-comms-tag">
+              <option value="">all</option>
+              <option>HELLO</option><option>APPROVE</option>
+              <option>CMD</option><option>CFG</option>
+              <option>RES</option><option>DET</option>
+              <option>STAT</option><option>LOG</option>
+              <option>CFGINFO</option><option>SCANINFO</option>
+              <option>ACK</option>
+            </select>
+          </label>
+          <button onclick="loadAgentComms()">Refresh</button>
+        </div>
+      </div>
+      <div class="tab-desc">Every C2 message the server has sent or received in this session, newest first. Capped to the last 500 events. Server restart resets the buffer.</div>
+      <table>
+        <thead><tr>
+          <th>Time</th><th>Dir</th><th>Tag</th><th>Agent</th><th>Raw payload</th>
+        </tr></thead>
+        <tbody id="agents-comms"><tr><td colspan="5" class="empty">no C2 messages yet</td></tr></tbody>
+      </table>
+      <div id="agents-comms-pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
+    </div>
   </div>
 </div>
 

@@ -1933,8 +1933,29 @@ function _renderPager(containerId, opts) {
 
 
 // --- Agents tab ---
+let _agentSubtab = 'manage';
 let _agentDetPage = 0;
 const _AGENT_DET_PAGE_SIZE = 50;
+let _agentCommsPage = 0;
+const _AGENT_COMMS_PAGE_SIZE = 100;
+
+function switchAgentSubtab(name) {
+  _agentSubtab = name;
+  document.querySelectorAll('.agent-subtab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.sub === name);
+  });
+  document.querySelectorAll('.agent-subpane').forEach(p => {
+    p.style.display = p.dataset.sub === name ? '' : 'none';
+  });
+  // Lazy-load the data the active sub-tab cares about so we don't
+  // hammer endpoints we're not displaying.
+  if (name === 'logs') loadAgentComms();
+  else if (name === 'dets') loadAgentDetectionsPage(_agentDetPage);
+  else fetchAgents();
+}
+
+document.querySelectorAll('.agent-subtab-btn').forEach(btn =>
+  btn.addEventListener('click', () => switchAgentSubtab(btn.dataset.sub)));
 
 async function fetchAgents() {
   try {
@@ -1945,8 +1966,66 @@ async function fetchAgents() {
   } catch (e) {
     // leave existing rows in place on error
   }
-  await loadAgentDetectionsPage(_agentDetPage);
+  // Only refresh the active sub-tab's heavier data so polling stays cheap.
+  if (_agentSubtab === 'dets') await loadAgentDetectionsPage(_agentDetPage);
+  else if (_agentSubtab === 'logs') await loadAgentComms(_agentCommsPage);
 }
+
+async function loadAgentComms(page) {
+  if (page == null) page = _agentCommsPage;
+  _agentCommsPage = Math.max(0, page);
+  const offset = _agentCommsPage * _AGENT_COMMS_PAGE_SIZE;
+  try {
+    const res = await fetch('/api/agents/comms?limit='
+      + _AGENT_COMMS_PAGE_SIZE + '&offset=' + offset);
+    const data = await res.json();
+    renderAgentComms(data);
+  } catch (e) {
+    // leave existing rows in place on error
+  }
+}
+
+function renderAgentComms(data) {
+  const tbody = document.getElementById('agents-comms');
+  if (!tbody) return;
+  const events = data.events || [];
+  const total = data.total || 0;
+  const limit = data.limit || _AGENT_COMMS_PAGE_SIZE;
+  const offset = data.offset || 0;
+  const txOn = document.getElementById('agents-comms-tx').checked;
+  const rxOn = document.getElementById('agents-comms-rx').checked;
+  const tagFilter = document.getElementById('agents-comms-tag').value;
+  const filtered = events.filter(e =>
+    ((e.direction === 'tx' && txOn) || (e.direction === 'rx' && rxOn)) &&
+    (!tagFilter || e.tag === tagFilter));
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">no C2 messages match the current filters</td></tr>';
+  } else {
+    tbody.innerHTML = filtered.map(e => {
+      const ts = new Date(e.ts * 1000).toLocaleTimeString();
+      const dir = e.direction === 'tx'
+        ? '<span style="color:#4caf50">↑ TX</span>'
+        : '<span style="color:#2196f3">↓ RX</span>';
+      return `<tr>
+        <td style="font-family:monospace; font-size:11px">${esc(ts)}</td>
+        <td>${dir}</td>
+        <td><b>${esc(e.tag || '')}</b></td>
+        <td>${esc(e.agent_id || '')}</td>
+        <td style="font-family:monospace; font-size:11px; word-break:break-all">${esc(e.raw || '')}</td>
+      </tr>`;
+    }).join('');
+  }
+  _renderPager('agents-comms-pager', {
+    total, offset, limit,
+    onChange: (newOffset) => loadAgentComms(Math.floor(newOffset / limit)),
+  });
+}
+
+// Re-render in place when the user changes filters (no refetch needed).
+['agents-comms-tx', 'agents-comms-rx', 'agents-comms-tag'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', () => loadAgentComms(_agentCommsPage));
+});
 
 async function loadAgentDetectionsPage(page) {
   _agentDetPage = Math.max(0, page);
