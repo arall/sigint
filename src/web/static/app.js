@@ -817,7 +817,7 @@ let _sigSubtab = 'voice';
 
 function switchSigSubtab(name) {
   _sigSubtab = name;
-  document.querySelectorAll('.sig-subtab-btn').forEach(b => {
+  document.querySelectorAll('.sig-subtab-btn[data-sub]').forEach(b => {
     b.classList.toggle('active', b.dataset.sub === name);
   });
   document.querySelectorAll('.sig-subpane').forEach(p => {
@@ -826,7 +826,7 @@ function switchSigSubtab(name) {
   loadCategory(name);
 }
 
-document.querySelectorAll('.sig-subtab-btn').forEach(btn => {
+document.querySelectorAll('.sig-subtab-btn[data-sub]').forEach(btn => {
   btn.addEventListener('click', () => switchSigSubtab(btn.dataset.sub));
 });
 
@@ -1941,8 +1941,8 @@ const _AGENT_COMMS_PAGE_SIZE = 100;
 
 function switchAgentSubtab(name) {
   _agentSubtab = name;
-  document.querySelectorAll('.agent-subtab-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.sub === name);
+  document.querySelectorAll('[data-agent-sub]').forEach(b => {
+    b.classList.toggle('active', b.dataset.agentSub === name);
   });
   document.querySelectorAll('.agent-subpane').forEach(p => {
     p.style.display = p.dataset.sub === name ? '' : 'none';
@@ -1954,8 +1954,8 @@ function switchAgentSubtab(name) {
   else fetchAgents();
 }
 
-document.querySelectorAll('.agent-subtab-btn').forEach(btn =>
-  btn.addEventListener('click', () => switchAgentSubtab(btn.dataset.sub)));
+document.querySelectorAll('[data-agent-sub]').forEach(btn =>
+  btn.addEventListener('click', () => switchAgentSubtab(btn.dataset.agentSub)));
 
 async function fetchAgents() {
   try {
