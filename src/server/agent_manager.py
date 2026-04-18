@@ -90,6 +90,8 @@ class AgentManager:
             self._on_res(msg.agent_id, msg.fields)
         elif msg.tag == "CFGINFO":
             self._on_cfginfo(msg.agent_id, msg.seq, msg.fields)
+        elif msg.tag == "SCANINFO":
+            self._on_scaninfo(msg.agent_id, msg.seq, msg.fields)
 
     def _on_cfginfo(self, agent_id: str, seq: Optional[int], fields: dict) -> None:
         with self._lock:
@@ -101,6 +103,21 @@ class AgentManager:
                 "state_dir": fields.get("state_dir", ""),
                 "version": fields.get("version", ""),
                 "hw": fields.get("hw", ""),
+                "received_at": time.time(),
+            }
+        if seq is not None:
+            self._link.send(P.encode_ack(agent_id, seq))
+
+    def _on_scaninfo(self, agent_id: str, seq: Optional[int], fields: dict) -> None:
+        with self._lock:
+            info = self._info.setdefault(agent_id, {})
+            info["scanner_info"] = {
+                "scanner_type": fields.get("scanner_type", ""),
+                "center_mhz": fields.get("center_mhz", 0.0),
+                "bw_mhz": fields.get("bw_mhz", 0.0),
+                "channels": fields.get("channels", 0),
+                "hopping": fields.get("hopping", False),
+                "parsers": fields.get("parsers", ""),
                 "received_at": time.time(),
             }
         if seq is not None:

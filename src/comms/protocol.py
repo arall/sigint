@@ -17,7 +17,7 @@ class ProtocolError(ValueError):
     """Raised when a message cannot be parsed."""
 
 
-_TAGS = {"CMD", "CFG", "CFGINFO", "APPROVE", "ACK", "RES", "HELLO", "STAT", "DET", "LOG"}
+_TAGS = {"CMD", "CFG", "CFGINFO", "SCANINFO", "APPROVE", "ACK", "RES", "HELLO", "STAT", "DET", "LOG"}
 
 
 def _esc(s: str) -> str:
@@ -125,6 +125,16 @@ def encode_cfginfo(agent_id: str, seq: int, mesh_channel_index: int,
             f"{_esc(version)}|{_esc(hw)}")
 
 
+def encode_scaninfo(agent_id: str, seq: int, scanner_type: str,
+                    center_mhz: float, bw_mhz: float,
+                    channels: int, hopping: bool, parsers: str) -> str:
+    """Snapshot of the agent's currently running scanner. Empty
+    `scanner_type` means no scanner is running (after STOP)."""
+    return (f"SCANINFO|{agent_id}|{seq}|{_esc(scanner_type)}|"
+            f"{center_mhz:.4f}|{bw_mhz:.4f}|{channels}|"
+            f"{1 if hopping else 0}|{_esc(parsers)}")
+
+
 # -- decoder ----------------------------------------------------------------
 
 def decode(wire: str) -> Message:
@@ -209,6 +219,16 @@ def decode(wire: str) -> Message:
                             "state_dir": _unesc(parts[6]),
                             "version": _unesc(parts[7]),
                             "hw": _unesc(parts[8])},
+                           raw=wire)
+        if tag == "SCANINFO":
+            _check_min(parts, 9)
+            return Message(tag, parts[1], int(parts[2]),
+                           {"scanner_type": _unesc(parts[3]),
+                            "center_mhz": float(parts[4]) if parts[4] else 0.0,
+                            "bw_mhz": float(parts[5]) if parts[5] else 0.0,
+                            "channels": int(parts[6]) if parts[6] else 0,
+                            "hopping": parts[7] == "1",
+                            "parsers": _unesc(parts[8])},
                            raw=wire)
     except (ValueError, IndexError) as e:
         raise ProtocolError(f"malformed {tag}: {e}") from e

@@ -72,6 +72,9 @@ class Agent:
         # agent's static config view. AgentManager keeps the latest
         # snapshot in info[agent_id]['config'].
         self._enqueue_cfginfo()
+        # And one SCANINFO so the dashboard knows what (if anything)
+        # the agent is currently scanning.
+        self._enqueue_scaninfo()
 
     def _enqueue_cfginfo(self) -> None:
         if not self._cfg_snapshot:
@@ -86,6 +89,27 @@ class Agent:
             state_dir=str(cfg.get("state_dir") or ""),
             version=str(cfg.get("version") or "0.1"),
             hw=str(cfg.get("hw") or "rpi"),
+        )
+        self._outbox.update_payload(seq, payload)
+
+    def _enqueue_scaninfo(self) -> None:
+        from agent.scanner_meta import for_scanner
+        cs = self._state.current_scanner or {}
+        scanner_type = cs.get("type", "")
+        if scanner_type:
+            meta = for_scanner(scanner_type)
+        else:
+            meta = {"center_mhz": 0.0, "bw_mhz": 0.0, "channels": 0,
+                    "hopping": False, "parsers": ""}
+        seq = self._outbox.enqueue("SCANINFO", "")
+        payload = P.encode_scaninfo(
+            self._state.agent_id, seq,
+            scanner_type=scanner_type,
+            center_mhz=float(meta["center_mhz"]),
+            bw_mhz=float(meta["bw_mhz"]),
+            channels=int(meta["channels"]),
+            hopping=bool(meta["hopping"]),
+            parsers=str(meta["parsers"]),
         )
         self._outbox.update_payload(seq, payload)
 
@@ -121,9 +145,10 @@ class Agent:
             self._state.adopted = True
             self._state.save()
             self._link.send(P.encode_res(self._state.agent_id, "APPROVE", "ok"))
-            # First adoption — push our config snapshot so the server's
-            # Agents tab can render it.
+            # First adoption — push our config + current scanner snapshot
+            # so the server's Agents tab can render them.
             self._enqueue_cfginfo()
+            self._enqueue_scaninfo()
             return
 
         if not self._state.adopted:
@@ -162,11 +187,13 @@ class Agent:
                     self._state.current_scanner = {"type": scanner_type, "args": tail}
                     self._state.save()
                     res_msg = f"pid {self._scanner_mgr.pid()}"
+                    self._enqueue_scaninfo()
             elif verb == "STOP":
                 if self._scanner_mgr:
                     self._scanner_mgr.stop()
                 self._state.current_scanner = None
                 self._state.save()
+                self._enqueue_scaninfo()
             elif verb == "STATUS":
                 self._emit_stat()
             elif verb == "SET":

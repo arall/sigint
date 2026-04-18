@@ -2031,21 +2031,45 @@ function _toggleAgentRow(id) {
 
 function _renderAgentConfig(id, info) {
   const cfg = (info || {}).config;
-  if (!cfg) {
-    return `<div style="padding: 8px 16px; color:#888; font-size:11px">
-      no config received yet — waiting for the agent's CFGINFO snapshot
-    </div>`;
+  const scan = (info || {}).scanner_info;
+  let parts = [];
+
+  if (cfg) {
+    const age = cfg.received_at ? _fmtUptime(Math.floor((Date.now() / 1000) - cfg.received_at)) + ' ago' : '';
+    parts.push(`<div style="margin-bottom:8px">
+      <div style="color:#aaa; font-weight:600; margin-bottom:4px">Agent config</div>
+      <div><span style="color:#888">version:</span> ${esc(cfg.version || '')} (${esc(cfg.hw || '')})</div>
+      <div><span style="color:#888">meshtastic_port:</span> ${esc(cfg.meshtastic_port || '')}</div>
+      <div><span style="color:#888">mesh_channel_index:</span> ${esc(cfg.mesh_channel_index)}</div>
+      <div><span style="color:#888">gps_port:</span> ${esc(cfg.gps_port || '(none)')}</div>
+      <div><span style="color:#888">state_dir:</span> ${esc(cfg.state_dir || '')}</div>
+      <div style="color:#666; font-size:10px; margin-top:2px">received ${age}</div>
+    </div>`);
+  } else {
+    parts.push(`<div style="color:#888; margin-bottom:8px">no config received yet — waiting for CFGINFO</div>`);
   }
-  const ageS = cfg.received_at ? Math.max(0, (Date.now() / 1000) - cfg.received_at) : null;
-  const ageTxt = ageS != null ? _fmtUptime(Math.floor(ageS)) + ' ago' : '';
-  return `<div style="padding: 8px 16px; font-size:11px; font-family:monospace; line-height:1.6">
-    <div><span style="color:#888">version:</span> ${esc(cfg.version || '')} (${esc(cfg.hw || '')})</div>
-    <div><span style="color:#888">meshtastic_port:</span> ${esc(cfg.meshtastic_port || '')}</div>
-    <div><span style="color:#888">mesh_channel_index:</span> ${esc(cfg.mesh_channel_index)}</div>
-    <div><span style="color:#888">gps_port:</span> ${esc(cfg.gps_port || '(none)')}</div>
-    <div><span style="color:#888">state_dir:</span> ${esc(cfg.state_dir || '')}</div>
-    <div style="color:#666; margin-top:4px">snapshot received ${ageTxt}</div>
-  </div>`;
+
+  if (scan && scan.scanner_type) {
+    const age = scan.received_at ? _fmtUptime(Math.floor((Date.now() / 1000) - scan.received_at)) + ' ago' : '';
+    const cov = scan.center_mhz > 0
+      ? `${(scan.center_mhz - scan.bw_mhz / 2).toFixed(3)}–${(scan.center_mhz + scan.bw_mhz / 2).toFixed(3)} MHz`
+      : '(scanner-defined)';
+    parts.push(`<div>
+      <div style="color:#aaa; font-weight:600; margin-bottom:4px">Current scanner</div>
+      <div><span style="color:#888">type:</span> ${esc(scan.scanner_type)}</div>
+      <div><span style="color:#888">coverage:</span> ${esc(cov)}</div>
+      <div><span style="color:#888">channels:</span> ${scan.channels || '(unbounded)'}</div>
+      <div><span style="color:#888">mode:</span> ${scan.hopping ? 'hopping' : 'continuous'}</div>
+      <div><span style="color:#888">parsers:</span> ${esc(scan.parsers || '')}</div>
+      <div style="color:#666; font-size:10px; margin-top:2px">received ${age}</div>
+    </div>`);
+  } else if (scan) {
+    parts.push(`<div style="color:#888">scanner: idle</div>`);
+  } else {
+    parts.push(`<div style="color:#888">no scanner snapshot yet — waiting for SCANINFO</div>`);
+  }
+
+  return `<div style="padding: 8px 16px; font-size:11px; font-family:monospace; line-height:1.6">${parts.join('')}</div>`;
 }
 
 function renderApprovedAgents(approved, info) {
