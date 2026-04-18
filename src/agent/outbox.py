@@ -77,10 +77,21 @@ class Outbox:
             return seq
 
     def next_due(self, now: float) -> Optional[OutboxRow]:
+        # Prioritise small control / heartbeat messages over bulk DET so a
+        # backlog of detection retries doesn't drown out a freshly-fired
+        # CFGINFO/SCANINFO/STAT. Within each priority bucket, oldest first.
         with self._lock:
             cur = self._conn.execute(
                 "SELECT seq, kind, payload, enqueued_at, last_try_at, retries, acked "
-                "FROM outbox WHERE acked=0 ORDER BY seq ASC"
+                "FROM outbox WHERE acked=0 "
+                "ORDER BY CASE kind "
+                "  WHEN 'CFGINFO'  THEN 0 "
+                "  WHEN 'SCANINFO' THEN 0 "
+                "  WHEN 'RES'      THEN 0 "
+                "  WHEN 'STAT'     THEN 1 "
+                "  WHEN 'LOG'      THEN 1 "
+                "  ELSE 2 "
+                "END, seq ASC"
             )
             for row in cur:
                 seq, kind, payload, enq, last_try, retries, acked = row
