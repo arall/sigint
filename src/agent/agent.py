@@ -239,8 +239,20 @@ class Agent:
                 self._stop.wait(max(0.5, rate_sec / 2))
 
     def _stat_loop(self, interval: float) -> None:
+        # Re-fire CFGINFO + SCANINFO every Nth STAT so the dashboard
+        # heals automatically after a server restart (server-side info
+        # is in-memory only). 10 keeps the cadence ~10 min at default.
+        REFRESH_EVERY = 10
+        i = 0
         while not self._stop.is_set():
             self._emit_stat()
+            i += 1
+            if i % REFRESH_EVERY == 0:
+                try:
+                    self._enqueue_cfginfo()
+                    self._enqueue_scaninfo()
+                except Exception:
+                    pass
             self._stop.wait(interval)
 
     def _emit_stat(self) -> None:
