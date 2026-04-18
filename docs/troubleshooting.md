@@ -36,6 +36,14 @@ Wait ~20 s, then restart the service. If it happens again, swap the radio — on
 
 **5. Actual RF range issue.** Check each radio's `--info` → `Nodes in mesh`. If each side can see the other with a recent `lastHeard` and an SNR > 0, RF is fine. If not, move them closer, check the antenna is seated, or flip a client's role from `CLIENT_MUTE` to `CLIENT` temporarily to diagnose.
 
+**6. Agent in the middle of the chain is `CLIENT_MUTE`.** A `CLIENT_MUTE` node sends its own traffic but won't repeat anything else, so a node that has to reach the server through it never gets through. Set every relay-capable agent radio to `CLIENT`:
+
+```sh
+venv/bin/meshtastic --port /dev/serial/by-id/usb-<radio>-if00 --set device.role CLIENT
+```
+
+See [c2.md → Mesh relay between agents](c2.md#mesh-relay-between-agents) for details.
+
 ## `sdr.py agent` / `server` dies immediately
 
 ```sh
