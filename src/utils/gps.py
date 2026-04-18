@@ -54,6 +54,7 @@ class GPSReader:
 
         self._lat: Optional[float] = None
         self._lon: Optional[float] = None
+        self._sats: int = 0
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -77,6 +78,12 @@ class GPSReader:
         """Return (latitude, longitude) or (None, None) if no fix."""
         with self._lock:
             return (self._lat, self._lon)
+
+    @property
+    def satellites(self) -> int:
+        """Number of satellites in use (from GGA field 7). 0 if no fix."""
+        with self._lock:
+            return self._sats
 
     def _read_loop(self):
         """Read NMEA sentences from serial port."""
@@ -149,10 +156,16 @@ class GPSReader:
             if len(fields) >= 10 and fields[6] != "0":  # fix quality != 0
                 lat = _parse_nmea_coord(fields[2], fields[3])
                 lon = _parse_nmea_coord(fields[4], fields[5])
+                # field 7 = number of satellites in use
+                try:
+                    sats = int(fields[7]) if fields[7] else 0
+                except ValueError:
+                    sats = 0
                 if lat is not None and lon is not None:
                     with self._lock:
                         self._lat = lat
                         self._lon = lon
+                        self._sats = sats
 
         # $GPRMC or $GNRMC
         elif ",RMC," in line or line.startswith(("$GPRMC", "$GNRMC")):
