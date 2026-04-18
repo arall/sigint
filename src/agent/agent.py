@@ -16,7 +16,8 @@ from agent.scanner_mgr import ScannerManager
 
 class Agent:
     def __init__(self, state_dir: str, agent_id: str, meshlink: MeshLink,
-                 scanner_mgr: Optional[ScannerManager] = None):
+                 scanner_mgr: Optional[ScannerManager] = None,
+                 cfg_snapshot: Optional[dict] = None):
         self._dir = state_dir
         os.makedirs(state_dir, exist_ok=True)
         self._state = AgentState.load(os.path.join(state_dir, "state.json"),
@@ -25,6 +26,10 @@ class Agent:
                               retry_max_sec=self._state.config["retry_max_sec"])
         self._link = meshlink
         self._scanner_mgr = scanner_mgr
+        # Static config snapshot the agent broadcasts in CFGINFO so the
+        # dashboard can render an "agent config" view. Built by main.py
+        # from configs/agent.json + AgentConfig.
+        self._cfg_snapshot = cfg_snapshot or {}
         self._stop = threading.Event()
         self._threads: List[threading.Thread] = []
         # Process start timestamp for the STAT uptime field.
@@ -63,6 +68,27 @@ class Agent:
             except Exception:
                 pass
 
+        # Fire one CFGINFO at start so the dashboard can render the
+        # agent's static config view. AgentManager keeps the latest
+        # snapshot in info[agent_id]['config'].
+        self._enqueue_cfginfo()
+
+    def _enqueue_cfginfo(self) -> None:
+        if not self._cfg_snapshot:
+            return
+        seq = self._outbox.enqueue("CFGINFO", "")
+        cfg = self._cfg_snapshot
+        payload = P.encode_cfginfo(
+            self._state.agent_id, seq,
+            mesh_channel_index=int(cfg.get("mesh_channel_index", 0)),
+            meshtastic_port=str(cfg.get("meshtastic_port") or ""),
+            gps_port=str(cfg.get("gps_port") or ""),
+            state_dir=str(cfg.get("state_dir") or ""),
+            version=str(cfg.get("version") or "0.1"),
+            hw=str(cfg.get("hw") or "rpi"),
+        )
+        self._outbox.update_payload(seq, payload)
+
     def stop(self) -> None:
         self._stop.set()
         for t in self._threads:
@@ -95,6 +121,9 @@ class Agent:
             self._state.adopted = True
             self._state.save()
             self._link.send(P.encode_res(self._state.agent_id, "APPROVE", "ok"))
+            # First adoption — push our config snapshot so the server's
+            # Agents tab can render it.
+            self._enqueue_cfginfo()
             return
 
         if not self._state.adopted:

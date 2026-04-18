@@ -88,6 +88,23 @@ class AgentManager:
             self._on_log(msg.agent_id, msg.seq, msg.fields)
         elif msg.tag == "RES":
             self._on_res(msg.agent_id, msg.fields)
+        elif msg.tag == "CFGINFO":
+            self._on_cfginfo(msg.agent_id, msg.seq, msg.fields)
+
+    def _on_cfginfo(self, agent_id: str, seq: Optional[int], fields: dict) -> None:
+        with self._lock:
+            info = self._info.setdefault(agent_id, {})
+            info["config"] = {
+                "mesh_channel_index": fields.get("mesh_channel_index", 0),
+                "meshtastic_port": fields.get("meshtastic_port", ""),
+                "gps_port": fields.get("gps_port", ""),
+                "state_dir": fields.get("state_dir", ""),
+                "version": fields.get("version", ""),
+                "hw": fields.get("hw", ""),
+                "received_at": time.time(),
+            }
+        if seq is not None:
+            self._link.send(P.encode_ack(agent_id, seq))
 
     def _on_hello(self, agent_id: str, fields: dict) -> None:
         with self._lock:

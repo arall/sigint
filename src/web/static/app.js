@@ -2021,6 +2021,33 @@ function _fmtUptime(s) {
   return Math.floor(s / 86400) + 'd ' + Math.floor((s % 86400) / 3600) + 'h';
 }
 
+// Per-agent expand state — preserved across re-renders
+const _agentExpanded = {};
+
+function _toggleAgentRow(id) {
+  _agentExpanded[id] = !_agentExpanded[id];
+  fetchAgents();  // re-render
+}
+
+function _renderAgentConfig(id, info) {
+  const cfg = (info || {}).config;
+  if (!cfg) {
+    return `<div style="padding: 8px 16px; color:#888; font-size:11px">
+      no config received yet — waiting for the agent's CFGINFO snapshot
+    </div>`;
+  }
+  const ageS = cfg.received_at ? Math.max(0, (Date.now() / 1000) - cfg.received_at) : null;
+  const ageTxt = ageS != null ? _fmtUptime(Math.floor(ageS)) + ' ago' : '';
+  return `<div style="padding: 8px 16px; font-size:11px; font-family:monospace; line-height:1.6">
+    <div><span style="color:#888">version:</span> ${esc(cfg.version || '')} (${esc(cfg.hw || '')})</div>
+    <div><span style="color:#888">meshtastic_port:</span> ${esc(cfg.meshtastic_port || '')}</div>
+    <div><span style="color:#888">mesh_channel_index:</span> ${esc(cfg.mesh_channel_index)}</div>
+    <div><span style="color:#888">gps_port:</span> ${esc(cfg.gps_port || '(none)')}</div>
+    <div><span style="color:#888">state_dir:</span> ${esc(cfg.state_dir || '')}</div>
+    <div style="color:#666; margin-top:4px">snapshot received ${ageTxt}</div>
+  </div>`;
+}
+
 function renderApprovedAgents(approved, info) {
   const tbody = document.getElementById('agents-approved');
   const ids = Object.keys(approved).sort();
@@ -2032,9 +2059,6 @@ function renderApprovedAgents(approved, info) {
     const a = approved[id] || {};
     const i = info[id] || {};
     const lastSeen = a.last_seen_at ? new Date(a.last_seen_at * 1000).toLocaleTimeString() : '';
-    // Prefer the live GPS from STAT (i.lat/i.lon); fall back to the
-    // last-known position from a forwarded DET so the cell isn't blank
-    // while the agent's GPS sidecar is still warming up.
     let gpsLat = i.lat, gpsLon = i.lon;
     if ((gpsLat == null || gpsLon == null) && i.last_position) {
       gpsLat = i.last_position.lat;
@@ -2045,8 +2069,11 @@ function renderApprovedAgents(approved, info) {
     const sats = (i.sats != null && i.sats > 0) ? i.sats : '';
     const cpu = (i.cpu != null && i.cpu > 0) ? i.cpu + '%' : '';
     const uptime = _fmtUptime(i.uptime_sec);
-    return `<tr>
-      <td>${esc(id)}</td><td>${esc(i.scanner || '')}</td><td>${esc(i.state || '')}</td>
+    const expanded = !!_agentExpanded[id];
+    const arrow = expanded ? '▾' : '▸';
+    let html = `<tr>
+      <td><a href="#" onclick="event.preventDefault(); _toggleAgentRow('${esc(id)}')" style="text-decoration:none; color:inherit">${arrow} ${esc(id)}</a></td>
+      <td>${esc(i.scanner || '')}</td><td>${esc(i.state || '')}</td>
       <td>${esc(gps)}</td><td>${esc(sats)}</td><td>${esc(cpu)}</td>
       <td>${esc(uptime)}</td><td>${lastSeen}</td>
       <td>
@@ -2054,6 +2081,10 @@ function renderApprovedAgents(approved, info) {
         <button onclick="promptAgentStart('${esc(id)}')">Start...</button>
       </td>
     </tr>`;
+    if (expanded) {
+      html += `<tr><td colspan="9" style="background:#0e1420; padding:0">${_renderAgentConfig(id, i)}</td></tr>`;
+    }
+    return html;
   }).join('');
 }
 

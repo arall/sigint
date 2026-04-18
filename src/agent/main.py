@@ -50,8 +50,17 @@ def run(argv=None) -> int:
         device_id=agent_id, gps_port=gps_port,
     )
 
+    cfg_snapshot = {
+        "mesh_channel_index": cfg.mesh_channel_index,
+        "meshtastic_port": port,
+        "gps_port": gps_port or "",
+        "state_dir": state_dir,
+        "version": "0.1",
+        "hw": "rpi",
+    }
     agent = Agent(state_dir=state_dir, agent_id=agent_id,
-                  meshlink=link, scanner_mgr=scanner_mgr)
+                  meshlink=link, scanner_mgr=scanner_mgr,
+                  cfg_snapshot=cfg_snapshot)
     agent.start()
 
     # Tail the scanner's per-session DB and forward each new detection

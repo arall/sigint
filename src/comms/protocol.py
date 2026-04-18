@@ -17,7 +17,7 @@ class ProtocolError(ValueError):
     """Raised when a message cannot be parsed."""
 
 
-_TAGS = {"CMD", "CFG", "APPROVE", "ACK", "RES", "HELLO", "STAT", "DET", "LOG"}
+_TAGS = {"CMD", "CFG", "CFGINFO", "APPROVE", "ACK", "RES", "HELLO", "STAT", "DET", "LOG"}
 
 
 def _esc(s: str) -> str:
@@ -115,6 +115,16 @@ def encode_log(agent_id: str, seq: int, level: str, text: str) -> str:
     return f"LOG|{agent_id}|{seq}|{_esc(level)}|{_esc(text)}"
 
 
+def encode_cfginfo(agent_id: str, seq: int, mesh_channel_index: int,
+                   meshtastic_port: str, gps_port: str,
+                   state_dir: str, version: str, hw: str) -> str:
+    """One-shot snapshot of the agent's static config, sent at startup
+    so the dashboard can render the agent's "Config" view."""
+    return (f"CFGINFO|{agent_id}|{seq}|{mesh_channel_index}|"
+            f"{_esc(meshtastic_port)}|{_esc(gps_port)}|{_esc(state_dir)}|"
+            f"{_esc(version)}|{_esc(hw)}")
+
+
 # -- decoder ----------------------------------------------------------------
 
 def decode(wire: str) -> Message:
@@ -189,6 +199,16 @@ def decode(wire: str) -> Message:
             return Message(tag, parts[1], int(parts[2]),
                            {"level": _unesc(parts[3]),
                             "text": _unesc(parts[4])},
+                           raw=wire)
+        if tag == "CFGINFO":
+            _check_min(parts, 9)
+            return Message(tag, parts[1], int(parts[2]),
+                           {"mesh_channel_index": int(parts[3]) if parts[3] else 0,
+                            "meshtastic_port": _unesc(parts[4]),
+                            "gps_port": _unesc(parts[5]),
+                            "state_dir": _unesc(parts[6]),
+                            "version": _unesc(parts[7]),
+                            "hw": _unesc(parts[8])},
                            raw=wire)
     except (ValueError, IndexError) as e:
         raise ProtocolError(f"malformed {tag}: {e}") from e
