@@ -99,11 +99,16 @@ echo "[+] Sourcing nexmon environment..."
 # shellcheck disable=SC1091
 source ./setup_env.sh
 
-echo "[+] Building nexmon buildtools (isl + mpfr + flashpatch + ucode)..."
-# The top-level Makefile runs each buildtool's ./configure + make in turn,
-# then extracts ucode/flashpatches from stock firmware. Required before
-# building any chip patch.
-make
+echo "[+] Building nexmon buildtools..."
+# Skip the firmwares/ loop the top-level all-target runs — it builds
+# every chip's extraction tools and breaks on chips we don't care
+# about (e.g. bcm43439a0 needs ucode.bin its Makefile can't extract
+# on this distro). buildtools alone is enough; we extract our chip
+# below.
+make buildtools
+
+echo "[+] Extracting stock firmware for $CHIP / $FW_VER..."
+make -C "firmwares/${CHIP}/${FW_VER}"
 
 echo "[+] Building patched firmware for $CHIP..."
 cd "$PATCH_DIR"
