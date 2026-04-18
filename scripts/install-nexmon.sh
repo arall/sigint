@@ -102,17 +102,12 @@ source ./setup_env.sh
 # setup_env.sh exports CC pointed at a bundled 32-bit ARM toolchain
 # (gcc-arm-none-eabi-5_4-2016q2-linux-armv7l) that won't execute on
 # aarch64 Pi OS — `Error 127: required file not found`. Replace with
-# the system gcc-arm-none-eabi installed via apt.
+# the system gcc-arm-none-eabi installed via apt. The patches'
+# Makefiles use `$(CC)gcc` / `$(CC)ld` (CC is a *prefix*, not a
+# binary path), so set CC to "arm-none-eabi-" — relying on PATH.
 if [[ "$(uname -m)" == "aarch64" ]] || [[ "$(uname -m)" == "arm64" ]]; then
-  echo "[+] aarch64 host — overriding bundled CC with system arm-none-eabi-gcc"
-  export CC="$(command -v arm-none-eabi-gcc)"
-  export LD="$(command -v arm-none-eabi-ld)"
-  export AR="$(command -v arm-none-eabi-ar)"
-  export AS="$(command -v arm-none-eabi-as)"
-  export NM="$(command -v arm-none-eabi-nm)"
-  export OBJCOPY="$(command -v arm-none-eabi-objcopy)"
-  export RANLIB="$(command -v arm-none-eabi-ranlib)"
-  export STRIP="$(command -v arm-none-eabi-strip)"
+  echo "[+] aarch64 host — overriding bundled CC prefix with system arm-none-eabi-"
+  export CC="arm-none-eabi-"
 fi
 
 echo "[+] Building nexmon buildtools..."
