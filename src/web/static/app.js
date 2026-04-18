@@ -2148,7 +2148,78 @@ function _renderAgentConfig(id, info) {
     parts.push(`<div style="color:#888">no scanner snapshot yet — waiting for SCANINFO</div>`);
   }
 
+  // Scanner control panel — pick a known scanner type, edit args
+  // pre-filled with sensible defaults, fire STOP+START via existing CMD.
+  const currentType = (scan && scan.scanner_type) || '';
+  const presetOptions = Object.keys(_SCANNER_PRESETS).map(t => {
+    const sel = (t === currentType) ? ' selected' : '';
+    return `<option value="${esc(t)}"${sel}>${esc(t)}</option>`;
+  }).join('');
+  parts.push(`<div style="margin-top:12px; padding-top:8px; border-top:1px dashed #1d2533">
+    <div style="color:#aaa; font-weight:600; margin-bottom:4px">Scanner control</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px">
+      <span style="color:#888">scanner:</span>
+      <select id="scanctl-type-${esc(id)}" onchange="_onScanCtlTypeChange('${esc(id)}')">
+        ${presetOptions}
+      </select>
+      <span style="color:#888">args:</span>
+      <input type="text" id="scanctl-args-${esc(id)}" value="${esc((_SCANNER_PRESETS[currentType] || []).join(' '))}" style="flex:1; min-width:200px; background:#1a1a2e; color:#e0e0e0; border:1px solid #0f3460; padding:4px 8px; font-family:inherit; font-size:11px; border-radius:4px;">
+      <button onclick="applyScannerCtl('${esc(id)}')">Apply</button>
+      <button onclick="sendAgentCmd('${esc(id)}','STOP',[])">Stop</button>
+    </div>
+    <div style="color:#666; font-size:10px">Apply sends STOP + START. Persisted in the agent's state.json so it auto-resumes after reboot.</div>
+  </div>`);
+
   return `<div style="padding: 8px 16px; font-size:11px; font-family:monospace; line-height:1.6">${parts.join('')}</div>`;
+}
+
+// Default args per scanner type — used to pre-fill the args input
+// so the operator gets sane settings without having to remember
+// flags. Empty list means the scanner takes no args.
+const _SCANNER_PRESETS = {
+  'pmr':    ['--transcribe'],
+  'fm':     ['marine'],
+  'keyfob': [],
+  'tpms':   [],
+  'gsm':    [],
+  'lte':    [],
+  'adsb':   [],
+  'ais':    [],
+  'pocsag': [],
+  'ism':    ['--hop'],
+  'lora':   ['--region', 'eu'],
+  'wifi':   ['--band', 'all'],
+  'bt':     ['--adapter', 'hci0'],
+  'mesh':   [],
+  'scan':   ['--classify'],
+};
+
+function _onScanCtlTypeChange(id) {
+  const sel = document.getElementById('scanctl-type-' + id);
+  const args = document.getElementById('scanctl-args-' + id);
+  if (sel && args) args.value = (_SCANNER_PRESETS[sel.value] || []).join(' ');
+}
+
+async function applyScannerCtl(id) {
+  const sel = document.getElementById('scanctl-type-' + id);
+  const argsEl = document.getElementById('scanctl-args-' + id);
+  if (!sel || !argsEl) return;
+  const scanner = sel.value;
+  const args = argsEl.value.trim().split(/\s+/).filter(Boolean);
+  // STOP first so the agent doesn't reject START with "already running".
+  await fetch('/api/agents/cmd', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({agent_id: id, verb: 'STOP', args: []}),
+  });
+  // Two STARTs back-to-back to compensate for LoRa packet loss.
+  for (let i = 0; i < 2; i++) {
+    await fetch('/api/agents/cmd', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({agent_id: id, verb: 'START', args: [scanner, ...args]}),
+    });
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  fetchAgents();
 }
 
 function renderApprovedAgents(approved, info) {
