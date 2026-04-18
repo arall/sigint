@@ -56,7 +56,7 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
   git build-essential gawk qpdf bison flex libfl-dev make autoconf libtool \
   texinfo curl bc libgmp3-dev libssl-dev gcc-arm-none-eabi \
-  iw wireless-tools
+  xxd iw wireless-tools
 
 # Kernel headers — package name varies across Pi OS revisions.
 # Try a few in order; bail only if the headers dir is genuinely missing.
