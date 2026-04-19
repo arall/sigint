@@ -117,6 +117,17 @@ def get_meta(conn: sqlite3.Connection, key: str, default: Optional[str] = None) 
     return row[0] if row else default
 
 
+def delete_meta(conn: sqlite3.Connection, *keys: str) -> int:
+    """Remove cal_meta rows. Returns how many were actually deleted."""
+    if not keys:
+        return 0
+    placeholders = ",".join("?" * len(keys))
+    cur = conn.execute(
+        f"DELETE FROM cal_meta WHERE key IN ({placeholders})", keys,
+    )
+    return cur.rowcount or 0
+
+
 INSERT_SAMPLE_SQL = """
 INSERT INTO cal_samples (
     ts_epoch, device_id, band, frequency_hz, source, ref_id,

@@ -186,6 +186,27 @@ def test_db_meta_roundtrip():
     assert _cdb.get_meta(conn, "missing", "fallback") == "fallback"
 
 
+def test_db_delete_meta():
+    """delete_meta removes the named keys and returns the count."""
+    from utils import calibration_db as _cdb
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "cal.db")
+    conn = _cdb.connect(path)
+    _cdb.set_meta(conn, "node_lat:n01", "42.5098")
+    _cdb.set_meta(conn, "node_lon:n01", "1.5361")
+    _cdb.set_meta(conn, "node_alt:n02", "100")
+    # Remove just the n01 pair; leave n02 and any unrelated keys alone.
+    removed = _cdb.delete_meta(conn, "node_lat:n01", "node_lon:n01")
+    assert removed == 2
+    assert _cdb.get_meta(conn, "node_lat:n01") is None
+    assert _cdb.get_meta(conn, "node_lon:n01") is None
+    assert _cdb.get_meta(conn, "node_alt:n02") == "100"
+    # Idempotent — re-deleting already-absent keys returns 0.
+    assert _cdb.delete_meta(conn, "node_lat:n01") == 0
+    # Empty call is a no-op.
+    assert _cdb.delete_meta(conn) == 0
+
+
 # --- Reference emitter registry + extractor --------------------------------
 def test_load_reference_emitters_missing_file():
     from utils import calibration_sources as _src

@@ -177,6 +177,92 @@ def test_override_read_in_map_sources_payload():
     assert resolve("unknown") is None
 
 
+def test_http_set_then_delete_cycle():
+    """End-to-end through the real WebHandler: POST pins a source, the
+    next /api/map/sources returns position_source=manual + the new
+    coords, DELETE clears it, and GET reverts to config-derived."""
+    import json as _json
+    import threading
+    import urllib.request as _u
+    from http.server import ThreadingHTTPServer
+    from web.server import WebHandler
+
+    tmp = tempfile.mkdtemp()
+    # Seed server_info.json so server_pos has a fallback to revert to.
+    with open(os.path.join(tmp, "server_info.json"), "w") as f:
+        _json.dump({"server_position": {"lat": 42.0, "lon": 1.0}}, f)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), WebHandler)
+    srv.output_dir = tmp
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        # Pin the server.
+        req = _u.Request(
+            f"http://127.0.0.1:{port}/api/map/sources/position",
+            data=_json.dumps({"id": "server", "lat": 50.5, "lon": -3.2}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        r = _json.loads(_u.urlopen(req).read())
+        assert r["ok"]
+
+        # Confirm override is live.
+        data = _json.loads(_u.urlopen(
+            f"http://127.0.0.1:{port}/api/map/sources").read())
+        srv_src = [s for s in data["sources"] if s["id"] == "server"][0]
+        assert srv_src["position"]["lat"] == 50.5
+        assert srv_src["position_source"] == "manual"
+
+        # Clear it.
+        req = _u.Request(
+            f"http://127.0.0.1:{port}/api/map/sources/position?id=server",
+            method="DELETE",
+        )
+        r = _json.loads(_u.urlopen(req).read())
+        assert r["ok"] and r["removed"] is True
+
+        # Now reverts to config-derived position.
+        data = _json.loads(_u.urlopen(
+            f"http://127.0.0.1:{port}/api/map/sources").read())
+        srv_src = [s for s in data["sources"] if s["id"] == "server"][0]
+        assert srv_src["position"]["lat"] == 42.0
+        assert srv_src["position_source"] == "config"
+
+        # cal_meta entries should also be gone.
+        from utils import calibration_db as _cdb
+        cal_path = _cdb.default_path(tmp)
+        if os.path.exists(cal_path):
+            conn = _cdb.connect(cal_path, readonly=True)
+            try:
+                assert _cdb.get_meta(conn, "node_lat:server") is None
+                assert _cdb.get_meta(conn, "node_lon:server") is None
+            finally:
+                conn.close()
+
+        # Deleting a non-existent override is a no-op (removed=False).
+        req = _u.Request(
+            f"http://127.0.0.1:{port}/api/map/sources/position?id=nonexistent",
+            method="DELETE",
+        )
+        r = _json.loads(_u.urlopen(req).read())
+        assert r["ok"] and r["removed"] is False
+
+        # Missing id should 400.
+        req = _u.Request(
+            f"http://127.0.0.1:{port}/api/map/sources/position",
+            method="DELETE",
+        )
+        try:
+            _u.urlopen(req)
+            raise AssertionError("expected 400")
+        except _u.HTTPError as e:
+            assert e.code == 400
+    finally:
+        srv.shutdown()
+
+
 def test_atomic_rename_leaves_no_tmp_files():
     """After a normal write, no leftover .overrides_*.tmp files remain."""
     from web import position_overrides as po

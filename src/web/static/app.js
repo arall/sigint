@@ -1562,6 +1562,7 @@ function initMap() {
   if (ageSel) ageSel.addEventListener('change', () => loadMap());
   // Force Leaflet to recompute its size once the container is visible
   setTimeout(() => { if (_map) _map.invalidateSize(); }, 100);
+  _attachMapDelegates();
 }
 
 function _mapMarker(lat, lon, color, popup) {
@@ -1788,6 +1789,49 @@ async function _postSourcePosition(id, lat, lon) {
   return resp.json();
 }
 
+async function _unpinSource(id) {
+  const s = _mapSources[id];
+  if (!s) return;
+  const prev = s.position;
+  const prevSource = s.position_source;
+  // Optimistic — drop the "manual" flag so the next redraw loses the
+  // pinned outline. The actual revert to config / DET-derived position
+  // happens on the next loadMap() once the server has dropped the
+  // override.
+  s.position_source = null;
+  _drawSources();
+  try {
+    const resp = await fetch(
+      '/api/map/sources/position?id=' + encodeURIComponent(id),
+      {method: 'DELETE'},
+    );
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    loadMap();  // pull the reverted position immediately
+  } catch (err) {
+    s.position = prev;
+    s.position_source = prevSource;
+    _drawSources();
+    alert('Failed to unpin ' + id + ': ' + err);
+  }
+}
+
+// Document-level click delegation for map popup actions. Attached once
+// at initMap; works across Leaflet popup re-renders without needing to
+// re-wire every marker each redraw.
+let _mapDelegatesAttached = false;
+function _attachMapDelegates() {
+  if (_mapDelegatesAttached) return;
+  _mapDelegatesAttached = true;
+  document.addEventListener('click', (e) => {
+    const el = e.target;
+    if (el && el.classList && el.classList.contains('js-unpin')) {
+      e.preventDefault();
+      const sid = el.dataset.sourceId;
+      if (sid) _unpinSource(sid);
+    }
+  });
+}
+
 function _drawSources() {
   const bounds = [];
   Object.keys(_mapSources).forEach(id => {
@@ -1806,6 +1850,8 @@ function _drawSources() {
         + (s.detections || []).length + ' recent detections'
         + (isManual
             ? '<br><span style="color:#888;font-size:11px">manually positioned · drag to adjust</span>'
+              + '<br><a href="#" class="js-unpin" data-source-id="' + esc(id) + '"'
+              + ' style="font-size:11px;color:#e91e63">Unpin (revert to auto position)</a>'
             : '<br><span style="color:#888;font-size:11px">drag to pin position</span>'))
       .bindTooltip(s.label, {permanent: true, direction: 'top', offset: [0, -10]})
       .addTo(s.markerLayer);

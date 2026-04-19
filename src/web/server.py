@@ -153,6 +153,15 @@ class WebHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        qs = parse_qs(parsed.query)
+        if path == '/api/map/sources/position':
+            self._map_sources_clear_position(qs)
+        else:
+            self.send_error(404)
+
     # --- helpers ---
 
     def _send_json(self, data):
@@ -670,6 +679,38 @@ class WebHandler(BaseHTTPRequestHandler):
             pass
 
         self._send_json({"ok": True, "id": sid, "position": entry})
+
+    def _map_sources_clear_position(self, qs):
+        """Remove a drag-to-reposition override (source reverts to
+        config-derived or DET-derived position on the next refresh).
+
+        Clears the matching cal_meta entries too so the calibration
+        expected-RSSI math stops using the override.
+        """
+        sid = (qs.get("id") or [""])[0]
+        if not sid:
+            self.send_error(400, "id required")
+            return
+        from . import position_overrides
+        removed = position_overrides.delete(self.server.output_dir, sid)
+        try:
+            from utils import calibration_db as _cdb
+            cal_path = _cdb.default_path(self.server.output_dir)
+            if os.path.exists(cal_path):
+                conn = _cdb.connect(cal_path)
+                try:
+                    _cdb.delete_meta(conn,
+                                     f"node_lat:{sid}",
+                                     f"node_lon:{sid}",
+                                     f"node_alt:{sid}")
+                finally:
+                    conn.close()
+            from . import fetch as _fetch
+            _fetch._CAL_CACHE["path"] = None
+            _fetch._CAL_CACHE["mtime"] = None
+        except Exception:
+            pass
+        self._send_json({"ok": True, "id": sid, "removed": removed})
 
     def _agents_approve(self, data):
         """Approve a pending agent."""
