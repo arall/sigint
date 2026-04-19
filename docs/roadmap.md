@@ -49,6 +49,7 @@ Distributed C2:
 - JSON config for agent (`configs/agent.json`), matching the server pattern
 - Auto-re-approve on HELLO from an already-approved agent — a HELLO from someone in `agents.json` means the agent lost its `state.json` (fresh service install), so the server re-emits APPROVE automatically instead of waiting for an operator to hand-edit `adopted: true`.
 - Reliable server→agent CMD / CFG: `ServerOutbox` (`src/server/outbox.py`) allocates a seq per message, retries with exponential backoff (6 s → 120 s, 5 attempts max), stops on `ACK|<agent_id>|<seq>|ok` from the agent. Wire format now carries seq at position 2 for both CMD and CFG (`CMD|N01|<seq>|START|pmr`). Agent auto-ACKs on receipt *before* processing so a slow scanner start can't race a retry into a double-execution.
+- DBTailer picks the live scanner DB by parsed filename timestamp (`<type>_YYYYMMDD_HHMMSS.db`) instead of mtime, so a WAL-sidecar touch on a stale file can't redirect the tailer to a dead session and silently stop DET forwarding.
 
 Docs:
 
@@ -58,7 +59,6 @@ Docs:
 
 Small known rough edges — fixes are scoped, just not done yet:
 
-- **DBTailer picks newest by mtime** — fine for a live scanner but SHM touches can bump older DBs' mtimes above the active one, causing detections to stop forwarding after a restart with multiple sessions (`_newest_db` in `src/agent/scanner_mgr.py:127` uses `max(candidates, key=os.path.getmtime)`). Switch to picking by filename timestamp (deterministic from the scanner's `<type>_YYYYMMDD_HHMMSS.db`).
 - **Category pager is client-side** — loads all rows up to the server's LIMIT, then slices locally so filters keep working across the whole set. For very long sessions the full row list is shipped on every refresh. Server-side offset+limit would scale better at the cost of refactoring the filter code.
 - **Agent BT/WiFi outbox saturation** — running the `bt` or `wifi` scanner in a populated area generates detections faster than the mesh can drain (LoRa airtime caps at ~1%, ~6 s per send). Outbox priority now keeps control messages alive, but the DET backlog itself still grows unboundedly. Mitigation today: don't run BT/WiFi continuously over mesh — run it locally on the server, or set a tight `--max-det-rate`. Real fix: agent-side per-persona rate-limit + sub-batch coalescing before enqueue, so we send "30 unique BLE personas in last minute" instead of every advertisement.
 
@@ -66,9 +66,8 @@ Small known rough edges — fixes are scoped, just not done yet:
 
 Concrete next things, roughly in order. The current Planned list is the remaining "In flight" items promoted — the v1 distributed C2 feature set from docs/roadmap.md:19 is now all shipped.
 
-1. **Filename-timestamp DBTailer selection** — swap `max(..., key=os.path.getmtime)` in `src/agent/scanner_mgr.py:127` for parsing the `<type>_YYYYMMDD_HHMMSS.db` filename. Deterministic, doesn't break on SHM touches bumping older files' mtimes above the live one.
-2. **Server-side category pager** — refactor the big-detection category loaders (`web/fetch.py` + the Signals sub-tabs) to do offset+limit at the SQL layer so long sessions don't ship every row every refresh.
-3. **Agent per-persona rate-limit + batch coalescing** — root fix for BT/WiFi outbox saturation: aggregate "30 unique BLE personas in last minute" into a single DET-BATCH frame before enqueueing, instead of one DET per advertisement.
+1. **Server-side category pager** — refactor the big-detection category loaders (`web/fetch.py` + the Signals sub-tabs) to do offset+limit at the SQL layer so long sessions don't ship every row every refresh.
+2. **Agent per-persona rate-limit + batch coalescing** — root fix for BT/WiFi outbox saturation: aggregate "30 unique BLE personas in last minute" into a single DET-BATCH frame before enqueueing, instead of one DET per advertisement.
 
 ## 💡 Ideas / future
 

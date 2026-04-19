@@ -5,12 +5,19 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
 from typing import Callable, List, Optional
+
+
+# Scanner DBs are written by `SignalLogger._build_db_path`:
+#   "<signal_type>_YYYYMMDD_HHMMSS.db"
+# The date+time chunk is ISO-like, so string sort == chronological sort.
+_FILENAME_TS_RE = re.compile(r"_(\d{8}_\d{6})\.db$")
 
 
 class ScannerManager:
@@ -121,9 +128,32 @@ class DBTailer:
             self._thread.join(timeout=2.0)
 
     def _newest_db(self) -> Optional[str]:
+        """Pick the currently-active session DB by filename timestamp.
+
+        Previously used `max(..., key=os.path.getmtime)`, but WAL
+        sidecar touches can nudge older files' mtimes — e.g. a web
+        dashboard read-only open, or a background WAL checkpoint —
+        and redirect the tailer to a long-dead file. Detections from
+        the actually-running scanner would then stop reaching the
+        server while STAT heartbeats kept flowing (classic "agent
+        looks alive but DETs dry up").
+
+        The scanner stamps the filename itself at session start, so
+        parsing that timestamp is tamper-free. Files that don't match
+        the pattern fall back to the old mtime ordering so test
+        fixtures and hand-crafted .dbs still work.
+        """
         candidates = glob.glob(os.path.join(self._dir, "*.db"))
         if not candidates:
             return None
+        stamped = []
+        for p in candidates:
+            m = _FILENAME_TS_RE.search(os.path.basename(p))
+            if m:
+                stamped.append((m.group(1), p))
+        if stamped:
+            stamped.sort()
+            return stamped[-1][1]
         return max(candidates, key=os.path.getmtime)
 
     def _loop(self) -> None:

@@ -64,6 +64,7 @@ SW_TESTS = [
     ("Replay .db over C2",             "tests/sw/test_replay_c2.py"),
     ("Server CMD/CFG outbox",          "tests/sw/test_server_outbox.py"),
     ("AIS parallel RSSI capture",      "tests/sw/test_ais_rssi.py"),
+    ("Agent ScannerManager + DBTailer", "tests/sw/test_agent_scanner_mgr.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")
