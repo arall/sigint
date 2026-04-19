@@ -50,6 +50,7 @@ Small known rough edges — fixes are scoped, just not done yet:
 - **DBTailer picks newest by mtime** — fine for a live scanner but SHM touches can bump older DBs' mtimes above the active one, causing detections to stop forwarding after a restart with multiple sessions. Switch to picking by filename timestamp (deterministic from the scanner's `<type>_YYYYMMDD_HHMMSS.db`).
 - **Agent STAT carries no GPS** — the scanner subprocess owns the GPS port, agent process can't open it concurrently. Nodes appear on the map only once they forward a geo-tagged DET. A `gps.json` sidecar written by the scanner and polled by the agent would solve it.
 - **Category pager is client-side** — loads all rows up to the server's LIMIT, then slices locally so filters keep working across the whole set. For very long sessions the full row list is shipped on every refresh. Server-side offset+limit would scale better at the cost of refactoring the filter code.
+- **Agent BT/WiFi outbox saturation** — running the `bt` or `wifi` scanner in a populated area generates detections faster than the mesh can drain (LoRa airtime caps at ~1%, ~6 s per send). The outbox grows unboundedly. Mitigation today: don't run BT/WiFi continuously over mesh — run it locally on the server. Real fix: agent-side per-persona rate-limit + sub-batch coalescing before enqueue, so we send "30 unique BLE personas in last minute" instead of every advertisement.
 
 ## 📋 Planned
 

@@ -75,6 +75,22 @@ sudo systemctl restart sigint-agent
 
 Or revoke server-side (edit `output/agents_state/agents.json`, remove the entry under `"approved"`, restart the server, re-approve from the UI).
 
+## Agent outbox grows unboundedly with BT/WiFi running
+
+### Symptom
+- Agent's `outbox.db` keeps growing even though detections look small.
+- Server sees only a fraction of what the agent's local scanner DB contains.
+- Dashboard's "Recent detections from agents" page lags by tens of minutes.
+
+### Why
+LoRa is a low-bandwidth pipe — at EU 868 MHz with the default settings, ~6 s per text send and ~1% duty-cycle cap. The `bt` and `wifi` scanners produce **dozens of detections per second** in any populated area (BLE advertisements, WiFi probe requests). One DET per detection = the agent enqueues faster than the drainer drains. The queue grows monotonically until the outbox fills.
+
+### What to do
+- **Don't run BT/WiFi continuously on a mesh agent.** They're best run locally on the server (which has full bandwidth to its own SQLite). The agent should be reserved for narrow / bursty scanners (PMR voice, keyfob, TPMS, ISM, LoRa, ADS-B) that produce one DET every several seconds at most.
+- **If you must run it remotely**, expect minutes-to-hours of lag and use the server's web UI to wipe the outbox between sessions (`sudo systemctl stop sigint-agent && sqlite3 /var/lib/sigint/outbox.db 'DELETE FROM outbox WHERE acked=0' && sudo systemctl start sigint-agent`).
+
+A real fix is on the [roadmap](roadmap.md#-in-flight) — agent-side per-persona rate-limit + sub-batch coalescing before enqueue.
+
 ## CMD lost in flight
 
 Meshtastic text packets are best-effort. A single `CMD START` can be dropped. The web UI doesn't auto-retry. If a click doesn't elicit a `RES|...|ok` within ~10 s, click again. Programmatic callers typically send 2–3 times back-to-back.
