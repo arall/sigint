@@ -265,6 +265,14 @@ Examples:
         action="store_true",
         help="Use native Python decoder instead of rtl_ais",
     )
+    ais_parser.add_argument(
+        "--rssi-device-index",
+        type=int,
+        default=None,
+        help="Secondary RTL-SDR index for parallel RSSI sampling "
+             "(enables AIS calibration). rtl_ais holds the primary SDR, "
+             "so this must be a different dongle.",
+    )
 
     # POCSAG/Pager scanner
     pocsag_parser = subparsers.add_parser(
@@ -1331,6 +1339,7 @@ def _dispatch_scanner(args):
             device_index=args.device_index,
             gain=args.gain,
             use_rtl_ais=not args.native,
+            rssi_device_index=args.rssi_device_index,
         )
         if gps:
             scanner.logger.gps = gps

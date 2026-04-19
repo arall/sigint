@@ -114,13 +114,25 @@ class AISScanner:
         device_index=0,
         gain=DEFAULT_GAIN,
         use_rtl_ais=True,
+        rssi_device_index=None,
     ):
+        """
+        rssi_device_index: optional index of a SECOND RTL-SDR used
+            exclusively for RSSI sampling of AIS1/AIS2 channels in
+            parallel with rtl_ais. rtl_ais holds the primary SDR; we
+            can't split it, so actual AIS-RSSI calibration requires
+            two dongles. Leave unset if only one dongle is present —
+            everything still works, just with power_db=0 on the
+            detections (AIS calibration extractor gracefully skips
+            those, matching pre-commit behaviour).
+        """
         if output_dir is None:
             output_dir = os.path.join(PROJECT_ROOT, "output")
 
         self.device_index = device_index
         self.gain = gain
         self.use_rtl_ais = use_rtl_ais
+        self.rssi_device_index = rssi_device_index
 
         os.makedirs(output_dir, exist_ok=True)
         self.logger = SignalLogger(
@@ -130,7 +142,17 @@ class AISScanner:
             min_snr_db=0,
         )
 
-        self.parser = AISParser(logger=self.logger)
+        # Optional parallel RSSI monitor — owned by the scanner so its
+        # lifetime lines up with rtl_ais.
+        self._rssi_monitor = None
+        if rssi_device_index is not None:
+            from parsers.marine.ais_rssi import AISChannelRSSI
+            self._rssi_monitor = AISChannelRSSI(
+                device_index=rssi_device_index, gain=gain,
+            )
+
+        self.parser = AISParser(logger=self.logger,
+                                rssi_monitor=self._rssi_monitor)
         self.tools = check_tools_installed()
         self._rtl_ais_process = None
         self._rtl_ais_client = None
@@ -175,10 +197,13 @@ class AISScanner:
     def _scan_rtl_ais(self):
         """Scan using rtl_ais subprocess + AISParser."""
         print("Starting rtl_ais...")
-
+        # Primary SDR passed explicitly so rtl_ais doesn't grab the
+        # wrong dongle when a secondary RSSI monitor owns device index
+        # `rssi_device_index`.
+        rtl_ais_cmd = ['rtl_ais', '-g', str(self.gain), '-n', '-P', '10110',
+                       '-d', str(self.device_index)]
         self._rtl_ais_process = subprocess.Popen(
-            ['rtl_ais', '-g', str(self.gain), '-n', '-P', '10110'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            rtl_ais_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         time.sleep(2)
 
@@ -190,6 +215,14 @@ class AISScanner:
 
         self._rtl_ais_client.start()
         print("rtl_ais started. Receiving vessel data...\n")
+
+        # Start the parallel RSSI monitor alongside rtl_ais if the user
+        # provided a second SDR index. rtl_ais holds the primary — this
+        # needs a different dongle to work.
+        if self._rssi_monitor is not None:
+            print(f"Starting AIS RSSI monitor on device index "
+                  f"{self.rssi_device_index}...")
+            self._rssi_monitor.start()
 
         while True:
             self._display_vessels()
@@ -281,6 +314,8 @@ class AISScanner:
 
     def _stop(self):
         """Clean shutdown."""
+        if self._rssi_monitor is not None:
+            self._rssi_monitor.stop()
         if self._rtl_ais_client:
             self._rtl_ais_client.stop()
         if self._rtl_ais_process:

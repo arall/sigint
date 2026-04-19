@@ -14,7 +14,7 @@ Core:
 Analysis:
 
 - RSSI multilateration (`sdr.py tri`, 2+ nodes, log-distance path loss)
-- Opportunistic RSSI calibration (`sdr.py calibrate`): per-node, per-band offsets solved from emitters whose position and TX power are known — surveyed WiFi APs, FM stations, cell towers via `configs/calibration_emitters.json`; Huber regression on residuals stored in `output/calibration.db`; applied transparently in `sdr.py tri`. ADS-B RSSI captured from dump1090/readsb `aircraft.json` so the ADS-B extractor activates with free sky-view samples. AIS extractor still scaffolded (needs rtl_ais enhancement).
+- Opportunistic RSSI calibration (`sdr.py calibrate`): per-node, per-band offsets solved from emitters whose position and TX power are known — surveyed WiFi APs, FM stations, cell towers via `configs/calibration_emitters.json`; Huber regression on residuals stored in `output/calibration.db`; applied transparently in `sdr.py tri`. ADS-B RSSI captured from dump1090/readsb `aircraft.json` so the ADS-B extractor activates with free sky-view samples. AIS RSSI captured via a parallel sampler on a second RTL-SDR (`sdr.py ais --rssi-device-index 1`) — rtl_ais holds the primary SDR and has no NMEA RSSI field, so the second dongle runs a background PSD on AIS1/AIS2 and the parser attaches max(AIS1, AIS2) power to each decoded vessel detection. Scanner degrades gracefully to power_db=0 when no secondary SDR is configured.
 - Map-tab uncertainty rings use calibrated RSSI when available: `web/fetch.py` applies per-node offsets server-side and ships `power_db_cal` in `/api/map/sources`; `app.js` picks the RSSI-based log-distance model when a calibrated reading exists and falls back to SNR otherwise. Popup shows "calibrated" when applied.
 - Real-time multi-node triangulation (`/api/map/triangulations`): `web/triangulate_live.py` pulls the last 5 min of detections from every session `.db`, splits by capturing node (server vs each agent in agents_*.db), applies calibration, and reuses `utils/triangulate.py`'s correlator + multilaterator per signal_type. Map tab renders each fix as a crosshair with a dashed error-radius ring; popup shows contributing nodes, per-observation power, and calibration coverage. Sibling "Triangulations" panel lists recent fixes newest-first with click-to-zoom.
 - Cross-node witness correlation (`/api/correlations/witnesses`, Correlations tab): emitters seen by 2+ nodes in the window, same match strategy as `utils.triangulate` (channel / frequency / metadata_id per signal type). Complements the Triangulations panel — no position requirement, ADS-B / AIS included — so coverage gaps ("N02 never hears anything that server + N01 both pick up") are visible at a glance.
@@ -64,9 +64,11 @@ Small known rough edges — fixes are scoped, just not done yet:
 
 ## 📋 Planned
 
-Concrete next things, roughly in order:
+Concrete next things, roughly in order. The current Planned list is the remaining "In flight" items promoted — the v1 distributed C2 feature set from docs/roadmap.md:19 is now all shipped.
 
-1. **AIS RSSI capture** — `scanners/ais.py` logs `power_db=0`. rtl_ais has no signal-level output in NMEA; options are a Python receiver that extracts RSSI from the SDR pipeline, or patching rtl_ais. Once wired, the AIS calibration extractor lights up for coastal deployments (the ADS-B equivalent already ships).
+1. **Filename-timestamp DBTailer selection** — swap `max(..., key=os.path.getmtime)` in `src/agent/scanner_mgr.py:127` for parsing the `<type>_YYYYMMDD_HHMMSS.db` filename. Deterministic, doesn't break on SHM touches bumping older files' mtimes above the live one.
+2. **Server-side category pager** — refactor the big-detection category loaders (`web/fetch.py` + the Signals sub-tabs) to do offset+limit at the SQL layer so long sessions don't ship every row every refresh.
+3. **Agent per-persona rate-limit + batch coalescing** — root fix for BT/WiFi outbox saturation: aggregate "30 unique BLE personas in last minute" into a single DET-BATCH frame before enqueueing, instead of one DET per advertisement.
 
 ## 💡 Ideas / future
 

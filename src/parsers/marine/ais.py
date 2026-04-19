@@ -25,12 +25,21 @@ class AISParser(BaseParser):
     identity, and voyage data. Logs updates as SignalDetections.
     """
 
-    def __init__(self, logger, holdover_seconds=5.0):
+    def __init__(self, logger, holdover_seconds=5.0, rssi_monitor=None):
+        """
+        rssi_monitor: optional AISChannelRSSI (requires a secondary
+            RTL-SDR). When provided, each decoded vessel detection is
+            logged with `power_db` pulled from the monitor's most
+            recent in-window sample. When omitted, power_db stays 0
+            and calibration stays dormant for AIS — matching
+            pre-monitor behaviour exactly.
+        """
         super().__init__(logger)
         self.holdover_seconds = holdover_seconds
         self.vessel_db: Dict[str, Vessel] = {}
         self._last_logged: Dict[str, int] = {}  # mmsi -> last logged message_count
         self._total_detections = 0
+        self.rssi_monitor = rssi_monitor
 
     @property
     def total_detections(self):
@@ -70,11 +79,28 @@ class AISParser(BaseParser):
                 "draught": vessel.draught if vessel.draught and vessel.draught > 0 else None,
             }
 
+            # Attach RSSI from the parallel sampler if one's running.
+            # rtl_ais doesn't tell us which channel decoded this MMSI,
+            # so the monitor returns max(AIS1, AIS2) — a close enough
+            # proxy for calibration purposes.
+            power_db = 0.0
+            noise_db = 0.0
+            if self.rssi_monitor is not None:
+                p = self.rssi_monitor.recent_power()
+                if p is not None:
+                    power_db = float(p)
+                    # Nominal noise floor for the band; calibration
+                    # consumes power_db directly, SNR just needs to be
+                    # positive enough to pass the logger's min_snr_db
+                    # filter (which is 0 for this scanner anyway).
+                    noise_db = -60.0
+                    meta["rssi_dbfs"] = power_db
+
             detection = SignalDetection.create(
                 signal_type="AIS",
                 frequency_hz=AIS_CENTER_FREQ,
-                power_db=0,
-                noise_floor_db=0,
+                power_db=power_db,
+                noise_floor_db=noise_db,
                 channel=vessel.mmsi,
                 latitude=vessel.latitude,
                 longitude=vessel.longitude,
