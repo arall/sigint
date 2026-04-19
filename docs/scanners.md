@@ -52,8 +52,8 @@ sdr.py pmr --digital                      # analog + dPMR/DMR energy detection
 
 | Command | Frequency | Description |
 |---|---|---|
-| `adsb` | 1090 MHz | Aircraft tracking (Mode S: ICAO, callsign, altitude, speed). Requires `readsb` built with `RTLSDR=yes`. |
-| `ais` | 161.975 / 162.025 MHz | Vessel tracking (MMSI, position, speed, course). Uses `rtl_ais`; native Python decoder is educational only. |
+| `adsb` | 1090 MHz | Aircraft tracking (Mode S: ICAO, callsign, altitude, speed). Requires `readsb` built with `RTLSDR=yes`. Per-message RSSI is captured from the `aircraft.json` feed (dump1090-fa / readsb `--write-json`), so the ADS-B calibration source lights up automatically with sky view. |
+| `ais` | 161.975 / 162.025 MHz | Vessel tracking (MMSI, position, speed, course). Uses `rtl_ais`; native Python decoder is educational only. `--rssi-device-index <N>` optionally starts a parallel RSSI sampler on a second RTL-SDR so AIS detections carry real `power_db` (rtl_ais holds the primary SDR and has no NMEA RSSI field). Without the flag, `power_db=0` and AIS calibration stays dormant. |
 
 ## Paging / mesh
 
@@ -87,14 +87,16 @@ sdr.py pmr --digital                      # analog + dPMR/DMR energy detection
 | `server <config.json>` | Multi-capture orchestrator — runs many captures + parsers in parallel from a JSON config. See [configuration.md](configuration.md). Add `--web` for the dashboard. |
 | `web` | Standalone dashboard (reads detection DBs from output dir). `-p 3000` for custom port. |
 | `agent` | Meshtastic C2 agent runtime. See [c2.md](c2.md). |
+| `replay-c2 <db> --agent-id N99` | Replay a recorded detection `.db` over the Meshtastic link as if from a live agent. `--rate <Hz>`, `--require-position`, `--require-power`, `--dry-run`. See [c2.md](c2.md). |
 
 ## Analysis / post-hoc
 
 | Command | Description |
 |---|---|
-| `tri a.db b.db c.db` | RSSI multilateration from multi-node session DBs. See [triangulation.md](triangulation.md). |
+| `tri a.db b.db c.db` | RSSI multilateration from multi-node session DBs. See [triangulation.md](triangulation.md). Applies per-node calibration offsets automatically when `output/calibration.db` is present. |
 | `heatmap output/*.db` | RF activity density heatmap (KML + PNG for ATAK). Filter with `-s <signal_type>`. |
 | `corr output/*.db` | Cross-signal-type device co-occurrence analysis. Export with `--json`. |
+| `calibrate {ingest,show,recompute,set-position,watch}` | Solve per-node RSSI offsets from emitters whose position and TX power are known (surveyed APs / FM / cell + passive ADS-B / AIS). See [triangulation.md](triangulation.md#calibration). |
 
 ## Known quirks and limitations
 
@@ -107,7 +109,7 @@ sdr.py pmr --digital                      # analog + dPMR/DMR energy detection
 - **TETRA / P25** are activity-only detectors (no decode).
 - **POCSAG** pipeline works, but most pager networks are decommissioned.
 - **RF loopback** audio on consumer SDRs hits ~0.25 cross-correlation ceiling because of phase noise.
-- **Path-loss triangulation** is uncalibrated by default; expect room-level accuracy at best. See [triangulation.md](triangulation.md) for calibration notes.
+- **Path-loss triangulation** has opportunistic calibration built in (`sdr.py calibrate`); the Map tab's live fixes and uncertainty rings use it automatically. Sub-10 m accuracy still needs TDoA. See [triangulation.md](triangulation.md) for specifics.
 
 ## Bench test setup
 

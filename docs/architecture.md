@@ -61,22 +61,31 @@ Sits on top of the detection stream (real-time `on_detection` callback in the ce
 ```
 Detections
    │
-   ├── Heatmap generator  → KML GroundOverlay for ATAK
+   ├── Heatmap generator        → KML GroundOverlay for ATAK
    │    spatial binning, log-scale color gradient
    │
-   ├── Trail tracker      → CoT polylines for ATAK
+   ├── Trail tracker            → CoT polylines for ATAK
    │    per-device ring buffer, movement detection
    │
-   ├── Device correlator  → JSON clusters (on-demand from SQL)
+   ├── Device correlator        → JSON clusters (on-demand from SQL)
    │    time-binned co-occurrence, union-find clustering
    │
+   ├── Cross-node witnesses     → "server + N01 heard X in the window"
+   │    per-type key match, Correlations tab
+   │
+   ├── Live triangulation       → RSSI multilateration from last 5 min
+   │    per-capturing-node split, calibrated power, Map tab crosshairs
+   │
+   ├── Opportunistic calibration→ per-(node, band) RSSI offsets
+   │    surveyed APs / FM / cell + ADS-B / AIS; Huber regression
+   │
    └── DSP analysis
-       ├── AMC           → modulation classification (FM, OOK, FSK, PSK, QAM, OFDM, FHSS)
-       ├── Wavelet       → CWT/STFT low-SNR burst detection
-       └── RF fingerprint→ IQ-level transmitter identification (CFO, I/Q imbalance, rise time)
+       ├── AMC                   → modulation classification (FM, OOK, FSK, PSK, QAM, OFDM, FHSS)
+       ├── Wavelet               → CWT/STFT low-SNR burst detection
+       └── RF fingerprint        → IQ-level transmitter identification (CFO, I/Q imbalance, rise time)
 ```
 
-Post-hoc CLIs: `sdr.py heatmap`, `sdr.py correlate`, `sdr.py triangulate`.
+Post-hoc CLIs: `sdr.py heatmap`, `sdr.py correlate`, `sdr.py triangulate`, `sdr.py calibrate`, `sdr.py replay-c2`.
 
 ## Design principles
 

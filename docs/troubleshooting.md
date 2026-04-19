@@ -58,22 +58,9 @@ Most common:
 
 ## State-sync drift (agent ignores commands)
 
-### Symptom
-- Server's **Agents** tab says N01 is approved.
-- You click Start → nothing happens. Agent keeps sending `STAT` but never responds to `CMD`.
+Resolved — the server now auto-re-approves on HELLO from an already-approved agent. The agent's `_hello_loop` only beacons while `adopted=false`, so a HELLO arriving for someone in `agents.json` is unambiguous: the agent's `state.json` got wiped (fresh service install, manual cleanup, …) and the server fires a fresh `APPROVE`. No hand-editing needed.
 
-### Why
-The agent's `state.json` says `"adopted": false`. On the server side, `output/agents_state/agents.json` says `N01` is already in `approved`, so the server doesn't re-send `APPROVE`. Deadlock.
-
-### Fix
-Either edit the agent state directly:
-
-```sh
-sudo sed -i 's/"adopted": false/"adopted": true/' /var/lib/sigint/state.json
-sudo systemctl restart sigint-agent
-```
-
-Or revoke server-side (edit `output/agents_state/agents.json`, remove the entry under `"approved"`, restart the server, re-approve from the UI).
+If the agent still isn't adopting after a HELLO, check the C2 Logs sub-tab on the Agents page for the APPROVE frame. Common causes: hop-limit too small for the deployment, or the agent radio is in `CLIENT_MUTE` mode (see [c2.md — Mesh relay between agents](c2.md#mesh-relay-between-agents)).
 
 ## Agent outbox grows unboundedly with BT/WiFi running
 
@@ -93,7 +80,9 @@ A real fix is on the [roadmap](roadmap.md#-in-flight) — agent-side per-persona
 
 ## CMD lost in flight
 
-Meshtastic text packets are best-effort. A single `CMD START` can be dropped. The web UI doesn't auto-retry. If a click doesn't elicit a `RES|...|ok` within ~10 s, click again. Programmatic callers typically send 2–3 times back-to-back.
+Resolved — server-side `ServerOutbox` now tracks every CMD / CFG by allocated seq and retries with exponential backoff (6 s → 120 s, 5 tries max) until the agent ACKs. Operator clicks Start once.
+
+If the button still appears to do nothing after ~30 s, check the Agents **C2 Logs** sub-tab for the CMD frame (sent) and the subsequent ACK (expected). No ACK usually means the deployment is deeper than `lora.hop_limit` — see [c2.md — Mesh relay between agents](c2.md#mesh-relay-between-agents).
 
 ## HackRF queue drops (`degraded` status)
 
