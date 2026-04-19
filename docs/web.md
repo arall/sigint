@@ -58,7 +58,7 @@ Every endpoint returns JSON except the audio and FPV streams.
 | `GET /api/sessions` | Historical `.db` session list |
 | `GET /api/correlations` | Multi-device co-occurrence clusters (cached 60 s) |
 | `GET /api/correlations/witnesses` | Emitters heard by 2+ nodes inside `?window=<s>` |
-| `GET /api/cat/<name>` | Category detections (`voice`, `drones`, `aircraft`, `vessels`, `vehicles`, `cellular`, `devices`, `other`) |
+| `GET /api/cat/<name>` | Category detections (`voice`, `drones`, `aircraft`, `vessels`, `vehicles`, `cellular`, `devices`, `other`). Paginated server-side: `?offset=&limit=` (default 0/50, max 500). Filters: `?type=&channel=&audio=1&transcript=1`. Response carries `rows`, `total`, `offset`, `limit`, and `filters_available.{types,channels}` for stable dropdowns. |
 | `GET /api/map/sources` | Source panel data: server + agents with position, detections, `position_source` (`manual` / `config` / `detection`) |
 | `POST /api/map/sources/position` | Pin a drag-to-reposition override: `{"id": "server", "lat": ..., "lon": ...}` |
 | `DELETE /api/map/sources/position?id=<sid>` | Clear a manual override |

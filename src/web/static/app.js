@@ -830,23 +830,11 @@ document.querySelectorAll('.sig-subtab-btn[data-sub]').forEach(btn => {
   btn.addEventListener('click', () => switchSigSubtab(btn.dataset.sub));
 });
 
-// Category filter change events — re-render without refetch. Reset
-// pagination to page 1 so the user isn't stranded on an offset that's
-// past the filtered dataset's end.
-function _onFilterChange(cat) {
-  _categoryOffset[cat] = 0;
-  _renderFiltered(cat);
-}
-['voice','drones','cellular','ism'].forEach(cat => {
-  const typeSel = document.getElementById(cat + '-filter-type');
-  if (typeSel) typeSel.addEventListener('change', () => _onFilterChange(cat));
-  const chSel = document.getElementById(cat + '-filter-ch');
-  if (chSel) chSel.addEventListener('change', () => _onFilterChange(cat));
-  const audioChk = document.getElementById(cat + '-filter-audio');
-  if (audioChk) audioChk.addEventListener('change', () => _onFilterChange(cat));
-  const txChk = document.getElementById(cat + '-filter-transcript');
-  if (txChk) txChk.addEventListener('change', () => _onFilterChange(cat));
-});
+// Category filter changes are handled by a document-level `change`
+// delegate defined alongside loadCategory so the wire-up survives
+// dynamic DOM re-renders. Kept this block removed deliberately — the
+// per-selector addEventListener loop that used to live here would
+// now double-fire with the delegate (two fetches per change).
 
 // --- Category Tabs ---
 const _CATEGORY_BODY_IDS = {
@@ -864,95 +852,111 @@ const _CATEGORY_BODY_IDS = {
 };
 
 // Raw rows cache for client-side filtering
-const _categoryRows = {};
-// Per-category pagination offset (in rows, not pages)
+// Server-side pager: the server owns filtering + pagination so a single
+// page of 50 rows is what crosses the wire, even for long sessions where
+// the unfiltered dataset could be thousands of detections. `loadCategory`
+// re-fetches when the user pages or changes a filter.
 const _categoryOffset = {};
 const _CATEGORY_PAGE_SIZE = 50;
 
+function _readCategoryFilters(name) {
+  const typeSel = document.getElementById(name + '-filter-type');
+  const chSel = document.getElementById(name + '-filter-ch');
+  const audioChk = document.getElementById(name + '-filter-audio');
+  const txChk = document.getElementById(name + '-filter-transcript');
+  return {
+    type: typeSel ? typeSel.value : '',
+    channel: chSel ? chSel.value : '',
+    audio: !!(audioChk && audioChk.checked),
+    transcript: !!(txChk && txChk.checked),
+  };
+}
+
 async function loadCategory(name) {
   try {
-    let url = '/api/cat/' + encodeURIComponent(name);
-    if (_selectedSession) {
-      url += '?session=' + encodeURIComponent(_selectedSession);
-    }
-    const r = await fetch(url);
+    const params = new URLSearchParams();
+    const offset = _categoryOffset[name] || 0;
+    params.set('offset', String(offset));
+    params.set('limit', String(_CATEGORY_PAGE_SIZE));
+    if (_selectedSession) params.set('session', _selectedSession);
+    const f = _readCategoryFilters(name);
+    if (f.type) params.set('type', f.type);
+    if (f.channel) params.set('channel', f.channel);
+    if (f.audio) params.set('audio', '1');
+    if (f.transcript) params.set('transcript', '1');
+    const r = await fetch('/api/cat/' + encodeURIComponent(name) + '?' + params);
     const data = await r.json();
-    const rows = data.rows || [];
-    _categoryRows[name] = rows;
-    _populateFilters(name, rows);
-    _renderFiltered(name);
+    _populateFilters(name, data.filters_available || {});
+    _renderCategoryPage(name, data);
   } catch(e) {}
 }
 
-function _renderFiltered(name) {
-  const rows = _categoryRows[name] || [];
-  const filtered = _applyFilters(name, rows);
-  const total = filtered.length;
-  const limit = _CATEGORY_PAGE_SIZE;
-  // Clamp the saved offset after filters shrink the dataset
-  let offset = _categoryOffset[name] || 0;
-  if (offset >= total) offset = Math.max(0, total - limit);
+function _renderCategoryPage(name, data) {
+  const rows = data.rows || [];
+  const total = data.total || 0;
+  // The server may have clamped offset when a filter shrank the set —
+  // mirror that locally so the pager's highlighted page matches.
+  const offset = (data.offset != null) ? data.offset : (_categoryOffset[name] || 0);
   _categoryOffset[name] = offset;
-  const page = filtered.slice(offset, offset + limit);
+  const limit = data.limit || _CATEGORY_PAGE_SIZE;
   const fn = _CATEGORY_RENDERERS[name];
   const bodyId = _CATEGORY_BODY_IDS[name];
-  if (fn && bodyId) setTable(bodyId, page, fn);
+  if (fn && bodyId) setTable(bodyId, rows, fn);
   _renderPager(name + '-pager', {
     total, offset, limit,
     onChange: (newOffset) => {
-      _categoryOffset[name] = Math.max(0, Math.min(newOffset, Math.max(0, total - 1)));
-      _renderFiltered(name);
+      _categoryOffset[name] = Math.max(0, newOffset);
+      loadCategory(name);   // refetch — server does the slicing now
     },
   });
 }
 
-function _populateFilters(name, rows) {
+function _populateFilters(name, available) {
+  const types = (available && available.types) || [];
+  const channels = (available && available.channels) || [];
   // Populate type dropdown
   const typeSel = document.getElementById(name + '-filter-type');
   if (typeSel) {
     const prev = typeSel.value;
-    const types = [...new Set(rows.map(r => r.signal_type || r.technology || r.kind || '').filter(Boolean))].sort();
     typeSel.innerHTML = '<option value="">All Types</option>' +
       types.map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
-    typeSel.value = prev;
+    // Preserve the user's selection even if the set of types shrinks
+    // below it temporarily (e.g. an intermittent emitter drops out).
+    if (prev && (types.indexOf(prev) >= 0 || !types.length)) {
+      typeSel.value = prev;
+    } else if (prev && types.indexOf(prev) < 0) {
+      // Keep the option present so the user's selection doesn't
+      // silently snap to "All" when the emitter disappears this page.
+      typeSel.innerHTML += '<option value="'+esc(prev)+'">'+esc(prev)+'</option>';
+      typeSel.value = prev;
+    }
   }
   // Populate channel dropdown (voice)
   const chSel = document.getElementById(name + '-filter-ch');
   if (chSel) {
     const prev = chSel.value;
-    const chs = [...new Set(rows.map(r => r.channel || '').filter(Boolean))].sort();
     chSel.innerHTML = '<option value="">All Channels</option>' +
-      chs.map(c => '<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');
-    chSel.value = prev;
+      channels.map(c => '<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');
+    if (prev && (channels.indexOf(prev) >= 0 || !channels.length)) {
+      chSel.value = prev;
+    } else if (prev && channels.indexOf(prev) < 0) {
+      chSel.innerHTML += '<option value="'+esc(prev)+'">'+esc(prev)+'</option>';
+      chSel.value = prev;
+    }
   }
 }
 
-function _applyFilters(name, rows) {
-  let out = rows;
-  // Type filter
-  const typeSel = document.getElementById(name + '-filter-type');
-  if (typeSel && typeSel.value) {
-    const v = typeSel.value;
-    out = out.filter(r => (r.signal_type || r.technology || r.kind || '') === v);
-  }
-  // Channel filter (voice)
-  const chSel = document.getElementById(name + '-filter-ch');
-  if (chSel && chSel.value) {
-    const v = chSel.value;
-    out = out.filter(r => r.channel === v);
-  }
-  // Audio only (voice)
-  const audioChk = document.getElementById(name + '-filter-audio');
-  if (audioChk && audioChk.checked) {
-    out = out.filter(r => r.audio_file);
-  }
-  // With transcript (voice)
-  const txChk = document.getElementById(name + '-filter-transcript');
-  if (txChk && txChk.checked) {
-    out = out.filter(r => r.transcript);
-  }
-  return out;
-}
+// Filter changes reset to page 1 and re-fetch. Delegates so newly-rendered
+// filter UI (after a session switch) is still wired up.
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (!el || !el.id) return;
+  const m = el.id.match(/^([a-z]+)-filter-/);
+  if (!m) return;
+  const name = m[1];
+  _categoryOffset[name] = 0;
+  loadCategory(name);
+});
 
 function _emptyRow(bodyId, cols, msg) {
   const tbody = document.getElementById(bodyId);

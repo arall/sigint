@@ -284,12 +284,76 @@ class WebHandler(BaseHTTPRequestHandler):
             except Exception:
                 detections = []
 
+        # Full loader output — pre-pagination. Kept in memory for the
+        # filter-value enumeration below, which needs the complete set
+        # (not the filtered page) so dropdowns stay stable as the user
+        # narrows the view.
         rows = loader(detections or [])
+
+        # --- server-side pagination + filtering ---
+        # Previously the client fetched up to 5000 rows and paginated
+        # locally. For long sessions that's a lot of JSON on every 3 s
+        # auto-refresh. Now the server does the slice; filters (type /
+        # channel / audio-only / transcript-only) also move server-side
+        # so pagination remains consistent across the full filtered set.
+        try:
+            offset = max(0, int(qs.get("offset", ["0"])[0]))
+        except (ValueError, TypeError):
+            offset = 0
+        try:
+            limit = int(qs.get("limit", ["50"])[0])
+        except (ValueError, TypeError):
+            limit = 50
+        limit = max(1, min(limit, 500))
+
+        filter_type = (qs.get("type", [""])[0] or "").strip()
+        filter_channel = (qs.get("channel", [""])[0] or "").strip()
+        truthy = {"1", "true", "yes", "on"}
+        filter_audio = (qs.get("audio", [""])[0] or "").lower() in truthy
+        filter_transcript = (qs.get("transcript", [""])[0] or "").lower() in truthy
+
+        def _row_type(r):
+            # Voice uses signal_type; cellular uses technology; ism uses
+            # kind. Match the client-side fallback ladder so the wire
+            # contract is unchanged.
+            return r.get("signal_type") or r.get("technology") or r.get("kind") or ""
+
+        def _passes_filters(r):
+            if filter_type and _row_type(r) != filter_type:
+                return False
+            if filter_channel and (r.get("channel") or "") != filter_channel:
+                return False
+            if filter_audio and not r.get("audio_file"):
+                return False
+            if filter_transcript and not r.get("transcript"):
+                return False
+            return True
+
+        # Enumerate distinct filter values from the unfiltered set so
+        # dropdown options don't disappear when the user selects one.
+        types_available = sorted({_row_type(r) for r in rows if _row_type(r)})
+        channels_available = sorted({(r.get("channel") or "")
+                                     for r in rows if r.get("channel")})
+
+        filtered = [r for r in rows if _passes_filters(r)]
+        total = len(filtered)
+        # Clamp offset so a filter that shrinks the dataset doesn't
+        # leave the user stranded on an empty page.
+        if offset >= total:
+            offset = max(0, ((total - 1) // limit) * limit) if total else 0
+        page = filtered[offset:offset + limit]
+
         self._send_json({
             "category": name,
             "label": CATEGORY_LABELS.get(name, name),
-            "rows": rows,
-            "total": len(rows),
+            "rows": page,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "filters_available": {
+                "types": types_available,
+                "channels": channels_available,
+            },
             "session": session_resolved,
             "window_hours": (window_seconds / 3600) if window_seconds else None,
         })

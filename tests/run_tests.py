@@ -65,6 +65,7 @@ SW_TESTS = [
     ("Server CMD/CFG outbox",          "tests/sw/test_server_outbox.py"),
     ("AIS parallel RSSI capture",      "tests/sw/test_ais_rssi.py"),
     ("Agent ScannerManager + DBTailer", "tests/sw/test_agent_scanner_mgr.py"),
+    ("Server-side category pager",     "tests/sw/test_web_category_pager.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")
