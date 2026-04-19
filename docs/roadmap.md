@@ -9,10 +9,15 @@ Core:
 - Single-node scanners for PMR446 (+ dPMR/DMR energy), FM bands (FRS/GMRS, Marine VHF, MURS, 2m, 70cm, CB, LandMobile, TETRA, P25), keyfob, TPMS, GSM, LTE, ADS-B, AIS, POCSAG, ISM (rtl_433), LoRa, ELRS/Crossfire, wideband scan with AMC, BLE adv, WiFi probe + beacon + RemoteID, drone video, FPV analog
 - Central `sdr.py server` with JSON config, HackRF channelizer, multi-capture orchestration, standalone subprocess adapter
 - Per-session SQLite logging (WAL, indexed), SQL-first web dashboard
+- `install-nexmon.sh` — build + flash nexmon-patched `brcmfmac` firmware so the Raspberry Pi's built-in WiFi can do monitor mode and frame injection without an external adapter
 
 Analysis:
 
 - RSSI multilateration (`sdr.py tri`, 2+ nodes, log-distance path loss)
+- Opportunistic RSSI calibration (`sdr.py calibrate`): per-node, per-band offsets solved from emitters whose position and TX power are known — surveyed WiFi APs, FM stations, cell towers via `configs/calibration_emitters.json`; Huber regression on residuals stored in `output/calibration.db`; applied transparently in `sdr.py tri`. ADS-B RSSI captured from dump1090/readsb `aircraft.json` so the ADS-B extractor activates with free sky-view samples. AIS extractor still scaffolded (needs rtl_ais enhancement).
+- Map-tab uncertainty rings use calibrated RSSI when available: `web/fetch.py` applies per-node offsets server-side and ships `power_db_cal` in `/api/map/sources`; `app.js` picks the RSSI-based log-distance model when a calibrated reading exists and falls back to SNR otherwise. Popup shows "calibrated" when applied.
+- Real-time multi-node triangulation (`/api/map/triangulations`): `web/triangulate_live.py` pulls the last 5 min of detections from every session `.db`, splits by capturing node (server vs each agent in agents_*.db), applies calibration, and reuses `utils/triangulate.py`'s correlator + multilaterator per signal_type. Map tab renders each fix as a crosshair with a dashed error-radius ring; popup shows contributing nodes, per-observation power, and calibration coverage.
+- Node drag-to-reposition: every source marker on the Map tab is draggable. Drag-end POSTs `/api/map/sources/position`, which persists to `output/position_overrides.json` (atomic write, its own file so the C2 orchestrator's `server_info.json` rewrite can't clobber it) and mirrors the new lat/lon into the calibration DB's `cal_meta` so expected-RSSI math picks it up. `_serve_map_sources` returns `position_source = "manual" | "config" | "detection"` so the UI can show which positions are pinned (black outline + 📌).
 - Heatmap KML generation (live + post-hoc via `sdr.py heatmap`)
 - Movement trails (CoT polylines to ATAK)
 - Device correlation (cross-signal-type co-occurrence + union-find clustering, cached, 6-hour window)
@@ -25,15 +30,19 @@ TAK:
 - CoT event types, client certificate enrollment, live streaming
 - Heatmap GroundOverlay, movement trail polylines
 
-Distributed C2 (this round of work):
+Distributed C2:
 
 - Meshtastic mesh link (`MeshLink`, module-level pubsub listener after the pypubsub 4.x weakref bug)
 - Agent runtime with persistent state, outbox retry with exponential backoff, auto-resume of last-tasked scanner after reboot
-- Wire protocol (HELLO/APPROVE/CMD/CFG/RES/DET/STAT/LOG/CFGINFO/ACK), SNR carried on DET, agent CFGINFO snapshot surfaced in the Agents tab
+- Wire protocol: HELLO / APPROVE / CMD / CFG / RES / DET / STAT / LOG / CFGINFO / SCANINFO / ACK; SNR carried on DET
+- Outbox prioritises control messages over the DET backlog — a busy BT/WiFi stream no longer starves STAT / RES / CFGINFO / SCANINFO
+- CFGINFO + SCANINFO re-fire every 10 STATs so a server restart re-learns agent state without needing the agent to bounce
+- Agent STAT heartbeat carries real CPU (1-min loadavg / cpu_count × 100), real uptime, and live GPS (lat/lon + satellite count) — GPS reaches the agent via a `gps.json` sidecar written by the scanner subprocess, avoiding the "scanner owns the serial port" conflict
 - Agent `DBTailer` forwarding scanner detections with GPS over the mesh
-- Agents web tab: pending/approved lists, Approve/Start/Stop/Status controls, paginated detections table, click-to-expand row showing the agent's CFGINFO snapshot, CPU/uptime/GPS in the live STAT row
-- Map tab sources panel: server + every agent, per-source uncertainty rings sized by SNR + per-signal-type path-loss
-- Fixed-position `server_position` config
+- Agents web tab with **Manage / Detections / C2 Logs** sub-tabs; pending/approved lists, Approve/Start/Stop/Status controls, paginated detections, click-to-expand row showing per-agent scanner control panel + CFGINFO snapshot; live STAT row shows CPU / uptime / GPS / sat count
+- C2 comms log viewer (`/api/agents/comms`) — ring-buffered tx/rx of every mesh frame, filterable by agent
+- Map tab "Sources" panel: server + every agent, per-source uncertainty rings sized by calibrated RSSI (with SNR fallback) and per-signal-type path-loss
+- Fixed-position `server_position` config + manual drag override (see Analysis)
 - systemd service install for server and agent (`scripts/install-*.sh`, `@PROJECT_DIR@` templating)
 - JSON config for agent (`configs/agent.json`), matching the server pattern
 
@@ -45,22 +54,23 @@ Docs:
 
 Small known rough edges — fixes are scoped, just not done yet:
 
-- **State-sync drift** — server keeps `agents.json` on disk but doesn't re-send `APPROVE` when an already-approved agent HELLOs. If an agent's `state.json` is wiped (fresh service install), it silently ignores every CMD. Workaround: hand-edit `adopted: true`. Real fix: auto-re-approve on HELLO from an approved agent.
-- **CMD retries** — server-originated `CMD START` / `CMD STOP` are single-shot broadcasts, lossy over LoRa. Operator clicks Start twice as a workaround. Real fix: mirror the agent's outbox (seq + ACK) on the server→agent direction.
-- **DBTailer picks newest by mtime** — fine for a live scanner but SHM touches can bump older DBs' mtimes above the active one, causing detections to stop forwarding after a restart with multiple sessions. Switch to picking by filename timestamp (deterministic from the scanner's `<type>_YYYYMMDD_HHMMSS.db`).
-- **Agent STAT carries no GPS** — the scanner subprocess owns the GPS port, agent process can't open it concurrently. Nodes appear on the map only once they forward a geo-tagged DET. A `gps.json` sidecar written by the scanner and polled by the agent would solve it.
+- **State-sync drift** — server keeps `agents.json` on disk but doesn't re-send `APPROVE` when an already-approved agent HELLOs (`_on_hello` in `src/server/agent_manager.py:184` early-returns). If an agent's `state.json` is wiped (fresh service install), it silently ignores every CMD. Workaround: hand-edit `adopted: true`. Real fix: auto-re-approve on HELLO from an already-approved agent.
+- **CMD retries** — server-originated `CMD START` / `CMD STOP` are single-shot broadcasts (`send_cmd` in `src/server/agent_manager.py:115` is one `self._send(...)`, no ACK / retry), lossy over LoRa. Operator clicks Start twice as a workaround. Real fix: mirror the agent's outbox (seq + ACK) on the server→agent direction so the CFGINFO re-fire isn't the only recovery path.
+- **DBTailer picks newest by mtime** — fine for a live scanner but SHM touches can bump older DBs' mtimes above the active one, causing detections to stop forwarding after a restart with multiple sessions (`_newest_db` in `src/agent/scanner_mgr.py:127` uses `max(candidates, key=os.path.getmtime)`). Switch to picking by filename timestamp (deterministic from the scanner's `<type>_YYYYMMDD_HHMMSS.db`).
 - **Category pager is client-side** — loads all rows up to the server's LIMIT, then slices locally so filters keep working across the whole set. For very long sessions the full row list is shipped on every refresh. Server-side offset+limit would scale better at the cost of refactoring the filter code.
-- **Agent BT/WiFi outbox saturation** — running the `bt` or `wifi` scanner in a populated area generates detections faster than the mesh can drain (LoRa airtime caps at ~1%, ~6 s per send). The outbox grows unboundedly. Mitigation today: don't run BT/WiFi continuously over mesh — run it locally on the server. Real fix: agent-side per-persona rate-limit + sub-batch coalescing before enqueue, so we send "30 unique BLE personas in last minute" instead of every advertisement.
+- **Agent BT/WiFi outbox saturation** — running the `bt` or `wifi` scanner in a populated area generates detections faster than the mesh can drain (LoRa airtime caps at ~1%, ~6 s per send). Outbox priority now keeps control messages alive, but the DET backlog itself still grows unboundedly. Mitigation today: don't run BT/WiFi continuously over mesh — run it locally on the server, or set a tight `--max-det-rate`. Real fix: agent-side per-persona rate-limit + sub-batch coalescing before enqueue, so we send "30 unique BLE personas in last minute" instead of every advertisement.
 
 ## 📋 Planned
 
 Concrete next things, roughly in order:
 
-1. **Real-time multi-node triangulation on the Map tab** — when 3+ agents hear the same signal (type + freq + time window), multilaterate from their positions + RSSI/SNR and draw the estimated emitter point. Relies on the uncertainty-ring work already shipped.
-2. **Node drag-to-reposition** — alternative to editing `server_position` in JSON for the server, and to waiting for a DET for agents. Pin-by-hand on the map, persists to disk.
-3. **Replay a session over the C2 path** — feed a recorded `.db` through the DBTailer + encoder to exercise the server ingest path without live RF.
-4. **Per-node calibration** — measure RSSI/SNR at a known distance, persist into `configs/agent.json`, use in the map ring formula and in `sdr.py tri`.
-5. **Correlation on agent data** — `sdr.py correlate` currently unions every `.db`; explicitly surfacing "server + N01 + N02 both saw keyfob X in the same 30 s window" in the dashboard would make multi-node deployments self-documenting.
+1. **AIS RSSI capture** — `scanners/ais.py` logs `power_db=0`. rtl_ais has no signal-level output in NMEA; options are a Python receiver that extracts RSSI from the SDR pipeline, or patching rtl_ais. Once wired, the AIS calibration extractor lights up for coastal deployments (the ADS-B equivalent already ships).
+2. **Replay a session over the C2 path** — feed a recorded `.db` through the DBTailer + encoder to exercise the server ingest path without live RF. Doubles as a repeatable triangulation-accuracy benchmark.
+3. **Correlation on agent data** — `sdr.py correlate` currently unions every `.db`; explicitly surfacing "server + N01 + N02 both saw keyfob X in the same 30 s window" in the dashboard would make multi-node deployments self-documenting.
+4. **Triangulations panel** — sibling of the Sources panel; list recent fixes with timestamp / type / error / nodes. Click-to-zoom on the map. Groundwork: the `/api/map/triangulations` payload already carries what's needed.
+5. **"Clear override" action** on a pinned source's popup — revert a source back to config / DET-derived position (calls `DELETE /api/map/sources/position`). Small polish on drag-to-reposition.
+6. **Server→agent reliable CMD** — mirror the agent's outbox on the server side: seq + ACK + exponential backoff for CMD/CFG. Resolves the "CMD retries" In-flight item and lets operators click Start once.
+7. **Auto-re-approve on HELLO from an approved agent** — resolves the "State-sync drift" In-flight item; no more hand-editing `adopted: true` after reprovisioning.
 
 ## 💡 Ideas / future
 
@@ -77,13 +87,13 @@ Speculative / research-grade / someday. Kept here so they're not lost.
 - **WiFi deauth / evil-twin detection** — passive parser on the existing monitor-mode adapter. Flag `Dot11Deauth` frames (spike per BSSID = deauth attack). Flag BSSIDs whose SSID matches a registered AP but BSSID prefix doesn't (evil twin). New "rogue" badge on the WiFi APs sub-table.
 
 ### DSP / decoding
-- **DMR voice decode** — pipe discriminator audio through DSD/dsd-fme for voice or radio-ID extraction.
+- **DMR voice decode** — pipe discriminator audio through DSD/dsd-fme for voice or radio-ID extraction. Partially prototyped in `experimental/` (dpmr decoded samples, dsdcc build bits) — not yet integrated into `parsers/`.
 - **ML-based AMC** — ONNX Runtime + RadioML pre-trained model for deeper modulation classification on CPU.
 
 ### Geolocation
-- **TDOA / Doppler** — time-difference-of-arrival for sub-10 m geolocation. Requires GPS PPS time sync across nodes.
+- **TDOA / Doppler** — time-difference-of-arrival for sub-10 m geolocation. Requires a parallel architecture: PPS-capable GPS on every node (u-blox NEO-M8T/F9T), disciplined sample clocks (HackRF external clock input; RTL-SDR lacks one — would need replacement), sample-level timestamps in `capture/`, and an out-of-band IQ snippet transport (LAN/SSH, not Meshtastic — 228 B / 6 s frame limit makes IQ transfer infeasible over the mesh). The opportunistic calibration work preserves hooks (full-precision `ts_epoch`, per-sample `session_db` + `det_rowid` back-references, per-sample node GPS) so this can layer on when the hardware is in place. Evaluate after measuring residual triangulation error post-calibration.
 
 ### Platform
-- **Uptime-Kuma–style agent health dashboard** — ping history / STAT freshness / outbox depth over time.
+- **Uptime-Kuma–style agent health dashboard** — ping history / STAT freshness / outbox depth over time. Groundwork: the C2 comms log already captures every frame.
 - **Remote log pull over mesh** — on-demand `LOG` spill of the last N lines of `journalctl -u sigint-agent` from the web UI.
-- **Field-replaceable scanner profiles** — YAML-defined profile that pins one SDR to one task (e.g. "drone-watch at this GPS coordinate, alert on any RemoteID"), distributed to agents via CFG.
+- **Field-replaceable scanner profiles** — YAML-defined profile that pins one SDR to one task (e.g. "drone-watch at this GPS coordinate, alert on any RemoteID"), distributed to agents via CFG. Per-agent scanner control panel is the dashboard-side half; this is the missing declarative half.
