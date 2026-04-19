@@ -849,6 +849,7 @@ const _CATEGORY_BODY_IDS = {
   lora:       'lora-body',
   meshtastic: 'meshtastic-body',
   pagers:     'pagers-body',
+  jamming:    'jamming-body',
 };
 
 // Raw rows cache for client-side filtering
@@ -1167,6 +1168,42 @@ function renderMeshtastic(rows) {
 
 function renderPagers(rows) { _renderSignalRows('pagers-body', rows, 'no pager messages yet'); }
 
+function renderJamming(rows) {
+  const tbody = document.getElementById('jamming-body');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">'
+      + 'no jamming detected (run <code>sdr.py jammer</code> to start watching)'
+      + '</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const elev = r.elevation_db != null ? r.elevation_db.toFixed(1) : '';
+    // Colour elevation red/yellow/green by severity — 10 dB is the
+    // default trigger threshold; 20+ is unambiguous jamming.
+    const elevColor = r.elevation_db >= 20 ? '#f44336'
+                    : r.elevation_db >= 10 ? '#ff9800'
+                    : '#888';
+    const baseline = r.baseline_db != null ? r.baseline_db.toFixed(1) : '';
+    const observed = r.observed_db != null ? r.observed_db.toFixed(1) : '';
+    const flat = r.flatness != null ? r.flatness.toFixed(2) : '';
+    const bw = r.bandwidth_mhz != null ? r.bandwidth_mhz.toFixed(2) : '';
+    const freq = r.frequency_mhz != null ? r.frequency_mhz.toFixed(3) : '';
+    const ts = (r.timestamp || '').replace('T', ' ').split('.')[0];
+    return '<tr>'
+      + '<td style="font-size:11px;color:#888">' + esc(ts) + '</td>'
+      + '<td style="font-weight:600">' + esc(r.channel || '') + '</td>'
+      + '<td class="num">' + esc(freq) + '</td>'
+      + '<td class="num">' + esc(baseline) + '</td>'
+      + '<td class="num">' + esc(observed) + '</td>'
+      + '<td class="num" style="color:' + elevColor + ';font-weight:600">+'
+        + esc(elev) + '</td>'
+      + '<td class="num">' + esc(flat) + '</td>'
+      + '<td class="num">' + esc(bw) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
 const _CATEGORY_RENDERERS = {
   voice:    renderVoice,
   drones:   renderDrones,
@@ -1179,6 +1216,7 @@ const _CATEGORY_RENDERERS = {
   lora:       renderLora,
   meshtastic: renderMeshtastic,
   pagers:     renderPagers,
+  jamming:    renderJamming,
 };
 
 // --- FPV Video Feed ---

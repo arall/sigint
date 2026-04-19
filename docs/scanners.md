@@ -77,6 +77,7 @@ sdr.py pmr --digital                      # analog + dPMR/DMR energy detection
 | Command | Description |
 |---|---|
 | `scan` | Wideband energy detection. `--classify` adds automatic modulation classification (FM, OOK, FSK, PSK, QAM, OFDM, FHSS, CW). |
+| `jammer` | Watch a configurable band list (GPS L1, Meshtastic EU, ISM 915, GSM-900 DL, Marine VHF by default) for broadband noise-floor elevation with spectral flatness > 0.5 — the signature of a cheap noise jammer, barrage jammer, or sweep jammer. Per-band baseline is acquired at startup and persisted to `output/jammer_baseline.json`. Override bands with `--band LABEL:CENTER_MHZ:BW_MHZ` (repeatable). Does **not** catch narrowband/spot jammers (loud legit emitters are common) or spoofing (fake-but-valid signals need protocol-level integrity checks — different feature). |
 | `record` | Capture raw IQ samples to disk. |
 | `replay <file>` | Re-run detection pipelines against a recorded IQ file; spectrogram/spectrum/IQ plots. |
 

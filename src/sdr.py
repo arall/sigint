@@ -274,6 +274,50 @@ Examples:
              "so this must be a different dongle.",
     )
 
+    # Jammer / broadband interference detector
+    jammer_parser = subparsers.add_parser(
+        "jammer",
+        help="Hop across bands watching for raised noise floor + "
+             "broadband character (jamming / interference).",
+    )
+    jammer_parser.add_argument(
+        "--gain", "-g",
+        type=int, default=40,
+        help="RF gain (default: 40)",
+    )
+    jammer_parser.add_argument(
+        "--dwell", type=float, default=1.0, dest="dwell_s",
+        help="Seconds to dwell on each band per revisit (default: 1.0)",
+    )
+    jammer_parser.add_argument(
+        "--threshold", type=float, default=10.0,
+        dest="elevation_threshold_db",
+        help="Elevation above baseline, in dB, before flagging (default: 10)",
+    )
+    jammer_parser.add_argument(
+        "--flatness", type=float, default=0.5,
+        dest="flatness_threshold",
+        help="Spectral-flatness threshold, 0-1 (default: 0.5). Lower = "
+             "fire on peakier signals too (more false positives).",
+    )
+    jammer_parser.add_argument(
+        "--min-consec", type=int, default=3,
+        help="How many consecutive elevated samples before firing "
+             "(default: 3). Matches dwell × 3 seconds of sustained "
+             "elevation at the default dwell.",
+    )
+    jammer_parser.add_argument(
+        "--recalibrate", action="store_true",
+        help="Force a fresh baseline acquisition instead of loading "
+             "jammer_baseline.json. Use after moving the node.",
+    )
+    jammer_parser.add_argument(
+        "--band", action="append", default=None, dest="bands",
+        metavar="LABEL:CENTER_MHZ:BW_MHZ",
+        help="Override the default band list. Repeat for multiple. "
+             "Example: --band GPS-L1:1575.42:2",
+    )
+
     # POCSAG/Pager scanner
     pocsag_parser = subparsers.add_parser(
         "pocsag",
@@ -1174,7 +1218,8 @@ def _dispatch_scanner(args):
 
     # Pre-flight SDR check for scanners that need it
     sdr_scanners = {"pmr", "fm", "keyfob", "tpms", "gsm", "lte", "adsb",
-                    "ais", "pocsag", "scan", "ism", "record", "replay", "lora"}
+                    "ais", "pocsag", "scan", "ism", "record", "replay", "lora",
+                    "jammer"}
     if args.command in sdr_scanners:
         if not _check_sdr(args.device_index):
             sys.exit(1)
@@ -1357,6 +1402,47 @@ def _dispatch_scanner(args):
             region=args.region,
             gain=args.gain,
             use_multimon=not args.native,
+        )
+        if gps:
+            scanner.logger.gps = gps
+        _attach_tak(scanner, tak_client)
+        scanner.scan()
+
+    elif args.command == "jammer":
+        from scanners.jammer import (
+            BandConfig, JammerScanner, DEFAULT_BANDS,
+        )
+        # Parse --band LABEL:CENTER_MHZ:BW_MHZ (repeatable). Fall back
+        # to the module's default list if the user didn't override.
+        bands = None
+        if args.bands:
+            bands = []
+            for spec in args.bands:
+                parts = spec.split(":")
+                if len(parts) != 3:
+                    print(f"Bad --band {spec!r}; need LABEL:CENTER_MHZ:BW_MHZ",
+                          file=sys.stderr)
+                    sys.exit(2)
+                try:
+                    label = parts[0]
+                    center = float(parts[1]) * 1e6
+                    bw = float(parts[2]) * 1e6
+                except ValueError:
+                    print(f"Bad --band {spec!r}; numeric fields expected",
+                          file=sys.stderr)
+                    sys.exit(2)
+                bands.append(BandConfig(label=label, center_hz=center, bw_hz=bw))
+        scanner = JammerScanner(
+            output_dir=args.output,
+            device_id=args.device_id,
+            device_index=args.device_index,
+            gain=args.gain,
+            bands=bands,
+            dwell_s=args.dwell_s,
+            elevation_threshold_db=args.elevation_threshold_db,
+            flatness_threshold=args.flatness_threshold,
+            min_consec=args.min_consec,
+            recalibrate=args.recalibrate,
         )
         if gps:
             scanner.logger.gps = gps

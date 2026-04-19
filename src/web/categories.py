@@ -31,6 +31,7 @@ CATEGORIES = {
         "Meshtastic-Position", "Meshtastic-Telemetry", "Meshtastic-Node",
     ],
     "pagers":   ["pocsag"],
+    "jamming":  ["jamming"],
 }
 
 CATEGORY_LABELS = {
@@ -46,12 +47,13 @@ CATEGORY_LABELS = {
     "lora":     "LoRa",
     "meshtastic": "Meshtastic",
     "pagers":   "Pagers",
+    "jamming":  "Jamming",
 }
 
 CATEGORY_ORDER = [
     "voice", "drones", "aircraft", "vessels",
     "keyfobs", "tpms", "cellular", "devices",
-    "ism", "lora", "meshtastic", "pagers",
+    "ism", "lora", "meshtastic", "pagers", "jamming",
 ]
 
 TYPE_TO_CATEGORY = {sig: cat for cat, sigs in CATEGORIES.items() for sig in sigs}

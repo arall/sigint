@@ -794,6 +794,36 @@ def _load_pagers(detections):
     return _load_generic_signals(detections, "pagers")
 
 
+def _load_jamming(detections):
+    """Broadband-interference detections from `sdr.py jammer`.
+
+    Keeps the raw-row shape of `_load_generic_signals` but surfaces the
+    jammer-specific metadata (baseline / observed / elevation / flatness)
+    as top-level columns so the dashboard can render them without
+    digging into `meta`.
+    """
+    rows = []
+    for d in reversed(detections):
+        if d.get("category") != "jamming":
+            continue
+        meta = d.get("meta") or {}
+        rows.append({
+            "timestamp": d["timestamp"],
+            "signal_type": d["signal_type"],
+            "channel": d["channel"],
+            "frequency_mhz": d["frequency_mhz"],
+            "snr_db": d["snr_db"],
+            "baseline_db": meta.get("baseline_db"),
+            "observed_db": meta.get("observed_db"),
+            "elevation_db": meta.get("elevation_db"),
+            "flatness": meta.get("flatness"),
+            "bandwidth_mhz": (meta.get("bandwidth_hz") or 0) / 1e6,
+        })
+        if len(rows) >= 200:
+            break
+    return rows
+
+
 CATEGORY_LOADERS = {
     "voice":    _load_voice,
     "drones":   _load_drones,
@@ -806,4 +836,5 @@ CATEGORY_LOADERS = {
     "lora":       _load_lora,
     "meshtastic": _load_meshtastic,
     "pagers":     _load_pagers,
+    "jamming":    _load_jamming,
 }
