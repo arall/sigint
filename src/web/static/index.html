@@ -518,6 +518,39 @@
       <div class="empty">no clusters yet</div>
     </div>
   </div>
+  <div class="section">
+    <div class="section-title">
+      <span>Cross-node witnesses</span>
+      <div class="filter-bar">
+        <label>Window:
+          <select id="witness-window">
+            <option value="30">30 s</option>
+            <option value="60">1 min</option>
+            <option value="300" selected>5 min</option>
+            <option value="1800">30 min</option>
+            <option value="3600">1 h</option>
+          </select>
+        </label>
+        <span id="witness-summary" style="font-size:11px;color:#888"></span>
+        <button onclick="loadCrossNodeWitnesses()">Refresh</button>
+      </div>
+    </div>
+    <div class="tab-desc">Emitters picked up by 2+ nodes in the window — "server + N01 both saw keyfob X". Complements the Triangulations panel: same data structure, no position requirement, so ADS-B / AIS and emitters with poor GPS coverage still show here.</div>
+    <table>
+      <thead><tr>
+        <th>Type</th>
+        <th>Key</th>
+        <th class="num">Freq (MHz)</th>
+        <th>Witnesses</th>
+        <th class="num">Obs</th>
+        <th>First</th>
+        <th>Last</th>
+      </tr></thead>
+      <tbody id="witness-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <!-- Tab: Log -->

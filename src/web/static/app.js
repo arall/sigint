@@ -1308,7 +1308,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       initMap();
       loadMap();
     }
-    if (btn.dataset.tab === 'correlations') loadCorrelations();
+    if (btn.dataset.tab === 'correlations') { loadCorrelations(); loadCrossNodeWitnesses(); }
     if (btn.dataset.tab === 'agents') fetchAgents();
     if (btn.dataset.tab === 'signals') loadCategory(_sigSubtab);
   });
@@ -1416,13 +1416,72 @@ function renderCorrelations(data) {
   }
 }
 
+// --- Cross-node witnesses (Correlations tab) ---
+// "Server + N01 both saw keyfob X in the last 5 min" — same structural
+// shape as /api/correlations but per-node-of-origin rather than per-pair
+// of devices. Uses the /api/correlations/witnesses endpoint.
+async function loadCrossNodeWitnesses() {
+  const sel = document.getElementById('witness-window');
+  const window_s = sel ? sel.value : '300';
+  try {
+    const r = await fetch('/api/correlations/witnesses?window=' + encodeURIComponent(window_s));
+    const data = await r.json();
+    _renderWitnessRows(data.witnesses || [], data.window_s || 300);
+  } catch (e) {}
+}
+
+function _renderWitnessRows(rows, window_s) {
+  const tbody = document.getElementById('witness-body');
+  const summary = document.getElementById('witness-summary');
+  if (summary) {
+    summary.textContent = rows.length
+      ? `${rows.length} emitter${rows.length === 1 ? '' : 's'} witnessed by 2+ nodes in the last ${window_s | 0}s`
+      : `no emitters witnessed by 2+ nodes in the last ${window_s | 0}s`;
+  }
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">no cross-node witnesses in this window — widen the window, or run another node pointed at the same band</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(w => {
+    // Compose "server × 4, N01 × 2" so the reader can tell which node
+    // actually did most of the hearing.
+    const witTxt = Object.entries(w.observations_by_node || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([n, c]) => esc(n) + ' <span style="color:#888">×' + c + '</span>')
+      .join(', ');
+    const first = (w.first_seen || '').replace('T', ' ').split('.')[0];
+    const last = (w.last_seen || '').replace('T', ' ').split('.')[0];
+    const freq = w.freq_mhz ? w.freq_mhz.toFixed(4) : '';
+    return '<tr>'
+      + '<td>' + esc(w.signal_type) + '</td>'
+      + '<td style="font-family:monospace;font-size:11px">' + esc(w.key || '') + '</td>'
+      + '<td class="num">' + esc(freq) + '</td>'
+      + '<td>' + witTxt + '</td>'
+      + '<td class="num">' + w.observations + '</td>'
+      + '<td style="color:#888;font-size:11px">' + esc(first) + '</td>'
+      + '<td style="color:#888;font-size:11px">' + esc(last) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+// Re-fire both correlation views when the window selector changes.
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'witness-window') loadCrossNodeWitnesses();
+});
+
 // Auto-refresh Correlations tab every 10s while active (the server
-// publishes every 30s so any faster is wasted work).
+// publishes device-correlations every 30s; witnesses are computed on
+// demand so faster polling only helps them, but we keep the cadence
+// unified for simplicity).
 setInterval(() => {
   if (_selectedSession) return;
   if (document.hidden) return;
   const activeBtn = document.querySelector('.tab-btn.active');
-  if (activeBtn && activeBtn.dataset.tab === 'correlations') loadCorrelations();
+  if (activeBtn && activeBtn.dataset.tab === 'correlations') {
+    loadCorrelations();
+    loadCrossNodeWitnesses();
+  }
 }, 10000);
 
 // --- Situational Awareness Map (Leaflet) ---

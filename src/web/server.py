@@ -110,6 +110,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_sessions()
         elif path == '/api/correlations':
             self._serve_correlations()
+        elif path == '/api/correlations/witnesses':
+            self._serve_cross_node_witnesses(qs)
         elif path.startswith('/api/cat/'):
             self._serve_category(path[len('/api/cat/'):], qs)
         elif path == '/api/agents':
@@ -328,6 +330,37 @@ class WebHandler(BaseHTTPRequestHandler):
                 "error": f"{type(e).__name__}: {e}",
             }
         self._send_json(result)
+
+    def _serve_cross_node_witnesses(self, qs):
+        """Emitters heard by 2+ nodes in the query window.
+
+        Different from /api/correlations: same emitter, multiple
+        observing *nodes*, no pair construction. ADS-B / AIS included
+        because "both N01 and N02 heard aircraft X" is a useful
+        coverage signal even though the aircraft self-reports.
+        """
+        try:
+            window_s = float(qs.get("window", ["30"])[0])
+        except (ValueError, TypeError):
+            window_s = 30.0
+        window_s = max(1.0, min(window_s, 3600.0))
+        try:
+            limit = int(qs.get("limit", ["100"])[0])
+        except (ValueError, TypeError):
+            limit = 100
+        limit = max(1, min(limit, 1000))
+
+        from .cross_node_witnesses import fetch_cross_node_witnesses
+        try:
+            rows = fetch_cross_node_witnesses(
+                self.server.output_dir,
+                window_seconds=window_s,
+                max_results=limit,
+            )
+        except Exception as e:
+            self._send_json({"witnesses": [], "error": f"{type(e).__name__}: {e}"})
+            return
+        self._send_json({"witnesses": rows, "window_s": window_s})
 
     def _serve_devices(self, qs):
         out_dir = self.server.output_dir

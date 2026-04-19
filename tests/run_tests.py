@@ -60,6 +60,7 @@ SW_TESTS = [
     ("Live multi-node triangulation",  "tests/sw/test_triangulate_live.py"),
     ("Position overrides (drag)",      "tests/sw/test_position_overrides.py"),
     ("AgentManager (C2 ingest)",       "tests/sw/test_server_agent_manager.py"),
+    ("Cross-node witnesses",           "tests/sw/test_cross_node_witnesses.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")
