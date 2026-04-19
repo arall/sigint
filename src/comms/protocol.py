@@ -39,13 +39,21 @@ class Message:
 
 # -- encoders ---------------------------------------------------------------
 
-def encode_cmd(target_id: str, verb: str, args: List[str]) -> str:
-    parts = ["CMD", target_id, verb] + [_esc(a) for a in args]
+def encode_cmd(target_id: str, seq: int, verb: str, args: List[str]) -> str:
+    """Server->agent command.
+
+    `seq` is allocated by the server's ServerOutbox so the agent can ACK
+    individual commands and the outbox can retry unacked ones with
+    exponential backoff. Broadcast target "*" is still allowed; the
+    server simply won't track ACKs for non-unicast CMDs.
+    """
+    parts = ["CMD", target_id, str(int(seq)), verb] + [_esc(a) for a in args]
     return "|".join(parts)
 
 
-def encode_cfg(target_id: str, key: str, value: str) -> str:
-    return f"CFG|{target_id}|{_esc(key)}|{_esc(value)}"
+def encode_cfg(target_id: str, seq: int, key: str, value: str) -> str:
+    """Server->agent config set. See encode_cmd re: seq semantics."""
+    return f"CFG|{target_id}|{int(seq)}|{_esc(key)}|{_esc(value)}"
 
 
 def encode_approve(agent_id: str) -> str:
@@ -146,14 +154,16 @@ def decode(wire: str) -> Message:
         raise ProtocolError(f"unknown tag: {tag!r}")
     try:
         if tag == "CMD":
-            _check_min(parts, 3)
-            return Message(tag, parts[1], None,
-                           {"verb": parts[2], "args": [_unesc(p) for p in parts[3:]]},
+            # New (with seq) format: CMD|<target>|<seq>|<verb>|<args...>
+            _check_min(parts, 4)
+            return Message(tag, parts[1], int(parts[2]),
+                           {"verb": parts[3], "args": [_unesc(p) for p in parts[4:]]},
                            raw=wire)
         if tag == "CFG":
-            _check_min(parts, 4)
-            return Message(tag, parts[1], None,
-                           {"key": _unesc(parts[2]), "value": _unesc(parts[3])},
+            # New (with seq) format: CFG|<target>|<seq>|<key>|<value>
+            _check_min(parts, 5)
+            return Message(tag, parts[1], int(parts[2]),
+                           {"key": _unesc(parts[3]), "value": _unesc(parts[4])},
                            raw=wire)
         if tag == "APPROVE":
             _check_min(parts, 2)

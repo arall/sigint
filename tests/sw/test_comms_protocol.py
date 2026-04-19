@@ -8,13 +8,39 @@ if SRC not in sys.path:
 
 
 def test_encode_cmd_start():
+    # CMD|<target>|<seq>|<verb>|<args...> — seq added for server-side
+    # reliable delivery (ServerOutbox tracks ACKs by seq).
     from comms.protocol import encode_cmd
-    assert encode_cmd("N01", "START", ["pmr", "--digital"]) == "CMD|N01|START|pmr|--digital"
+    assert encode_cmd("N01", 7, "START", ["pmr", "--digital"]) == "CMD|N01|7|START|pmr|--digital"
 
 
 def test_encode_cmd_broadcast_status():
     from comms.protocol import encode_cmd
-    assert encode_cmd("*", "STATUS", []) == "CMD|*|STATUS"
+    # Broadcast still works; seq is sent but untracked by ServerOutbox
+    # because there's no single agent to wait for an ACK from.
+    assert encode_cmd("*", 1, "STATUS", []) == "CMD|*|1|STATUS"
+
+
+def test_cmd_roundtrip_with_seq():
+    """Decoded CMD surfaces seq on msg.seq so the agent can ACK by it."""
+    from comms.protocol import encode_cmd, decode
+    wire = encode_cmd("N01", 42, "START", ["pmr"])
+    msg = decode(wire)
+    assert msg.tag == "CMD"
+    assert msg.agent_id == "N01"
+    assert msg.seq == 42
+    assert msg.fields["verb"] == "START"
+    assert msg.fields["args"] == ["pmr"]
+
+
+def test_cfg_roundtrip_with_seq():
+    from comms.protocol import encode_cfg, decode
+    wire = encode_cfg("N01", 13, "det_rate_sec", "4")
+    msg = decode(wire)
+    assert msg.tag == "CFG"
+    assert msg.seq == 13
+    assert msg.fields["key"] == "det_rate_sec"
+    assert msg.fields["value"] == "4"
 
 
 def test_encode_det_roundtrip():
@@ -92,7 +118,7 @@ def test_encode_ack_and_res():
 
 def test_encode_cfg():
     from comms.protocol import encode_cfg
-    assert encode_cfg("N01", "det_rate_sec", "4") == "CFG|N01|det_rate_sec|4"
+    assert encode_cfg("N01", 5, "det_rate_sec", "4") == "CFG|N01|5|det_rate_sec|4"
 
 
 def test_encode_approve():

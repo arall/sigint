@@ -48,6 +48,7 @@ Distributed C2:
 - systemd service install for server and agent (`scripts/install-*.sh`, `@PROJECT_DIR@` templating)
 - JSON config for agent (`configs/agent.json`), matching the server pattern
 - Auto-re-approve on HELLO from an already-approved agent — a HELLO from someone in `agents.json` means the agent lost its `state.json` (fresh service install), so the server re-emits APPROVE automatically instead of waiting for an operator to hand-edit `adopted: true`.
+- Reliable server→agent CMD / CFG: `ServerOutbox` (`src/server/outbox.py`) allocates a seq per message, retries with exponential backoff (6 s → 120 s, 5 attempts max), stops on `ACK|<agent_id>|<seq>|ok` from the agent. Wire format now carries seq at position 2 for both CMD and CFG (`CMD|N01|<seq>|START|pmr`). Agent auto-ACKs on receipt *before* processing so a slow scanner start can't race a retry into a double-execution.
 
 Docs:
 
@@ -57,7 +58,6 @@ Docs:
 
 Small known rough edges — fixes are scoped, just not done yet:
 
-- **CMD retries** — server-originated `CMD START` / `CMD STOP` are single-shot broadcasts (`send_cmd` in `src/server/agent_manager.py:115` is one `self._send(...)`, no ACK / retry), lossy over LoRa. Operator clicks Start twice as a workaround. Real fix: mirror the agent's outbox (seq + ACK) on the server→agent direction so the CFGINFO re-fire isn't the only recovery path.
 - **DBTailer picks newest by mtime** — fine for a live scanner but SHM touches can bump older DBs' mtimes above the active one, causing detections to stop forwarding after a restart with multiple sessions (`_newest_db` in `src/agent/scanner_mgr.py:127` uses `max(candidates, key=os.path.getmtime)`). Switch to picking by filename timestamp (deterministic from the scanner's `<type>_YYYYMMDD_HHMMSS.db`).
 - **Category pager is client-side** — loads all rows up to the server's LIMIT, then slices locally so filters keep working across the whole set. For very long sessions the full row list is shipped on every refresh. Server-side offset+limit would scale better at the cost of refactoring the filter code.
 - **Agent BT/WiFi outbox saturation** — running the `bt` or `wifi` scanner in a populated area generates detections faster than the mesh can drain (LoRa airtime caps at ~1%, ~6 s per send). Outbox priority now keeps control messages alive, but the DET backlog itself still grows unboundedly. Mitigation today: don't run BT/WiFi continuously over mesh — run it locally on the server, or set a tight `--max-det-rate`. Real fix: agent-side per-persona rate-limit + sub-batch coalescing before enqueue, so we send "30 unique BLE personas in last minute" instead of every advertisement.
@@ -67,7 +67,6 @@ Small known rough edges — fixes are scoped, just not done yet:
 Concrete next things, roughly in order:
 
 1. **AIS RSSI capture** — `scanners/ais.py` logs `power_db=0`. rtl_ais has no signal-level output in NMEA; options are a Python receiver that extracts RSSI from the SDR pipeline, or patching rtl_ais. Once wired, the AIS calibration extractor lights up for coastal deployments (the ADS-B equivalent already ships).
-4. **Server→agent reliable CMD** — mirror the agent's outbox on the server side: seq + ACK + exponential backoff for CMD/CFG. Resolves the "CMD retries" In-flight item and lets operators click Start once.
 
 ## 💡 Ideas / future
 

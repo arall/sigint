@@ -62,6 +62,7 @@ SW_TESTS = [
     ("AgentManager (C2 ingest)",       "tests/sw/test_server_agent_manager.py"),
     ("Cross-node witnesses",           "tests/sw/test_cross_node_witnesses.py"),
     ("Replay .db over C2",             "tests/sw/test_replay_c2.py"),
+    ("Server CMD/CFG outbox",          "tests/sw/test_server_outbox.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")

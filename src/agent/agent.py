@@ -168,8 +168,23 @@ class Agent:
             return
 
         if msg.tag == "CMD":
+            # Server's ServerOutbox retries unacked CMDs with exponential
+            # backoff. Fire ACK immediately on receipt so the server stops
+            # retrying, *before* we do any work (scanner start/stop can
+            # take seconds, and a retry during that window would run the
+            # command twice).
+            if msg.seq is not None:
+                try:
+                    self._link.send(P.encode_ack(self._state.agent_id, msg.seq))
+                except Exception:
+                    pass
             self._handle_cmd(msg.fields["verb"], msg.fields["args"])
         elif msg.tag == "CFG":
+            if msg.seq is not None:
+                try:
+                    self._link.send(P.encode_ack(self._state.agent_id, msg.seq))
+                except Exception:
+                    pass
             self._handle_cfg(msg.fields["key"], msg.fields["value"])
 
     def _handle_cmd(self, verb: str, args: List[str]) -> None:

@@ -13,6 +13,8 @@ from comms import protocol as P
 from utils import db as _db
 from utils.logger import SignalDetection
 
+from .outbox import ServerOutbox
+
 
 # Ring buffer cap for the C2 comms log. ~500 events covers an hour at
 # roughly the worst-case ACK + STAT + DET cadence and stays well under
@@ -32,6 +34,11 @@ class AgentManager:
         self._info: Dict[str, dict] = {}
         self._seen_dedup: Dict[str, Set[int]] = {}
         self._comms_log: Deque[dict] = deque(maxlen=_COMMS_LOG_MAX)
+        # Server-side outbox for reliable CMD / CFG. `_send` logs the tx
+        # into the comms ring buffer as a side effect — every retry the
+        # outbox fires shows up there so operators can see the pressure.
+        self._outbox = ServerOutbox(send_fn=self._send)
+        self._outbox.start_ticker(interval_s=3.0)
         self._load_agents_json()
         self._conn = _db.connect(detection_db_path)
         link.on_message(self._on_msg)
@@ -112,11 +119,18 @@ class AgentManager:
             self._approved.pop(agent_id, None)
             self._save_agents_json_locked()
 
-    def send_cmd(self, agent_id: str, verb: str, args) -> None:
-        self._send(P.encode_cmd(agent_id, verb, list(args or [])))
+    def send_cmd(self, agent_id: str, verb: str, args) -> int:
+        """Enqueue a CMD with seq + retries. Returns the allocated seq
+        so the dashboard / caller can correlate with later ACK."""
+        return self._outbox.send_cmd(agent_id, verb, args)
 
-    def send_cfg(self, agent_id: str, key: str, value: str) -> None:
-        self._send(P.encode_cfg(agent_id, key, value))
+    def send_cfg(self, agent_id: str, key: str, value: str) -> int:
+        """Enqueue a CFG with seq + retries."""
+        return self._outbox.send_cfg(agent_id, key, value)
+
+    def pending_outbox(self, agent_id: str = None) -> list:
+        """Snapshot of unacked server-sent CMD/CFG (for diagnostics)."""
+        return self._outbox.pending(agent_id)
 
     # -- dispatch ---------------------------------------------------------
 
@@ -148,6 +162,12 @@ class AgentManager:
             self._on_cfginfo(msg.agent_id, msg.seq, msg.fields)
         elif msg.tag == "SCANINFO":
             self._on_scaninfo(msg.agent_id, msg.seq, msg.fields)
+        elif msg.tag == "ACK":
+            # Agent acked a server-sent CMD/CFG. Unblocks the outbox so
+            # it stops retrying. Non-matching seqs (e.g. an ACK from an
+            # older server session) are silently ignored.
+            if msg.seq is not None:
+                self._outbox.on_ack(msg.agent_id, msg.seq)
 
     def _on_cfginfo(self, agent_id: str, seq: Optional[int], fields: dict) -> None:
         with self._lock:

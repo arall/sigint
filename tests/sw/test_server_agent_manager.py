@@ -170,6 +170,42 @@ def test_hello_from_approved_agent_survives_restart(tmp_path):
     assert "N01" not in mgr2.pending()
 
 
+def test_send_cmd_goes_through_outbox_and_ack_clears_it(tmp_path):
+    """Operator clicks Start → AgentManager hands to ServerOutbox →
+    CMD wire is sent with seq → agent ACK clears the pending. Guards
+    the whole reliable-CMD round-trip."""
+    from server.agent_manager import AgentManager
+    link = FakeLink()
+    mgr = AgentManager(link=link, state_dir=str(tmp_path),
+                       detection_db_path=str(tmp_path / "agents.db"))
+    link._cb("HELLO|N01|0.1|rpi0w")
+    mgr.approve("N01")
+    link.sent.clear()
+
+    seq = mgr.send_cmd("N01", "START", ["pmr"])
+    # Wire format carries seq at position 2.
+    cmd = [t for t in link.sent if t.startswith("CMD|N01|")][0]
+    parts = cmd.split("|")
+    assert parts[2] == str(seq)
+    assert parts[3] == "START"
+    assert mgr.pending_outbox("N01") != []
+
+    # Agent ACKs with matching seq — pending clears.
+    link._cb(f"ACK|N01|{seq}|ok")
+    assert mgr.pending_outbox("N01") == []
+
+
+def test_cmd_from_unknown_agent_ack_is_ignored(tmp_path):
+    """ACK from a non-approved agent shouldn't feed the outbox."""
+    from server.agent_manager import AgentManager
+    link = FakeLink()
+    mgr = AgentManager(link=link, state_dir=str(tmp_path),
+                       detection_db_path=str(tmp_path / "agents.db"))
+    # No approval — ACK should be filtered by the pre-dispatch gate.
+    link._cb("ACK|N99|42|ok")
+    assert mgr.pending_outbox() == []
+
+
 def test_hello_from_unknown_agent_still_goes_pending(tmp_path):
     """Regression guard: only approved agents get the re-APPROVE path;
     new agents still land in pending."""
