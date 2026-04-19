@@ -1,0 +1,46 @@
+{
+  "_comment": "Reference emitter registry used by `sdr.py calibrate ingest`. Copy to calibration_emitters.json (gitignored) and fill in your local known emitters. Every entry needs lat/lon and eirp_dbm (Effective Isotropic Radiated Power at the antenna). eirp_stderr is optional — it scales how much each sample contributes to the offset fit (default 3 dB).",
+
+  "wifi": {
+    "_comment": "Keyed by BSSID (lowercase, colons). Typical consumer AP is ~20 dBm; outdoor mesh nodes can hit 30 dBm. Run `sdr.py wifi` and grep for APs you can physically verify the location of.",
+    "a4:2b:b0:00:00:01": {
+      "lat": 42.5098, "lon": 1.5361,
+      "eirp_dbm": 20, "eirp_stderr": 2,
+      "note": "home AP in living room"
+    },
+    "fc:ec:da:11:22:33": {
+      "lat": 42.5101, "lon": 1.5348,
+      "eirp_dbm": 24, "eirp_stderr": 3,
+      "note": "neighbour outdoor mesh node"
+    }
+  },
+
+  "fm": {
+    "_comment": "Keyed by human label. freq_hz is the carrier frequency. EIRP pulled from local broadcast authority (FCC/equivalent) — typical urban FM is 40–60 dBm (10 kW to 1 MW).",
+    "RNA-AD-88.0": {
+      "freq_hz": 88.0e6,
+      "lat": 42.5000, "lon": 1.5200,
+      "eirp_dbm": 50
+    },
+    "RTVE-98.5": {
+      "freq_hz": 98.5e6,
+      "lat": 42.5100, "lon": 1.5300,
+      "eirp_dbm": 53
+    }
+  },
+
+  "cell": {
+    "_comment": "Keyed by CGI (MCC-MNC-LAC-CID) or equivalent. Inert until gsm/lte scanners start logging the serving cell ID in metadata — kept here so the registry is forward-compatible.",
+    "214-03-42-2048": {
+      "freq_hz": 816e6,
+      "lat": 42.5150, "lon": 1.5400,
+      "eirp_dbm": 43
+    }
+  },
+
+  "adsb_eirp": {
+    "_comment": "Optional per-category EIRP overrides (dBm). Falls back to defaults in calibration_sources.py if not set.",
+    "Heavy": 53,
+    "Light": 49
+  }
+}

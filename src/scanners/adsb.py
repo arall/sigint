@@ -133,6 +133,11 @@ class Aircraft:
     emergency: Optional[str] = None  # emergency status from squawk
     last_seen: datetime = field(default_factory=datetime.now)
     message_count: int = 0
+    # Recent mean RSSI in dBFS from dump1090/readsb aircraft.json. SBS has no
+    # signal level, so this is populated by a JSON poller in parallel. Stays
+    # None until the poller picks up the first update; scanners should treat
+    # None as "unknown" and log power_db=0 as before for backward compat.
+    rssi: Optional[float] = None
 
     # For CPR position decoding
     _cpr_even_lat: Optional[float] = None
@@ -585,6 +590,75 @@ def demodulate_message(samples: np.ndarray, start_idx: int) -> Optional[bytes]:
     return bytes(msg_bytes)
 
 
+class AircraftJsonPoller:
+    """Background thread that reads `aircraft.json` written by dump1090/readsb
+    and copies per-aircraft RSSI into an existing aircraft_db.
+
+    The SBS socket (port 30003) that `Dump1090Client` consumes is pure text
+    and has no signal-level field. dump1090-fa / readsb / dump1090-mutability
+    all support `--write-json <dir>` which emits `aircraft.json` every 1s
+    containing a `rssi` field per aircraft (recent mean in dBFS). Polling
+    that file in parallel lets us attach signal level to the Aircraft
+    objects without rewriting the SBS path.
+    """
+
+    def __init__(self, json_dir: str, aircraft_db: Dict[str, Aircraft],
+                 interval_s: float = 1.0):
+        self.json_dir = json_dir
+        self.aircraft_db = aircraft_db
+        self.interval_s = interval_s
+        self.running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self.running = True
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.running = False
+        if self._thread:
+            self._thread.join(timeout=2.0)
+
+    def _poll_loop(self) -> None:
+        path = os.path.join(self.json_dir, "aircraft.json")
+        last_mtime = 0.0
+        while self.running:
+            try:
+                stat = os.stat(path)
+                if stat.st_mtime != last_mtime:
+                    last_mtime = stat.st_mtime
+                    with open(path) as f:
+                        data = json.load(f)
+                    for entry in data.get("aircraft") or []:
+                        self._apply_entry(entry)
+            except FileNotFoundError:
+                pass  # dump1090 may not have written it yet
+            except Exception:
+                # Malformed JSON during a partial write, etc. Try again.
+                pass
+            time.sleep(self.interval_s)
+
+    def _apply_entry(self, entry: dict) -> None:
+        icao = (entry.get("hex") or "").upper().lstrip("~")
+        if not icao:
+            return
+        rssi = entry.get("rssi")
+        if rssi is None:
+            return
+        ac = self.aircraft_db.get(icao)
+        if ac is None:
+            # SBS thread hasn't seen this aircraft yet. Create it so the
+            # RSSI isn't lost; SBS path will fill in callsign/alt/position
+            # once it sees a message.
+            ac = Aircraft(icao=icao)
+            self.aircraft_db[icao] = ac
+        try:
+            ac.rssi = float(rssi)
+        except (TypeError, ValueError):
+            return
+
+
 class Dump1090Client:
     """Client to receive decoded data from dump1090."""
 
@@ -733,6 +807,8 @@ class ADSBScanner:
         self.aircraft_db: Dict[str, Aircraft] = {}
         self.dump1090_process = None
         self.dump1090_client = None
+        self.json_poller: Optional[AircraftJsonPoller] = None
+        self._json_dir: Optional[str] = None
 
         # Check available tools
         self.tools = check_tools_installed()
@@ -749,9 +825,16 @@ class ADSBScanner:
         if not dump1090_cmd:
             return False
 
+        # Let dump1090 write aircraft.json into a tmp dir we own, then poll
+        # it for per-aircraft RSSI (SBS has no signal level). Path includes
+        # the PID so parallel scans don't collide.
+        import tempfile
+        self._json_dir = tempfile.mkdtemp(prefix=f"sigint-adsb-{os.getpid()}-")
+
         try:
             # Build command — readsb needs explicit port flags
-            cmd_args = [dump1090_cmd, '--net', '--gain', str(self.gain)]
+            cmd_args = [dump1090_cmd, '--net', '--gain', str(self.gain),
+                        '--write-json', self._json_dir]
             if dump1090_cmd == 'readsb':
                 cmd_args += ['--device-type', 'rtlsdr', '--net-sbs-port', '30003', '--no-interactive']
             else:
@@ -771,6 +854,13 @@ class ADSBScanner:
             self.dump1090_client = Dump1090Client()
             if self.dump1090_client.connect():
                 self.dump1090_client.start()
+                # Parallel poller for RSSI. Shares the aircraft_db with the
+                # SBS client so enriched fields land in one place.
+                self.json_poller = AircraftJsonPoller(
+                    json_dir=self._json_dir,
+                    aircraft_db=self.dump1090_client.aircraft_db,
+                )
+                self.json_poller.start()
                 return True
 
         except Exception as e:
@@ -780,12 +870,22 @@ class ADSBScanner:
 
     def stop_dump1090(self):
         """Stop dump1090."""
+        if self.json_poller:
+            self.json_poller.stop()
+
         if self.dump1090_client:
             self.dump1090_client.stop()
 
         if self.dump1090_process:
             self.dump1090_process.terminate()
             self.dump1090_process.wait(timeout=5)
+
+        if self._json_dir and os.path.isdir(self._json_dir):
+            import shutil as _sh
+            try:
+                _sh.rmtree(self._json_dir, ignore_errors=True)
+            except Exception:
+                pass
 
     def scan_native(self):
         """Scan using native Python decoding."""
@@ -878,12 +978,20 @@ class ADSBScanner:
                     "category": ac.category or "",
                     "on_ground": ac.on_ground,
                     "emergency": ac.emergency or "",
+                    "rssi_dbfs": ac.rssi,
                 }
+                # Power from the aircraft.json poller (dBFS). Noise floor is
+                # a nominal value — dump1090 doesn't expose one — chosen so
+                # SNR (= power - noise) stays positive and the min_snr_db=0
+                # filter still lets detections through. Calibration consumes
+                # power_db directly and doesn't care about the noise floor.
+                power_db = float(ac.rssi) if ac.rssi is not None else 0.0
+                noise_db = -60.0 if ac.rssi is not None else 0.0
                 self.logger.log_signal(
                     signal_type="ADS-B",
                     frequency_hz=ADSB_FREQUENCY,
-                    power_db=0,
-                    noise_floor_db=0,
+                    power_db=power_db,
+                    noise_floor_db=noise_db,
                     channel=ac.icao,
                     latitude=ac.latitude,
                     longitude=ac.longitude,

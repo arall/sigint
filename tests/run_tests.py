@@ -56,6 +56,7 @@ SW_TESTS = [
     ("Web SQL state/log/activity",     "tests/sw/test_web_fetch_state.py"),
     ("Web sessions",                   "tests/sw/test_web_sessions.py"),
     ("Apple Continuity + AirTag",      "tests/sw/test_apple_continuity.py"),
+    ("Opportunistic RSSI calibration", "tests/sw/test_calibration.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")

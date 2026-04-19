@@ -14,6 +14,14 @@ from datetime import datetime
 from typing import Optional
 
 from utils import db as _db
+from utils import calibration as _cal
+
+
+# Per-run calibration view, set in run_triangulation so load_detections /
+# correlate / estimate_position can all transparently apply offsets without
+# plumbing a new parameter through each call.
+_RUN_CAL: _cal.Calibration = _cal.Calibration.empty()
+_CAL_STATS = {"applied": 0, "total": 0}
 
 
 # Log-distance path loss defaults: (exponent n, RSSI at 1m in dB)
@@ -70,7 +78,28 @@ def offset_position(lat, lon, north_m, east_m):
     return lat + math.degrees(dlat), lon + math.degrees(dlon)
 
 
-def load_detections(db_path):
+def _apply_calibration_to_rows(rows, node_id: str) -> None:
+    """Set `_power_cal` and `_cal_applied` on each row for a given node.
+
+    Separated from load so run_triangulation can apply calibration *after*
+    inferring the node_id from the file's first detection — some scanners
+    (WiFi beacon) put the *emitter* BSSID into `device_id`, not the node,
+    so a row-local lookup via device_id would miss every calibration entry.
+    """
+    for row in rows:
+        try:
+            freq_hz = float(row.get("frequency_hz") or 0.0)
+        except (TypeError, ValueError):
+            freq_hz = 0.0
+        corrected, applied = _cal.apply_offset(row["_power"], node_id, freq_hz, _RUN_CAL)
+        row["_power_cal"] = corrected
+        row["_cal_applied"] = applied
+        _CAL_STATS["total"] += 1
+        if applied:
+            _CAL_STATS["applied"] += 1
+
+
+def load_detections(db_path, node_id=None):
     """Load and parse a .db detection log. Returns list of dicts."""
     detections = []
     conn = _db.connect(db_path, readonly=True)
@@ -109,8 +138,12 @@ def load_detections(db_path):
         except (json.JSONDecodeError, TypeError):
             row["_meta"] = {}
 
+        row["_power_cal"] = row["_power"]
+        row["_cal_applied"] = False
         row["_source_file"] = db_path
         detections.append(row)
+    if node_id is not None:
+        _apply_calibration_to_rows(detections, node_id)
     return detections
 
 
@@ -202,7 +235,11 @@ def correlate(file_detections, time_window_s=5.0, strategy="auto"):
                             "node": nid,
                             "lat": det["_lat"],
                             "lon": det["_lon"],
-                            "power_db": det["_power"],
+                            # Prefer the calibration-corrected reading. When no
+                            # calibration is available this equals _power.
+                            "power_db": det.get("_power_cal", det["_power"]),
+                            "power_db_raw": det["_power"],
+                            "cal_applied": bool(det.get("_cal_applied", False)),
                             "noise_floor_db": det["_noise"],
                             "timestamp": det["timestamp"],
                             "meta": det.get("_meta", {}),
@@ -455,10 +492,29 @@ def result_to_cot(group, position):
 
 def run_triangulation(args, tak_client=None):
     """Entry point called from sdr.py dispatch."""
+    global _RUN_CAL
     files = args.files
     if len(files) < 2:
         print("Error: need at least 2 .db files from different nodes")
         return
+
+    # Load calibration view once for the whole run.
+    if getattr(args, "no_calibration", False):
+        _RUN_CAL = _cal.Calibration.empty()
+        print("Calibration: disabled (--no-calibration)")
+    else:
+        cal_path = getattr(args, "calibration_file", None)
+        if cal_path is None:
+            import os as _os
+            cal_path = _cal._cdb.default_path(getattr(args, "output", "output"))
+        _RUN_CAL = _cal.load_calibration(cal_path)
+        if _RUN_CAL.offsets:
+            devs = sorted({dev for dev, _ in _RUN_CAL.offsets})
+            print(f"Calibration: loaded offsets for {len(devs)} node(s) from {cal_path}")
+        else:
+            print(f"Calibration: no offsets found at {cal_path} (using raw power)")
+    _CAL_STATS["applied"] = 0
+    _CAL_STATS["total"] = 0
 
     # Load all files
     print(f"Loading {len(files)} detection DBs...")
@@ -478,6 +534,9 @@ def run_triangulation(args, tak_client=None):
             print(f"  Warning: {path} contains {sig_type} data — these targets"
                   " self-report position, triangulation not needed")
 
+        # Apply calibration now that we know the node identity for this file.
+        _apply_calibration_to_rows(dets, node_id)
+
         print(f"  {path}: {len(dets)} detections, node={node_id}, type={sig_type}")
         file_data.append((dets, node_id))
 
@@ -489,6 +548,13 @@ def run_triangulation(args, tak_client=None):
     node_ids = [nid for _, nid in file_data]
     if len(set(node_ids)) < len(node_ids):
         print("Warning: duplicate node IDs detected — are these from different positions?")
+
+    # Report calibration application rate across all loaded detections.
+    if _CAL_STATS["total"]:
+        if _RUN_CAL.offsets:
+            pct = 100.0 * _CAL_STATS["applied"] / _CAL_STATS["total"]
+            print(f"  Calibration: applied to {_CAL_STATS['applied']}/"
+                  f"{_CAL_STATS['total']} detections ({pct:.0f}%)")
 
     # Correlate
     strategy = getattr(args, "strategy", "auto")

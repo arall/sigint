@@ -18,6 +18,8 @@ from collections import Counter
 from datetime import datetime, timedelta
 
 from utils import db as _db
+from utils import calibration as _cal
+from utils import calibration_db as _cdb
 
 from .categories import CATEGORIES, CATEGORY_LABELS, CATEGORY_ORDER, category_of
 from .tailer import _extract_detail, _extract_uid
@@ -25,6 +27,31 @@ from .tailer import _extract_detail, _extract_uid
 
 DEFAULT_WINDOW_SECONDS = None   # no time window — rely on DEFAULT_LIMIT
 DEFAULT_LIMIT = 5000
+
+
+# Cached Calibration view. Load on demand and only re-read when the
+# cal DB's mtime changes, so the Map tab doesn't pay a SQLite round-trip
+# on every request.
+_CAL_CACHE = {"path": None, "mtime": None, "cal": _cal.Calibration.empty()}
+
+
+def _get_calibration(output_dir):
+    path = _cdb.default_path(output_dir)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        # No cal DB yet → empty view, but don't churn the cache.
+        if _CAL_CACHE["path"] != path:
+            _CAL_CACHE["path"] = path
+            _CAL_CACHE["mtime"] = None
+            _CAL_CACHE["cal"] = _cal.Calibration.empty()
+        return _CAL_CACHE["cal"]
+    if _CAL_CACHE["path"] == path and _CAL_CACHE["mtime"] == mtime:
+        return _CAL_CACHE["cal"]
+    _CAL_CACHE["path"] = path
+    _CAL_CACHE["mtime"] = mtime
+    _CAL_CACHE["cal"] = _cal.load_calibration(path)
+    return _CAL_CACHE["cal"]
 
 
 def _load_transcripts_for_db(db_path):
@@ -371,14 +398,30 @@ def fetch_agent_last_positions(output_dir):
     return out
 
 
-def _row_for_map(r):
+def _row_for_map(r, cal=None):
     freq_hz = r["frequency_hz"] or 0
+    power_db = r["power_db"]
+    power_db_cal = None
+    cal_applied = False
+    if cal is not None and power_db is not None and freq_hz:
+        # WiFi-AP logs device_id=BSSID (emitter), not node; the lookup
+        # silently misses those which is the correct behaviour — the ring
+        # just stays uncalibrated. For every other scanner device_id is
+        # the node identity used by `sdr.py calibrate ingest --node-id`.
+        corrected, applied = _cal.apply_offset(
+            float(power_db), r["device_id"] or "", float(freq_hz), cal,
+        )
+        if applied:
+            power_db_cal = round(corrected, 1)
+            cal_applied = True
     return {
         "timestamp": r["timestamp"] or "",
         "ts_epoch": r["ts_epoch"] or 0,
         "signal_type": r["signal_type"] or "",
         "freq_mhz": round(freq_hz / 1e6, 4) if freq_hz else 0,
-        "power_db": r["power_db"],
+        "power_db": power_db,
+        "power_db_cal": power_db_cal,
+        "cal_applied": cal_applied,
         "snr_db": round(r["snr_db"], 1) if r["snr_db"] is not None else None,
         "channel": r["channel"] or "",
     }
@@ -414,6 +457,7 @@ def fetch_detections_by_source(output_dir, limit_per_source=200,
         import time as _time
         now = _time.time()
     since = (now - window_seconds) if window_seconds else None
+    cal = _get_calibration(output_dir)
     out: dict = {}
     for name in names:
         path = os.path.join(output_dir, name)
@@ -445,7 +489,7 @@ def fetch_detections_by_source(output_dir, limit_per_source=200,
                 lst = out.setdefault(key, [])
                 if len(lst) >= limit_per_source:
                     continue
-                lst.append(_row_for_map(r))
+                lst.append(_row_for_map(r, cal=cal))
         except Exception:
             pass
         finally:

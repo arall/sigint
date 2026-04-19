@@ -751,6 +751,99 @@ Examples:
         action="store_true",
         help="Use SNR instead of raw power (better when nodes have different gains)",
     )
+    tri_parser.add_argument(
+        "--no-calibration",
+        action="store_true",
+        help="Skip per-node RSSI calibration (use raw power_db as-is)",
+    )
+    tri_parser.add_argument(
+        "--calibration-file",
+        default=None,
+        metavar="PATH",
+        help="Calibration DB path (default: <output>/calibration.db)",
+    )
+
+    # Opportunistic RSSI calibration
+    cal_parser = subparsers.add_parser(
+        "calibrate",
+        aliases=["cal"],
+        help="Solve per-node RX offsets against known-position emitters",
+    )
+    cal_sub = cal_parser.add_subparsers(dest="calibrate_cmd", metavar="subcommand")
+
+    cal_ingest = cal_sub.add_parser(
+        "ingest", help="Match detections to reference emitters and fit offsets")
+    cal_ingest.add_argument("files", nargs="+",
+                            help="Detection .db file(s) captured by this node")
+    cal_ingest.add_argument("--node-id", required=True,
+                            help="Identifier for this physical node (e.g. N01)")
+    cal_ingest.add_argument("--db", default=None,
+                            help="Calibration DB path (default: <output>/calibration.db)")
+    cal_ingest.add_argument(
+        "--emitters", default=None,
+        help="Reference emitter JSON (default: configs/calibration_emitters.json)")
+    cal_ingest.add_argument("--lat", type=float, default=None,
+                            help="Override node latitude (defaults to stored position)")
+    cal_ingest.add_argument("--lon", type=float, default=None,
+                            help="Override node longitude")
+    cal_ingest.add_argument("--node-alt", type=float, default=None,
+                            help="Node altitude in metres above sea level (default: 0)")
+    cal_ingest.add_argument(
+        "--source", action="append", default=None,
+        choices=["adsb", "ais", "surveyed", "all"],
+        help="Restrict to one or more sources (default: all)")
+    cal_ingest.add_argument("--since-hours", type=float, default=None,
+                            help="Only ingest detections newer than N hours")
+    cal_ingest.add_argument("--method", default=None,
+                            choices=["huber", "mean"],
+                            help="Fit method (default: huber)")
+    cal_ingest.add_argument("--max-age-days", type=float, default=None,
+                            help="Samples older than N days are excluded from the fit")
+    cal_ingest.add_argument("--dry-run", action="store_true",
+                            help="Print what would be ingested without writing")
+
+    cal_show = cal_sub.add_parser("show", help="Print current solved offsets")
+    cal_show.add_argument("--db", default=None)
+    cal_show.add_argument("--node-id", dest="cal_node_filter", default=None,
+                          help="Only show this node's offsets")
+    cal_show.add_argument("--json", dest="as_json", action="store_true",
+                          help="Emit JSON")
+
+    cal_recompute = cal_sub.add_parser(
+        "recompute", help="Refit cal_offsets from existing cal_samples")
+    cal_recompute.add_argument("--db", default=None)
+    cal_recompute.add_argument("--node-id", dest="cal_node_filter", default=None)
+    cal_recompute.add_argument("--method", default=None,
+                               choices=["huber", "mean"])
+    cal_recompute.add_argument("--max-age-days", type=float, default=None)
+
+    cal_setpos = cal_sub.add_parser(
+        "set-position", help="Store a surveyed lat/lon for a node")
+    cal_setpos.add_argument("--node-id", required=True)
+    cal_setpos.add_argument("--lat", type=float, required=True)
+    cal_setpos.add_argument("--lon", type=float, required=True)
+    cal_setpos.add_argument("--alt", type=float, default=None)
+    cal_setpos.add_argument("--mobile", action="store_true",
+                            help="Mark node as mobile (skips surveyed-emitter matching)")
+    cal_setpos.add_argument("--db", default=None)
+
+    cal_watch = cal_sub.add_parser(
+        "watch", help="Continuously ingest from .db files in --output")
+    cal_watch.add_argument("--node-id", required=True)
+    cal_watch.add_argument("--db", default=None)
+    cal_watch.add_argument("--emitters", default=None)
+    cal_watch.add_argument("--lat", type=float, default=None)
+    cal_watch.add_argument("--lon", type=float, default=None)
+    cal_watch.add_argument("--node-alt", type=float, default=None)
+    cal_watch.add_argument("--interval", type=int, default=10,
+                           help="Poll interval in seconds (default: 10)")
+    cal_watch.add_argument("--source", action="append", default=None,
+                           choices=["adsb", "ais", "surveyed", "all"])
+    cal_watch.add_argument("--since-hours", type=float, default=None)
+    cal_watch.add_argument("--method", default=None,
+                           choices=["huber", "mean"])
+    cal_watch.add_argument("--max-age-days", type=float, default=None)
+    cal_watch.add_argument("--dry-run", action="store_true")
 
     # Heatmap from detection logs
     heatmap_parser = subparsers.add_parser(
@@ -1055,6 +1148,10 @@ def _dispatch_scanner(args):
         from utils.triangulate import run_triangulation
         run_triangulation(args, tak_client=tak_client)
         return
+
+    if args.command in ("calibrate", "cal"):
+        from utils.calibration import run_calibration
+        sys.exit(run_calibration(args))
 
     if args.command == "heatmap":
         from utils.heatmap import HeatmapGenerator
