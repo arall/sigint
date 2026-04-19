@@ -120,6 +120,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_agent_comms(qs)
         elif path == '/api/map/sources':
             self._serve_map_sources(qs)
+        elif path == '/api/map/triangulations':
+            self._serve_map_triangulations(qs)
         elif path == '/api/fpv/frame':
             self._serve_fpv_frame()
         elif path == '/api/fpv/stream':
@@ -146,6 +148,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._agents_cmd(data)
         elif path == '/api/agents/cfg':
             self._agents_cfg(data)
+        elif path == '/api/map/sources/position':
+            self._map_sources_set_position(data)
         else:
             self.send_error(404)
 
@@ -544,6 +548,12 @@ class WebHandler(BaseHTTPRequestHandler):
         )
         agent_positions = fetch_agent_last_positions(out_dir)
 
+        # Manual position overrides from drag-to-reposition. These win
+        # over both the config-derived server position and the DET-derived
+        # agent positions — an explicit human action is authoritative.
+        from . import position_overrides
+        overrides = position_overrides.load(out_dir)
+
         mgr = getattr(self.server, 'agent_manager', None)
         approved_ids = set(mgr.approved().keys()) if mgr else set()
         # Union of sources that should appear in the panel: server + every
@@ -552,20 +562,114 @@ class WebHandler(BaseHTTPRequestHandler):
 
         sources = []
         for sid in sorted(source_ids, key=lambda s: (s != "server", s)):
-            if sid == "server":
+            override = overrides.get(sid) if isinstance(overrides, dict) else None
+            if override and "lat" in override and "lon" in override:
+                pos = {"lat": float(override["lat"]), "lon": float(override["lon"])}
+                pos_source = "manual"
+            elif sid == "server":
                 pos = server_pos
-                label = "Server"
+                pos_source = "config" if server_pos else None
             else:
                 p = agent_positions.get(sid)
                 pos = {"lat": p["lat"], "lon": p["lon"]} if p else None
-                label = sid
+                pos_source = "detection" if pos else None
+            label = "Server" if sid == "server" else sid
             sources.append({
                 "id": sid,
                 "label": label,
                 "position": pos,
+                "position_source": pos_source,
                 "detections": by_src.get(sid, []),
             })
         self._send_json({"sources": sources})
+
+    def _serve_map_triangulations(self, qs):
+        """Real-time multi-node triangulations for the Map tab.
+
+        Groups recent detections across sources by (signal_type, key,
+        time-window) and multilaterates per group. The window query param
+        is in hours to match `/api/map/sources`; we convert to seconds
+        internally. Defaults to 5 minutes so the map shows "what's live".
+        """
+        try:
+            max_results = int(qs.get("limit", ["50"])[0])
+        except (TypeError, ValueError):
+            max_results = 50
+        max_results = max(1, min(max_results, 500))
+
+        # Default window is 5 min (matches triangulate_live.DEFAULT_WINDOW_SECONDS)
+        # — unlike /api/map/sources we keep this tight because triangulating
+        # stale readings produces ghost fixes.
+        window_seconds = 300.0
+        raw = qs.get("window", [None])[0]
+        if raw:
+            try:
+                window_hours = max(0.01, min(float(raw), 168))
+                window_seconds = window_hours * 3600
+            except (ValueError, TypeError):
+                pass
+
+        from .triangulate_live import fetch_triangulations
+        try:
+            results = fetch_triangulations(
+                self.server.output_dir,
+                window_seconds=window_seconds,
+                max_results=max_results,
+            )
+        except Exception as e:
+            self._send_json({"triangulations": [], "error": str(e)})
+            return
+        self._send_json({"triangulations": results})
+
+    def _map_sources_set_position(self, data):
+        """Persist a drag-to-reposition for a source (server or agent).
+
+        Writes `output/position_overrides.json` and mirrors the new lat/lon
+        into the calibration DB's cal_meta so `sdr.py calibrate ingest`
+        uses the corrected position without a separate set-position call.
+        """
+        sid = data.get("id")
+        if not sid or not isinstance(sid, str):
+            self.send_error(400, "id required")
+            return
+        try:
+            lat = float(data.get("lat"))
+            lon = float(data.get("lon"))
+        except (TypeError, ValueError):
+            self.send_error(400, "lat/lon must be numeric")
+            return
+
+        from . import position_overrides
+        try:
+            entry = position_overrides.set(self.server.output_dir, sid, lat, lon)
+        except ValueError as e:
+            self.send_error(400, str(e))
+            return
+        except Exception as e:
+            self.send_error(500, str(e))
+            return
+
+        # Mirror into calibration so the expected-RSSI math uses the new
+        # position immediately. Quiet on failure — calibration DB is
+        # optional infrastructure.
+        try:
+            from utils import calibration_db as _cdb
+            cal_path = _cdb.default_path(self.server.output_dir)
+            conn = _cdb.connect(cal_path)
+            try:
+                _cdb.set_meta(conn, f"node_lat:{sid}", f"{lat:.7f}")
+                _cdb.set_meta(conn, f"node_lon:{sid}", f"{lon:.7f}")
+            finally:
+                conn.close()
+            # Invalidate the Map tab's cached calibration view so the
+            # next ring computation sees the moved node.
+            from . import fetch as _fetch
+            _fetch._CAL_CACHE["path"] = None
+            _fetch._CAL_CACHE["mtime"] = None
+        except Exception:
+            pass
+
+        self._send_json({"ok": True, "id": sid, "position": entry})
 
     def _agents_approve(self, data):
         """Approve a pending agent."""

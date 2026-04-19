@@ -57,6 +57,8 @@ SW_TESTS = [
     ("Web sessions",                   "tests/sw/test_web_sessions.py"),
     ("Apple Continuity + AirTag",      "tests/sw/test_apple_continuity.py"),
     ("Opportunistic RSSI calibration", "tests/sw/test_calibration.py"),
+    ("Live multi-node triangulation",  "tests/sw/test_triangulate_live.py"),
+    ("Position overrides (drag)",      "tests/sw/test_position_overrides.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")

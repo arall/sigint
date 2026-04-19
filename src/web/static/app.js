@@ -1432,18 +1432,20 @@ setInterval(() => {
 // visible; historical session freezes the map like other category tabs.
 let _map = null;
 const _mapLayers = {
-  aircraft:    null,
-  vessels:     null,
-  drones:      null,
-  operators:   null,
-  meshtastic:  null,
+  aircraft:       null,
+  vessels:        null,
+  drones:         null,
+  operators:      null,
+  meshtastic:     null,
+  triangulations: null,
 };
 const _MAP_COLORS = {
-  aircraft:    '#2196f3',
-  vessels:     '#4caf50',
-  drones:      '#f44336',
-  operators:   '#ff9800',
-  meshtastic:  '#ab47bc',
+  aircraft:       '#2196f3',
+  vessels:        '#4caf50',
+  drones:         '#f44336',
+  operators:      '#ff9800',
+  meshtastic:     '#ab47bc',
+  triangulations: '#e91e63',
 };
 
 // Source-based layers: one per detection source (server + each agent).
@@ -1462,7 +1464,7 @@ function _sourceColor(id, idx) {
 
 // Per-signal-type path-loss parameters for the uncalibrated distance
 // estimate rendered as rings around each source. n is the path-loss
-// exponent; snr_ref_db is a rough SNR-at-1m baseline. Values borrowed
+// exponent; snr_1m is a rough SNR-at-1m baseline. Values borrowed
 // from docs/triangulation.md, adapted to SNR (rather than dBm RSSI,
 // which we can't trust without calibration).
 const _PATH_LOSS = {
@@ -1483,6 +1485,28 @@ const _PATH_LOSS = {
   'lora':     {n: 2.3, snr_1m: 35},
   '_default': {n: 2.5, snr_1m: 40},
 };
+// RSSI-based parameters used when the server has already applied per-node
+// calibration — then `power_db_cal` is in dBm and we can use the standard
+// log-distance model with a dBm reference. Values mirror PATH_LOSS_DEFAULTS
+// in src/utils/triangulate.py.
+const _PATH_LOSS_RSSI = {
+  'PMR446':   {n: 2.2, rssi_1m: -20},
+  'dPMR':     {n: 2.2, rssi_1m: -20},
+  '70cm':     {n: 2.2, rssi_1m: -20},
+  '2m':       {n: 2.2, rssi_1m: -20},
+  'FRS':      {n: 2.2, rssi_1m: -20},
+  'MarineVHF':{n: 2.2, rssi_1m: -20},
+  'FM_voice': {n: 2.2, rssi_1m: -20},
+  'keyfob':   {n: 2.7, rssi_1m: -30},
+  'tpms':     {n: 2.5, rssi_1m: -35},
+  'GSM':      {n: 3.0, rssi_1m: -20},
+  'LTE':      {n: 3.0, rssi_1m: -20},
+  'BLE-Adv':  {n: 2.5, rssi_1m: -40},
+  'WiFi-Probe':{n: 2.7, rssi_1m: -30},
+  'WiFi-AP':  {n: 2.7, rssi_1m: -30},
+  'lora':     {n: 2.3, rssi_1m: -30},
+  '_default': {n: 2.5, rssi_1m: -30},
+};
 function _distanceFromSnr(signal_type, snr_db) {
   if (snr_db == null) return null;
   const pl = _PATH_LOSS[signal_type] || _PATH_LOSS._default;
@@ -1491,6 +1515,24 @@ function _distanceFromSnr(signal_type, snr_db) {
   // clamp to something sane so a stray low-SNR hit doesn't paint a
   // 50 km circle that dominates the map
   return Math.max(1, Math.min(d, 5000));
+}
+function _distanceFromRssi(signal_type, rssi_dbm) {
+  if (rssi_dbm == null) return null;
+  const pl = _PATH_LOSS_RSSI[signal_type] || _PATH_LOSS_RSSI._default;
+  const d = Math.pow(10, (pl.rssi_1m - rssi_dbm) / (10 * pl.n));
+  return Math.max(1, Math.min(d, 5000));
+}
+// Prefer calibrated-RSSI distance when the server has applied per-node
+// offsets. Falls back to the SNR estimate so unknown-offset nodes still
+// draw something.
+function _ringRadius(d) {
+  if (d.cal_applied && d.power_db_cal != null) {
+    const r = _distanceFromRssi(d.signal_type, d.power_db_cal);
+    if (r != null) return {r, calibrated: true};
+  }
+  const r = _distanceFromSnr(d.signal_type, d.snr_db);
+  if (r != null) return {r, calibrated: false};
+  return null;
 }
 
 function initMap() {
@@ -1530,6 +1572,53 @@ function _mapMarker(lat, lon, color, popup) {
     fillOpacity: 0.8,
     weight: 2,
   }).bindPopup(popup);
+}
+
+// Crosshair icon for multilateration results — distinguishes a *solved*
+// emitter from a direct observation (plain circleMarker).
+function _triangulationMarker(lat, lon, color, popup) {
+  const svg = '<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">'
+    + '<circle cx="9" cy="9" r="6" fill="none" stroke="' + color + '" stroke-width="2"/>'
+    + '<line x1="9" y1="0" x2="9" y2="5" stroke="' + color + '" stroke-width="2"/>'
+    + '<line x1="9" y1="13" x2="9" y2="18" stroke="' + color + '" stroke-width="2"/>'
+    + '<line x1="0" y1="9" x2="5" y2="9" stroke="' + color + '" stroke-width="2"/>'
+    + '<line x1="13" y1="9" x2="18" y2="9" stroke="' + color + '" stroke-width="2"/>'
+    + '</svg>';
+  return L.marker([lat, lon], {
+    icon: L.divIcon({
+      html: svg, className: '',
+      iconSize: [18, 18], iconAnchor: [9, 9],
+    }),
+  }).bindPopup(popup);
+}
+
+function _drawTriangulation(t) {
+  const color = _MAP_COLORS.triangulations;
+  const calFrac = t.num_nodes ? (t.cal_applied_count || 0) / t.num_nodes : 0;
+  const calFlag = calFrac >= 0.5 ? 'calibrated' : (calFrac > 0 ? 'partial calibration' : 'uncalibrated');
+  const obsLines = (t.observations || []).slice(0, 6).map(o =>
+    '&nbsp;&nbsp;' + esc(o.node) + ': '
+    + (o.power_db != null ? o.power_db.toFixed(1) + ' dB' : '?')
+    + (o.cal_applied ? ' <span style="color:#4caf50">✓</span>' : '')
+  ).join('<br>');
+  const popup = '<b>' + esc(t.signal_type) + ' · ' + esc(t.key || '?') + '</b><br>'
+    + (t.freq_mhz ? t.freq_mhz.toFixed(4) + ' MHz<br>' : '')
+    + 'Fix: ' + t.num_nodes + ' nodes · ±' + t.error_m + ' m<br>'
+    + '<span style="color:#888;font-size:11px">' + esc(t.method) + ' · ' + calFlag + '</span><br>'
+    + (obsLines ? '<br><div style="font-size:11px">' + obsLines + '</div>' : '')
+    + '<br><span style="color:#888; font-size:10px">' + esc(t.timestamp || '') + '</span>';
+  _triangulationMarker(t.lat, t.lon, color, popup).addTo(_mapLayers.triangulations);
+  // Error radius ring — styled distinctly from source rings (dashed).
+  if (t.error_m && t.error_m > 0) {
+    L.circle([t.lat, t.lon], {
+      radius: t.error_m,
+      color: color,
+      fillColor: color,
+      fillOpacity: 0.08,
+      weight: 1.5,
+      dashArray: '6 4',
+    }).addTo(_mapLayers.triangulations);
+  }
 }
 
 function _planeMarker(lat, lon, color, heading, popup) {
@@ -1578,7 +1667,20 @@ async function loadMap() {
       const s = await fetch('/api/map/sources' + srcQs).then(r => r.json());
       sources = s.sources || [];
     } catch (e) {}
-    _renderMap({aircraft, vessels, drones, meshtastic, sources});
+    // Live triangulations: server-side correlation + multilateration across
+    // sources in a short window (5 min by default). Fixed limit — we dedup
+    // per (type, key) so 50 is enough for normal traffic.
+    let triangulations = [];
+    try {
+      // Cap the window at 15 min client-side — wider windows just produce
+      // ghost fixes from stale RSSI. Server capping is the real defence
+      // anyway, this just avoids shipping a big-number window param.
+      const triQs = windowHours != null
+        ? '?limit=50&window=' + Math.min(windowHours, 0.25) : '?limit=50';
+      const t = await fetch('/api/map/triangulations' + triQs).then(r => r.json());
+      triangulations = t.triangulations || [];
+    } catch (e) {}
+    _renderMap({aircraft, vessels, drones, meshtastic, sources, triangulations});
   } catch (e) {}
 }
 
@@ -1600,6 +1702,7 @@ function _syncSourcesState(sources) {
       _mapSources[s.id] = state;
     }
     state.position = s.position;
+    state.position_source = s.position_source || null;
     state.detections = s.detections || [];
     state.label = s.label || s.id;
   });
@@ -1633,6 +1736,8 @@ function _renderSourcesPanel() {
       : '<span style="color:#666">no detections</span>';
     const posTxt = hasPos
       ? s.position.lat.toFixed(4) + ', ' + s.position.lon.toFixed(4)
+        + (s.position_source === 'manual'
+          ? ' <span style="color:#888">📌 pinned</span>' : '')
       : '<span style="color:#666">no position</span>';
     return `<label style="display:flex; align-items:flex-start; gap:6px; padding:4px; cursor:pointer;">
       <input type="checkbox" data-src="${esc(id)}" ${s.enabled ? 'checked' : ''} style="margin-top:2px;">
@@ -1656,6 +1761,33 @@ function _renderSourcesPanel() {
   });
 }
 
+// Draggable source marker — `L.marker` is the only Leaflet marker type that
+// supports native dragging (circleMarker is a vector, not interactive).
+// The divIcon's SVG preserves the "filled circle" look of the old
+// circleMarker so visual continuity is kept; a black ring is added when
+// the position was manually set so users can see which nodes they've
+// pinned.
+function _sourceDivIcon(color, manualOverride) {
+  const border = manualOverride ? '#000' : color;
+  const svg = '<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">'
+    + '<circle cx="11" cy="11" r="8" fill="' + color + '" fill-opacity="0.9" stroke="'
+    + border + '" stroke-width="3"/></svg>';
+  return L.divIcon({
+    html: svg, className: '',
+    iconSize: [22, 22], iconAnchor: [11, 11],
+  });
+}
+
+async function _postSourcePosition(id, lat, lon) {
+  const resp = await fetch('/api/map/sources/position', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id, lat, lon}),
+  });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  return resp.json();
+}
+
 function _drawSources() {
   const bounds = [];
   Object.keys(_mapSources).forEach(id => {
@@ -1665,25 +1797,55 @@ function _drawSources() {
     if (!s.enabled || !s.position || s.position.lat == null) return;
     const lat = s.position.lat, lon = s.position.lon;
     bounds.push([lat, lon]);
-    // Node marker (bigger, permanent tooltip with the source id).
-    L.circleMarker([lat, lon], {
-      radius: 9, color: s.color, fillColor: s.color, fillOpacity: 0.9, weight: 3,
+    const isManual = s.position_source === 'manual';
+    const marker = L.marker([lat, lon], {
+      draggable: true,
+      icon: _sourceDivIcon(s.color, isManual),
     })
-      .bindPopup(`<b>${esc(s.label)}</b><br>${(s.detections || []).length} recent detections`)
+      .bindPopup('<b>' + esc(s.label) + '</b><br>'
+        + (s.detections || []).length + ' recent detections'
+        + (isManual
+            ? '<br><span style="color:#888;font-size:11px">manually positioned · drag to adjust</span>'
+            : '<br><span style="color:#888;font-size:11px">drag to pin position</span>'))
       .bindTooltip(s.label, {permanent: true, direction: 'top', offset: [0, -10]})
       .addTo(s.markerLayer);
-    // One uncertainty ring per recent detection with an SNR value.
+    // Optimistic drag handling: update state + redraw immediately so the
+    // next 3s refresh doesn't flicker the marker back, then POST. Revert
+    // on save failure.
+    marker.on('dragend', async (e) => {
+      const ll = e.target.getLatLng();
+      const prev = s.position;
+      const prevSource = s.position_source;
+      s.position = {lat: ll.lat, lon: ll.lng};
+      s.position_source = 'manual';
+      _drawSources();
+      try {
+        await _postSourcePosition(id, ll.lat, ll.lng);
+      } catch (err) {
+        s.position = prev;
+        s.position_source = prevSource;
+        _drawSources();
+        alert('Failed to save position for ' + id + ': ' + err);
+      }
+    });
+    // One uncertainty ring per recent detection. Uses calibrated RSSI
+    // when the server shipped an offset-corrected `power_db_cal`, else
+    // falls back to the SNR-based estimate.
     (s.detections || []).forEach(d => {
-      const r = _distanceFromSnr(d.signal_type, d.snr_db);
-      if (r == null) return;
+      const info = _ringRadius(d);
+      if (info == null) return;
+      const rssiLine = d.cal_applied && d.power_db_cal != null
+        ? 'RSSI ' + d.power_db_cal.toFixed(1) + ' dBm (calibrated)'
+        : 'SNR ' + (d.snr_db != null ? d.snr_db.toFixed(1) + ' dB' : '?');
       const popup = `<b>${esc(s.label)} · ${esc(d.signal_type || '')}</b><br>`
         + (d.channel ? esc(d.channel) + '<br>' : '')
         + (d.freq_mhz ? d.freq_mhz.toFixed(4) + ' MHz<br>' : '')
-        + 'SNR ' + (d.snr_db != null ? d.snr_db.toFixed(1) + ' dB' : '?') + '<br>'
-        + '~' + r.toFixed(0) + ' m (uncalibrated estimate)<br>'
+        + rssiLine + '<br>'
+        + '~' + info.r.toFixed(0) + ' m'
+        + (info.calibrated ? '' : ' (uncalibrated estimate)') + '<br>'
         + '<span style="color:#888; font-size:10px">' + esc(d.timestamp || '') + '</span>';
       L.circle([lat, lon], {
-        radius: r, color: s.color, fillColor: s.color, fillOpacity: 0.05, weight: 1,
+        radius: info.r, color: s.color, fillColor: s.color, fillOpacity: 0.05, weight: 1,
       }).bindPopup(popup).addTo(s.ringsLayer);
     });
   });
@@ -1780,6 +1942,17 @@ function _renderMap(data) {
   sourceBounds.forEach(b => bounds.push(b));
   const sourceCount = Object.values(_mapSources).filter(s => s.enabled && s.position).length;
 
+  // Real-time multi-node triangulations: cross + error ring per solved
+  // emitter. Only fires when 2+ sources heard the same (type, key) in the
+  // correlation window, so the marker already implies a meaningful fix.
+  (data.triangulations || []).forEach(t => {
+    if (t.lat == null || t.lon == null) return;
+    _drawTriangulation(t);
+    bounds.push([t.lat, t.lon]);
+    positioned++;
+  });
+  const triCount = (data.triangulations || []).length;
+
   // Summary line
   const el = document.getElementById('map-summary');
   if (el) {
@@ -1788,6 +1961,7 @@ function _renderMap(data) {
           + (data.vessels.length) + ' vessels, ' + (data.drones.length) + ' drones'
           + (meshCount > 0 ? ', ' + meshCount + ' mesh nodes' : '')
           + (sourceCount > 0 ? ', ' + sourceCount + ' source(s)' : '')
+          + (triCount > 0 ? ', ' + triCount + ' triangulation(s)' : '')
           + ')'
       : 'no GPS positions in the current session — run a capture with GPS, or wait for RemoteID / ADS-B / AIS';
   }
