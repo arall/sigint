@@ -31,7 +31,7 @@ CATEGORIES = {
         "Meshtastic-Position", "Meshtastic-Telemetry", "Meshtastic-Node",
     ],
     "pagers":   ["pocsag"],
-    "jamming":  ["jamming"],
+    "jamming":  ["jamming", "jamming-inferred"],
 }
 
 CATEGORY_LABELS = {

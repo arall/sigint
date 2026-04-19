@@ -795,29 +795,41 @@ def _load_pagers(detections):
 
 
 def _load_jamming(detections):
-    """Broadband-interference detections from `sdr.py jammer`.
+    """Broadband-interference detections from `sdr.py jammer` (live SDR
+    sampling) and `sdr.py jammer-detect` (post-hoc noise-floor analysis
+    over stored logs).
 
-    Keeps the raw-row shape of `_load_generic_signals` but surfaces the
-    jammer-specific metadata (baseline / observed / elevation / flatness)
-    as top-level columns so the dashboard can render them without
-    digging into `meta`.
+    Both paths use `signal_type` in the "jamming" category; the
+    `source` key in metadata distinguishes them ("scanner" vs
+    "inferred"). The row renderer surfaces that so operators can tell
+    at a glance which path fired.
     """
     rows = []
     for d in reversed(detections):
         if d.get("category") != "jamming":
             continue
         meta = d.get("meta") or {}
+        # Inferred rows come from jammer-detect and have source="inferred".
+        # Live scanner rows don't set `source` (default "scanner" shown
+        # in the UI). The signal_type field alone is also a reliable
+        # signal — "jamming-inferred" is only emitted by the analyzer.
+        source = meta.get("source") or (
+            "inferred" if d["signal_type"] == "jamming-inferred" else "scanner"
+        )
         rows.append({
             "timestamp": d["timestamp"],
             "signal_type": d["signal_type"],
             "channel": d["channel"],
             "frequency_mhz": d["frequency_mhz"],
             "snr_db": d["snr_db"],
+            "source": source,
             "baseline_db": meta.get("baseline_db"),
             "observed_db": meta.get("observed_db"),
             "elevation_db": meta.get("elevation_db"),
             "flatness": meta.get("flatness"),
             "bandwidth_mhz": (meta.get("bandwidth_hz") or 0) / 1e6,
+            "duration_s": meta.get("duration_s"),
+            "ongoing": bool(meta.get("ongoing")),
         })
         if len(rows) >= 200:
             break

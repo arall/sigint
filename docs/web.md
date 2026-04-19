@@ -36,7 +36,7 @@ You can also set `"web_port": 3000` in the server JSON config.
 - **Agents** — approved + pending Meshtastic C2 agents across three sub-tabs: **Manage** (approve / revoke / Start / Stop / Status + click-to-expand scanner control panel with CFGINFO + SCANINFO snapshots), **Detections** (paginated list of mesh-forwarded DETs), **C2 Logs** (the comms ring buffer — every tx/rx frame with direction + tag + raw). See [c2.md](c2.md).
 - **Correlations** — device-to-device co-occurrence across signal types (main table) plus **Cross-node witnesses** section at the bottom: emitters heard by 2+ nodes in the window (30 s–1 h), with per-node observation counts. Complements the Map tab's Triangulations — same match strategy, no position requirement, ADS-B / AIS included, so coverage gaps are visible.
 - **Other** — ISM, LoRa, POCSAG, anything unclassified.
-- **Signals → Jamming** (sub-tab) — rows from `sdr.py jammer`: band name, center frequency, baseline vs observed noise floor, elevation (colour-coded: ≥20 dB red, ≥10 dB orange, else grey), spectral flatness, bandwidth. Empty state explains how to start the scanner.
+- **Signals → Jamming** (sub-tab) — rows from `sdr.py jammer` (live SDR) and `sdr.py jammer-detect` (post-hoc inference from stored noise-floor logs, no SDR needed). Source badge per row: green `scanner` = live with spectral-flatness verification, amber `inferred` = post-hoc with no flatness available. Columns: band, center frequency, baseline vs observed noise floor, elevation (colour-coded: ≥20 dB red, ≥10 dB orange), flatness, duration (or "ongoing"). Empty state documents both invocation paths.
 
 Every category tab accepts an optional `?window=<hours>` (default 6 h, capped at 7 days) and auto-refreshes every 3 s while visible.
 

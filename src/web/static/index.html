@@ -494,20 +494,21 @@
         <button onclick="loadCategory('jamming')">Refresh</button>
       </div>
     </div>
-    <div class="tab-desc">Bands where the noise floor is elevated with broadband character — the signature of a cheap noise jammer, barrage jammer or sweep jammer. Fires when `sdr.py jammer` sees sustained elevation (≥10 dB by default) with spectral flatness > 0.5. Does NOT catch narrowband/spot jammers, spoofing (fake-but-valid signals), or sub-second bursts.</div>
+    <div class="tab-desc">Bands where the noise floor is elevated with broadband character — the signature of a cheap noise jammer, barrage jammer or sweep jammer. Two sources: <b>scanner</b> rows come from live <code>sdr.py jammer</code> (uses spectral flatness to reject narrowband peaks); <b>inferred</b> rows come from <code>sdr.py jammer-detect</code> running post-hoc over stored <code>noise_floor_db</code> values from every other scanner (no extra SDR needed, slightly higher false-positive rate). Neither catches spoofing or sub-second bursts.</div>
     <table>
       <thead><tr>
         <th class="sortable" data-tbl="jamming-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="jamming-body" data-key="source">Source</th>
         <th class="sortable" data-tbl="jamming-body" data-key="channel">Band</th>
         <th class="sortable num" data-tbl="jamming-body" data-key="frequency_mhz">Freq (MHz)</th>
         <th class="sortable num" data-tbl="jamming-body" data-key="baseline_db">Baseline (dB)</th>
         <th class="sortable num" data-tbl="jamming-body" data-key="observed_db">Observed (dB)</th>
         <th class="sortable num" data-tbl="jamming-body" data-key="elevation_db">Elev (dB)</th>
         <th class="sortable num" data-tbl="jamming-body" data-key="flatness">Flatness</th>
-        <th class="sortable num" data-tbl="jamming-body" data-key="bandwidth_mhz">BW (MHz)</th>
+        <th class="sortable num" data-tbl="jamming-body" data-key="duration_s">Dur (s)</th>
       </tr></thead>
       <tbody id="jamming-body">
-        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="9" class="empty">select tab to load...</td></tr>
       </tbody>
     </table>
     <div id="jamming-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>

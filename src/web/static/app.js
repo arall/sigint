@@ -1172,8 +1172,10 @@ function renderJamming(rows) {
   const tbody = document.getElementById('jamming-body');
   if (!tbody) return;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">'
-      + 'no jamming detected (run <code>sdr.py jammer</code> to start watching)'
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">'
+      + 'no jamming detected. Live mode: <code>sdr.py jammer</code>. '
+      + 'Post-hoc inference over existing logs: '
+      + '<code>sdr.py jammer-detect output/*.db</code>.'
       + '</td></tr>';
     return;
   }
@@ -1186,12 +1188,27 @@ function renderJamming(rows) {
                     : '#888';
     const baseline = r.baseline_db != null ? r.baseline_db.toFixed(1) : '';
     const observed = r.observed_db != null ? r.observed_db.toFixed(1) : '';
-    const flat = r.flatness != null ? r.flatness.toFixed(2) : '';
-    const bw = r.bandwidth_mhz != null ? r.bandwidth_mhz.toFixed(2) : '';
+    const flat = r.flatness != null ? r.flatness.toFixed(2) : '—';
     const freq = r.frequency_mhz != null ? r.frequency_mhz.toFixed(3) : '';
     const ts = (r.timestamp || '').replace('T', ' ').split('.')[0];
+    // Source badge: live scanner (green-ish) vs post-hoc inferred
+    // (amber). Tooltip explains the difference so the "why is this
+    // row's flatness blank?" question answers itself.
+    const isInferred = r.source === 'inferred';
+    const srcColor = isInferred ? '#ff9800' : '#4caf50';
+    const srcTitle = isInferred
+      ? 'Inferred from stored noise_floor_db by jammer-detect (no flatness available)'
+      : 'Live from sdr.py jammer with spectral flatness verification';
+    const srcBadge = '<span title="' + srcTitle
+      + '" style="padding:1px 5px;border-radius:3px;color:#fff;'
+      + 'background:' + srcColor + ';font-size:10px">'
+      + esc(r.source || 'scanner') + '</span>';
+    const dur = r.duration_s != null
+      ? (r.ongoing ? 'ongoing' : r.duration_s.toFixed(0))
+      : '';
     return '<tr>'
       + '<td style="font-size:11px;color:#888">' + esc(ts) + '</td>'
+      + '<td>' + srcBadge + '</td>'
       + '<td style="font-weight:600">' + esc(r.channel || '') + '</td>'
       + '<td class="num">' + esc(freq) + '</td>'
       + '<td class="num">' + esc(baseline) + '</td>'
@@ -1199,7 +1216,7 @@ function renderJamming(rows) {
       + '<td class="num" style="color:' + elevColor + ';font-weight:600">+'
         + esc(elev) + '</td>'
       + '<td class="num">' + esc(flat) + '</td>'
-      + '<td class="num">' + esc(bw) + '</td>'
+      + '<td class="num">' + esc(dur) + '</td>'
       + '</tr>';
   }).join('');
 }

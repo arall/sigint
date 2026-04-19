@@ -98,6 +98,7 @@ sdr.py pmr --digital                      # analog + dPMR/DMR energy detection
 | `heatmap output/*.db` | RF activity density heatmap (KML + PNG for ATAK). Filter with `-s <signal_type>`. |
 | `corr output/*.db` | Cross-signal-type device co-occurrence analysis. Export with `--json`. |
 | `calibrate {ingest,show,recompute,set-position,watch}` | Solve per-node RSSI offsets from emitters whose position and TX power are known (surveyed APs / FM / cell + passive ADS-B / AIS). See [triangulation.md](triangulation.md#calibration). |
+| `jammer-detect output/*.db` | Post-hoc opportunistic jamming detection from stored `noise_floor_db` series. Groups by `(device_id, signal_type)`, flags sustained elevation against a rolling 1 h baseline. Complements the live `jammer` scanner: no SDR needed, but only covers bands where a scanner was actively running. Writes synthetic `signal_type="jamming-inferred"` rows so the dashboard's Jamming tab picks them up alongside live results. |
 
 ## Known quirks and limitations
 

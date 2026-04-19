@@ -921,6 +921,43 @@ Examples:
         help="Filter to specific signal types (can repeat, default: all)",
     )
 
+    # Opportunistic jammer / interference inference from existing logs.
+    # No SDR — reads noise_floor_db series from stored .db files and
+    # emits synthetic "jamming-inferred" rows. Complements sdr.py jammer.
+    jd_parser = subparsers.add_parser(
+        "jammer-detect",
+        help="Infer broadband interference from stored detection logs "
+             "(no SDR needed; complements `sdr.py jammer`)",
+    )
+    jd_parser.add_argument(
+        "files", nargs="+",
+        help="Detection log files (.db) to analyze",
+    )
+    jd_parser.add_argument(
+        "--baseline-window", type=float, default=3600.0,
+        dest="baseline_window_s",
+        help="Seconds of rolling history for the per-group baseline "
+             "(default: 3600 = 1 hour)",
+    )
+    jd_parser.add_argument(
+        "--threshold", type=float, default=10.0,
+        dest="elevation_threshold_db",
+        help="dB above baseline before flagging (default: 10)",
+    )
+    jd_parser.add_argument(
+        "--min-consec", type=int, default=3,
+        help="Consecutive elevated samples required to fire (default: 3)",
+    )
+    jd_parser.add_argument(
+        "--min-samples", type=int, default=20,
+        help="Minimum samples per (node, signal_type) before baselining "
+             "is attempted (default: 20)",
+    )
+    jd_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print events but don't write a synthetic output .db",
+    )
+
     # Device correlation from detection logs
     corr_parser = subparsers.add_parser(
         "correlate",
@@ -1273,6 +1310,10 @@ def _dispatch_scanner(args):
         correlator.print_report()
         if args.json_out:
             correlator.export_json(args.json_out)
+        return
+
+    if args.command == "jammer-detect":
+        _run_jammer_detect(args)
         return
 
     if args.command == "pmr":
@@ -1996,6 +2037,112 @@ def _run_single_scanner(entry, output_dir, use_gps, gps_port, min_snr):
         ch_count = len(scanner.channels)
         print(f"[{name}] Starting {entry['band']} ({ch_count} channels) on device {device_index}")
         scanner.run()
+
+
+def _run_jammer_detect(args):
+    """Opportunistic jammer inference over stored detection .db files.
+
+    Complement to `sdr.py jammer` — no SDR required, works off the
+    `noise_floor_db` column that every scanner already writes. Emits
+    synthetic `signal_type="jamming-inferred"` rows into a new session
+    .db so the dashboard's Jamming tab picks them up alongside live
+    scanner results.
+    """
+    import json
+    from utils import db as _db
+    from utils.jammer_detect import (
+        detect_anomalies, anomaly_to_detection_meta,
+    )
+    from utils.logger import SignalLogger
+
+    # Load every detection row we care about (noise_floor_db, ts_epoch,
+    # device_id, signal_type) across the input files. We don't care
+    # about other scanner-specific fields for the anomaly pass.
+    all_rows = []
+    for path in args.files:
+        if not os.path.exists(path):
+            print(f"skip {path}: not found", file=sys.stderr)
+            continue
+        try:
+            conn = _db.connect(path, readonly=True)
+        except Exception as e:
+            print(f"skip {path}: {e}", file=sys.stderr)
+            continue
+        try:
+            for r in conn.execute(
+                "SELECT device_id, signal_type, noise_floor_db, ts_epoch, "
+                "frequency_hz FROM detections "
+                "WHERE noise_floor_db IS NOT NULL AND noise_floor_db != 0"
+            ):
+                all_rows.append(dict(r))
+        finally:
+            conn.close()
+
+    if not all_rows:
+        print("No usable noise_floor_db rows across the given files.")
+        return
+
+    events = detect_anomalies(
+        all_rows,
+        baseline_window_s=args.baseline_window_s,
+        elevation_threshold_db=args.elevation_threshold_db,
+        min_consec=args.min_consec,
+        min_samples_per_group=args.min_samples,
+    )
+
+    # Pick a representative frequency per (device, signal_type) so the
+    # synthetic row carries something meaningful. First detection's
+    # frequency is good enough; most scanners stay on one band anyway.
+    freq_for_group = {}
+    for r in all_rows:
+        k = (r.get("device_id") or "", r.get("signal_type") or "")
+        if k not in freq_for_group and r.get("frequency_hz"):
+            freq_for_group[k] = float(r["frequency_hz"])
+
+    print(f"Loaded {len(all_rows)} detection rows across "
+          f"{len(args.files)} file(s).")
+    print(f"Inferred {len(events)} anomaly event(s):\n")
+    for e in events:
+        duration = ((e.ended_at or e.started_at) - e.started_at)
+        status = "ONGOING" if e.ended_at is None else f"{duration:.0f}s"
+        print(f"  {e.device_id:>10s} · {e.signal_type:<14s}  "
+              f"peak {e.peak_db:+.1f} dB  "
+              f"(baseline {e.baseline_db:+.1f}, +"
+              f"{e.peak_db - e.baseline_db:.1f} dB) · "
+              f"{e.samples} samples · {status}")
+
+    if args.dry_run or not events:
+        return
+
+    from utils.logger import SignalDetection
+    logger = SignalLogger(
+        output_dir=args.output,
+        signal_type="jamming_inferred",
+        min_snr_db=0,
+    )
+    out_path = logger.start()
+    try:
+        for e in events:
+            k = (e.device_id, e.signal_type)
+            freq = freq_for_group.get(k, 0.0)
+            meta = anomaly_to_detection_meta(e)
+            # Build the detection directly so we can pin device_id to
+            # the original capturing node. Otherwise the Sources panel
+            # on the Map tab would attribute every inferred anomaly to
+            # the jammer-detect tool's own device_id.
+            det = SignalDetection.create(
+                signal_type="jamming-inferred",
+                frequency_hz=freq,
+                power_db=e.peak_db,
+                noise_floor_db=e.baseline_db,
+                channel=e.signal_type,
+                device_id=e.device_id or "jammer-detect",
+                metadata=json.dumps(meta),
+            )
+            logger.log(det)
+    finally:
+        logger.stop()
+    print(f"\nWrote {len(events)} synthetic row(s) to {out_path}")
 
 
 def _run_replay_c2(args):
