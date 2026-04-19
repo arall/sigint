@@ -929,6 +929,36 @@ Examples:
     agent_parser.add_argument("--meshtastic-port", default=None)
     agent_parser.add_argument("--agent-id", default=None)
 
+    # Replay a recorded detection .db over the C2 path as if from a live
+    # agent. Uses the Meshtastic link from configs/agent.json.
+    replay_parser = subparsers.add_parser(
+        "replay-c2",
+        help="Replay a detection .db over mesh as if from a specified agent",
+    )
+    replay_parser.add_argument("db", help="Path to a detection .db to replay")
+    replay_parser.add_argument("--agent-id", required=True,
+                               help="Agent identity to claim on the wire")
+    replay_parser.add_argument("--config", default="configs/agent.json",
+                               help="Path to agent.json (for mesh port/channel)")
+    replay_parser.add_argument("--meshtastic-port", default=None,
+                               help="Override mesh port from config")
+    replay_parser.add_argument("--rate", type=float, default=1.0,
+                               help="Target DET rate in Hz (default: 1.0)")
+    replay_parser.add_argument("--max", type=int, default=None,
+                               dest="max_rows",
+                               help="Cap on DETs sent (default: no cap)")
+    replay_parser.add_argument("--skip-handshake", action="store_true",
+                               help="Don't send HELLO first — assumes server "
+                               "already has this agent_id approved recently")
+    replay_parser.add_argument("--require-position", action="store_true",
+                               help="Skip rows without GPS (for triangulation "
+                               "benchmarks)")
+    replay_parser.add_argument("--require-power", action="store_true",
+                               help="Skip rows with power_db=0 (for "
+                               "calibration benchmarks)")
+    replay_parser.add_argument("--dry-run", action="store_true",
+                               help="Print what would be sent; open no link")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -1567,6 +1597,9 @@ def _dispatch_scanner(args):
         if args.gps: argv += ["--gps-port", args.gps_port]
         return agent_run(argv)
 
+    elif args.command == "replay-c2":
+        _run_replay_c2(args)
+
     elif args.command == "multi":
         _run_multi(args)
 
@@ -1868,6 +1901,75 @@ def _run_single_scanner(entry, output_dir, use_gps, gps_port, min_snr):
         ch_count = len(scanner.channels)
         print(f"[{name}] Starting {entry['band']} ({ch_count} channels) on device {device_index}")
         scanner.run()
+
+
+def _run_replay_c2(args):
+    """Replay a recorded detection .db over the C2 mesh.
+
+    Exercises the server ingest path (agent ->  mesh -> AgentManager ->
+    SQLite) without live RF. Doubles as a deterministic triangulation
+    or calibration benchmark: the same .db pumped through a stable
+    mesh link should produce the same server-side artifacts every time.
+    """
+    from agent.replay import replay_db_to_link, iter_det_rows
+
+    if not os.path.exists(args.db):
+        print(f"error: {args.db}: not found", file=sys.stderr)
+        sys.exit(2)
+
+    # Dry-run: encode + print only. No mesh link, no config needed.
+    if args.dry_run:
+        from comms import protocol as P
+        from agent.replay import _det_for_row
+        seq = 1
+        for row in iter_det_rows(args.db,
+                                 require_position=args.require_position,
+                                 require_power=args.require_power):
+            print(_det_for_row(args.agent_id, seq, row))
+            seq += 1
+            if args.max_rows is not None and seq > args.max_rows:
+                break
+        return
+
+    # Real mesh: pull the port + channel from agent config, same pattern
+    # as `sdr.py agent`.
+    from agent.config import AgentConfig
+    from comms.meshlink import MeshLink
+    cfg = AgentConfig.load(args.config)
+    port = args.meshtastic_port or cfg.meshtastic_port
+    if not port:
+        print("ERROR: meshtastic_port not configured (pass --meshtastic-port "
+              "or set it in agent.json)", file=sys.stderr)
+        sys.exit(2)
+    link = MeshLink.from_serial(port=port, channel_index=cfg.mesh_channel_index)
+
+    print(f"Replaying {args.db} as agent={args.agent_id} "
+          f"at {args.rate:.1f} DET/s (Ctrl+C to stop)")
+    stop_flag = {"stop": False}
+    import signal as _sig
+    def _int(*_):
+        stop_flag["stop"] = True
+    _sig.signal(_sig.SIGINT, _int)
+    _sig.signal(_sig.SIGTERM, _int)
+
+    def _progress(seq, stats):
+        # Minimal running indicator — one dot per sent DET.
+        if stats.sent_dets % 10 == 0:
+            print(f"  {stats.sent_dets} sent", flush=True)
+
+    stats = replay_db_to_link(
+        link=link, db_path=args.db, agent_id=args.agent_id,
+        rate_per_sec=args.rate, max_rows=args.max_rows,
+        skip_handshake=args.skip_handshake,
+        require_position=args.require_position,
+        require_power=args.require_power,
+        stop=lambda: stop_flag["stop"],
+        on_progress=_progress,
+    )
+    print(f"\nDone. sent={stats.sent_dets} of {stats.total_rows} rows"
+          f" (no_pos={stats.skipped_no_position},"
+          f" no_power={stats.skipped_no_power}),"
+          f" hello={'sent' if stats.sent_hello else 'skipped'}")
 
 
 def _run_multi(args):
