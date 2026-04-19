@@ -116,3 +116,68 @@ def test_stat_updates_last_seen(tmp_path):
     assert info["scanner"] == "pmr"
     assert info["state"] == "running"
     assert info["last_seen_at"] > 0
+
+
+def test_hello_from_approved_agent_resends_approve(tmp_path):
+    """Agent only HELLOs while unadopted (agent.py:294). A HELLO from an
+    already-approved agent therefore means the agent lost its state (fresh
+    service install, state.json wipe) — server must re-send APPROVE so the
+    agent re-adopts without `adopted: true` being hand-edited back in."""
+    from server.agent_manager import AgentManager
+    link = FakeLink()
+    mgr = AgentManager(link=link, state_dir=str(tmp_path),
+                       detection_db_path=str(tmp_path / "agents.db"))
+    link._cb("HELLO|N01|0.1|rpi0w")
+    mgr.approve("N01")
+    # Clear the initial APPROVE from the send log so we can assert
+    # re-approve is the only new outgoing frame.
+    link.sent.clear()
+
+    # Agent comes back with wiped state — HELLOs again.
+    link._cb("HELLO|N01|0.1|rpi0w")
+
+    approves = [t for t in link.sent if t.startswith("APPROVE|N01")]
+    assert len(approves) == 1, (
+        f"expected one re-APPROVE, got {link.sent!r}")
+    # Still approved, last_seen updated.
+    assert "N01" in mgr.approved()
+    assert mgr.approved()["N01"]["last_seen_at"] > 0
+
+
+def test_hello_from_approved_agent_survives_restart(tmp_path):
+    """agents.json persists approval across server restarts. After a
+    restart, a new HELLO from a previously-approved agent must still
+    trigger a re-APPROVE (nothing in memory yet — but agents.json has
+    the entry)."""
+    from server.agent_manager import AgentManager
+
+    # First session: approve N01, shut down.
+    link1 = FakeLink()
+    mgr1 = AgentManager(link=link1, state_dir=str(tmp_path),
+                        detection_db_path=str(tmp_path / "agents.db"))
+    link1._cb("HELLO|N01|0.1|rpi0w")
+    mgr1.approve("N01")
+
+    # Second session: fresh manager reads agents.json, no in-memory state.
+    link2 = FakeLink()
+    mgr2 = AgentManager(link=link2, state_dir=str(tmp_path),
+                        detection_db_path=str(tmp_path / "agents.db"))
+    assert "N01" in mgr2.approved()
+    # HELLO should trigger a re-APPROVE, not move to pending.
+    link2._cb("HELLO|N01|0.1|rpi0w")
+    approves = [t for t in link2.sent if t.startswith("APPROVE|N01")]
+    assert len(approves) == 1
+    assert "N01" not in mgr2.pending()
+
+
+def test_hello_from_unknown_agent_still_goes_pending(tmp_path):
+    """Regression guard: only approved agents get the re-APPROVE path;
+    new agents still land in pending."""
+    from server.agent_manager import AgentManager
+    link = FakeLink()
+    mgr = AgentManager(link=link, state_dir=str(tmp_path),
+                       detection_db_path=str(tmp_path / "agents.db"))
+    link._cb("HELLO|N99|0.1|rpi0w")
+    assert "N99" in mgr.pending()
+    # No APPROVE emitted for pending agents.
+    assert not any(t.startswith("APPROVE|") for t in link.sent)

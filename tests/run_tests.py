@@ -59,6 +59,7 @@ SW_TESTS = [
     ("Opportunistic RSSI calibration", "tests/sw/test_calibration.py"),
     ("Live multi-node triangulation",  "tests/sw/test_triangulate_live.py"),
     ("Position overrides (drag)",      "tests/sw/test_position_overrides.py"),
+    ("AgentManager (C2 ingest)",       "tests/sw/test_server_agent_manager.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")

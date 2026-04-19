@@ -180,15 +180,26 @@ class AgentManager:
             self._send(P.encode_ack(agent_id, seq))
 
     def _on_hello(self, agent_id: str, fields: dict) -> None:
+        # Agent `_hello_loop` only sends HELLO while `self._state.adopted`
+        # is False (src/agent/agent.py:294), so any HELLO from someone we
+        # already have in `_approved` is the agent telling us its state.json
+        # got wiped — fresh service install, manual cleanup, etc. Re-send
+        # APPROVE so it re-adopts without needing `adopted: true` to be
+        # hand-edited back in. Idempotent on the agent side.
+        resend_approve = False
         with self._lock:
             if agent_id in self._approved:
                 self._approved[agent_id]["last_seen_at"] = time.time()
-                return
-            entry = self._pending.get(agent_id) or {"first_seen_at": time.time()}
-            entry["last_seen_at"] = time.time()
-            entry["version"] = fields.get("version", "")
-            entry["hw"] = fields.get("hw", "")
-            self._pending[agent_id] = entry
+                resend_approve = True
+            else:
+                entry = self._pending.get(agent_id) or {"first_seen_at": time.time()}
+                entry["last_seen_at"] = time.time()
+                entry["version"] = fields.get("version", "")
+                entry["hw"] = fields.get("hw", "")
+                self._pending[agent_id] = entry
+        # Send outside the lock: `_send` hits the mesh link which may block.
+        if resend_approve:
+            self._send(P.encode_approve(agent_id))
 
     def _on_det(self, agent_id: str, seq: Optional[int], fields: dict) -> None:
         if seq is None:

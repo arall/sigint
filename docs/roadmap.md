@@ -45,6 +45,7 @@ Distributed C2:
 - Fixed-position `server_position` config + manual drag override (see Analysis)
 - systemd service install for server and agent (`scripts/install-*.sh`, `@PROJECT_DIR@` templating)
 - JSON config for agent (`configs/agent.json`), matching the server pattern
+- Auto-re-approve on HELLO from an already-approved agent — a HELLO from someone in `agents.json` means the agent lost its `state.json` (fresh service install), so the server re-emits APPROVE automatically instead of waiting for an operator to hand-edit `adopted: true`.
 
 Docs:
 
@@ -54,7 +55,6 @@ Docs:
 
 Small known rough edges — fixes are scoped, just not done yet:
 
-- **State-sync drift** — server keeps `agents.json` on disk but doesn't re-send `APPROVE` when an already-approved agent HELLOs (`_on_hello` in `src/server/agent_manager.py:184` early-returns). If an agent's `state.json` is wiped (fresh service install), it silently ignores every CMD. Workaround: hand-edit `adopted: true`. Real fix: auto-re-approve on HELLO from an already-approved agent.
 - **CMD retries** — server-originated `CMD START` / `CMD STOP` are single-shot broadcasts (`send_cmd` in `src/server/agent_manager.py:115` is one `self._send(...)`, no ACK / retry), lossy over LoRa. Operator clicks Start twice as a workaround. Real fix: mirror the agent's outbox (seq + ACK) on the server→agent direction so the CFGINFO re-fire isn't the only recovery path.
 - **DBTailer picks newest by mtime** — fine for a live scanner but SHM touches can bump older DBs' mtimes above the active one, causing detections to stop forwarding after a restart with multiple sessions (`_newest_db` in `src/agent/scanner_mgr.py:127` uses `max(candidates, key=os.path.getmtime)`). Switch to picking by filename timestamp (deterministic from the scanner's `<type>_YYYYMMDD_HHMMSS.db`).
 - **Category pager is client-side** — loads all rows up to the server's LIMIT, then slices locally so filters keep working across the whole set. For very long sessions the full row list is shipped on every refresh. Server-side offset+limit would scale better at the cost of refactoring the filter code.
@@ -70,7 +70,6 @@ Concrete next things, roughly in order:
 4. **Triangulations panel** — sibling of the Sources panel; list recent fixes with timestamp / type / error / nodes. Click-to-zoom on the map. Groundwork: the `/api/map/triangulations` payload already carries what's needed.
 5. **"Clear override" action** on a pinned source's popup — revert a source back to config / DET-derived position (calls `DELETE /api/map/sources/position`). Small polish on drag-to-reposition.
 6. **Server→agent reliable CMD** — mirror the agent's outbox on the server side: seq + ACK + exponential backoff for CMD/CFG. Resolves the "CMD retries" In-flight item and lets operators click Start once.
-7. **Auto-re-approve on HELLO from an approved agent** — resolves the "State-sync drift" In-flight item; no more hand-editing `adopted: true` after reprovisioning.
 
 ## 💡 Ideas / future
 
