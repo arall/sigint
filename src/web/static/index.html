@@ -102,9 +102,15 @@
       <div style="flex: 1; min-width: 0;">
         <div id="map" style="height: 600px; background: #0a1020;"></div>
       </div>
-      <div id="map-sources" style="width: 240px; max-height: 600px; overflow-y: auto; background: #0e1420; border: 1px solid #1d2533; border-radius: 4px; padding: 8px; font-size: 12px;">
-        <div style="font-weight: 600; padding: 4px 4px 8px; border-bottom: 1px solid #1d2533; margin-bottom: 8px;">Sources</div>
-        <div id="map-sources-body" style="color: #888">loading…</div>
+      <div style="width: 240px; display: flex; flex-direction: column; gap: 12px;">
+        <div id="map-sources" style="max-height: 360px; overflow-y: auto; background: #0e1420; border: 1px solid #1d2533; border-radius: 4px; padding: 8px; font-size: 12px;">
+          <div style="font-weight: 600; padding: 4px 4px 8px; border-bottom: 1px solid #1d2533; margin-bottom: 8px;">Sources</div>
+          <div id="map-sources-body" style="color: #888">loading…</div>
+        </div>
+        <div id="map-triangulations" style="max-height: 240px; overflow-y: auto; background: #0e1420; border: 1px solid #1d2533; border-radius: 4px; padding: 8px; font-size: 12px;">
+          <div style="font-weight: 600; padding: 4px 4px 8px; border-bottom: 1px solid #1d2533; margin-bottom: 8px;">Triangulations</div>
+          <div id="map-triangulations-body" style="color: #888">loading…</div>
+        </div>
       </div>
     </div>
     <div id="map-summary" style="padding: 8px 16px; font-size: 12px; color: #888">

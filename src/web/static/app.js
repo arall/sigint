@@ -1762,6 +1762,61 @@ function _renderSourcesPanel() {
   });
 }
 
+// Compact "when was that?" string for panel rows.
+function _relTime(ts_epoch) {
+  if (!ts_epoch) return '';
+  const secs = Math.max(0, (Date.now() / 1000) - ts_epoch);
+  if (secs < 60) return Math.floor(secs) + 's ago';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+  return Math.floor(secs / 86400) + 'd ago';
+}
+
+function _renderTriangulationsPanel(triangulations) {
+  const el = document.getElementById('map-triangulations-body');
+  if (!el) return;
+  if (!triangulations.length) {
+    el.innerHTML = '<div class="empty" style="color:#666;font-size:11px">'
+      + 'no recent fixes (2+ nodes must hear the same emitter within ~5 s)'
+      + '</div>';
+    return;
+  }
+  // Stable-sort: newest first, matching the map crosshair order.
+  const rows = triangulations.slice().sort((a, b) =>
+    (b.ts_epoch || 0) - (a.ts_epoch || 0));
+  el.innerHTML = rows.map((t, idx) => {
+    const nodesTxt = (t.nodes || []).join(' + ');
+    const freqTxt = t.freq_mhz ? t.freq_mhz.toFixed(3) + ' MHz' : '';
+    const calFrac = t.num_nodes ? (t.cal_applied_count || 0) / t.num_nodes : 0;
+    const calIcon = calFrac >= 0.5 ? '✓' : (calFrac > 0 ? '±' : '');
+    return `<div class="js-tri-row" data-idx="${idx}" style="
+        padding:6px 4px; border-bottom:1px solid #1d2533;
+        cursor:pointer;">
+      <div style="font-weight:600;color:#e91e63">
+        ${esc(t.signal_type)} · ${esc(t.key || '?')}
+        <span style="color:#888;font-weight:normal;font-size:10px">
+          ${calIcon ? ' ' + calIcon : ''}</span>
+      </div>
+      <div style="color:#888;font-size:11px">
+        ±${t.error_m}&nbsp;m · ${t.num_nodes} nodes · ${_relTime(t.ts_epoch)}
+      </div>
+      <div style="color:#666;font-size:10px;font-family:monospace">
+        ${esc(nodesTxt)}${freqTxt ? ' · ' + freqTxt : ''}
+      </div>
+    </div>`;
+  }).join('');
+  // Click-to-zoom: stash the row-index-to-fix mapping on the container
+  // so we don't have to re-parse the DOM.
+  el._rows = rows;
+  el.querySelectorAll('.js-tri-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const i = parseInt(row.dataset.idx, 10);
+      const t = el._rows[i];
+      if (t && _map) _map.setView([t.lat, t.lon], 15);
+    });
+  });
+}
+
 // Draggable source marker — `L.marker` is the only Leaflet marker type that
 // supports native dragging (circleMarker is a vector, not interactive).
 // The divIcon's SVG preserves the "filled circle" look of the old
@@ -1997,6 +2052,7 @@ function _renderMap(data) {
     bounds.push([t.lat, t.lon]);
     positioned++;
   });
+  _renderTriangulationsPanel(data.triangulations || []);
   const triCount = (data.triangulations || []).length;
 
   // Summary line
