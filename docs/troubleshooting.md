@@ -62,21 +62,36 @@ Resolved — the server now auto-re-approves on HELLO from an already-approved a
 
 If the agent still isn't adopting after a HELLO, check the C2 Logs sub-tab on the Agents page for the APPROVE frame. Common causes: hop-limit too small for the deployment, or the agent radio is in `CLIENT_MUTE` mode (see [c2.md — Mesh relay between agents](c2.md#mesh-relay-between-agents)).
 
-## Agent outbox grows unboundedly with BT/WiFi running
+## BT / WiFi scanners over mesh: don't
+
+This isn't a bug — it's a **physics limit of LoRa**, worth documenting so operators don't chase a software fix that can't exist.
 
 ### Symptom
 - Agent's `outbox.db` keeps growing even though detections look small.
 - Server sees only a fraction of what the agent's local scanner DB contains.
 - Dashboard's "Recent detections from agents" page lags by tens of minutes.
 
-### Why
-LoRa is a low-bandwidth pipe — at EU 868 MHz with the default settings, ~6 s per text send and ~1% duty-cycle cap. The `bt` and `wifi` scanners produce **dozens of detections per second** in any populated area (BLE advertisements, WiFi probe requests). One DET per detection = the agent enqueues faster than the drainer drains. The queue grows monotonically until the outbox fills.
+### Why (the physics)
+EU 868 MHz LoRa is regulated to ~**1% duty cycle** — the radio can legally transmit for ~1 second in any 100-second window. With Meshtastic's default LongFast settings, that works out to roughly **one frame every 6 seconds** of throughput. A single phone in range produces 50+ BLE advertisements + WiFi probe requests in that same 6 seconds. Net flow: enqueue rate is ~50× drain rate. The outbox grows monotonically.
+
+There is no software trick that closes this gap:
+
+- **Batch coalescing** (packing N observations into one frame) helps maybe 5–10×. Still not 50×.
+- **Per-persona dedup** (drop repeat advertisements) would close the gap, but at the cost of losing the per-advertisement RSSI samples that triangulation, movement detection, and AirTag-stalking analysis all depend on. The whole point of repeat observations is that they *are* information.
+- **Sample-rate throttling** drops frames unpredictably — same loss, worse distribution.
 
 ### What to do
-- **Don't run BT/WiFi continuously on a mesh agent.** They're best run locally on the server (which has full bandwidth to its own SQLite). The agent should be reserved for narrow / bursty scanners (PMR voice, keyfob, TPMS, ISM, LoRa, ADS-B) that produce one DET every several seconds at most.
-- **If you must run it remotely**, expect minutes-to-hours of lag and use the server's web UI to wipe the outbox between sessions (`sudo systemctl stop sigint-agent && sqlite3 /var/lib/sigint/outbox.db 'DELETE FROM outbox WHERE acked=0' && sudo systemctl start sigint-agent`).
+**Don't run `bt` or `wifi` continuously on a mesh agent.** They belong on the server (full bandwidth to its own SQLite) or on an agent with an alternate link (see roadmap: out-of-band high-rate transport). The mesh agent is right-sized for scanners that emit ~1 detection every several seconds: **PMR voice, keyfob, TPMS, ISM, LoRa, ADS-B, AIS** all fit comfortably in the duty-cycle budget.
 
-A real fix is on the [roadmap](roadmap.md#-in-flight) — agent-side per-persona rate-limit + sub-batch coalescing before enqueue.
+For post-hoc analysis of a mesh-only deployment that captured BT/WiFi locally: pull the agent's `state_dir/scanner/*.db` over SSH / USB and feed it into `sdr.py tri` / `heatmap` / `correlate` alongside the server's files. The tools already union across per-node `.db`s, so an out-of-band file pull joins cleanly with the live-streamed data.
+
+If the outbox is already saturated, recover with:
+
+```sh
+sudo systemctl stop sigint-agent
+sqlite3 /var/lib/sigint/outbox.db 'DELETE FROM outbox WHERE acked=0'
+sudo systemctl start sigint-agent
+```
 
 ## CMD lost in flight
 

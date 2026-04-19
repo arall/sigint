@@ -58,15 +58,11 @@ Docs:
 
 ## 🚧 In flight
 
-Small known rough edges — fixes are scoped, just not done yet:
-
-- **Agent BT/WiFi outbox saturation** — running the `bt` or `wifi` scanner in a populated area generates detections faster than the mesh can drain (LoRa airtime caps at ~1%, ~6 s per send). Outbox priority now keeps control messages alive, but the DET backlog itself still grows unboundedly. Mitigation today: don't run BT/WiFi continuously over mesh — run it locally on the server, or set a tight `--max-det-rate`. Real fix: agent-side per-persona rate-limit + sub-batch coalescing before enqueue, so we send "30 unique BLE personas in last minute" instead of every advertisement.
+_(All of the known rough edges have been resolved. Operational guidance for BT/WiFi over mesh is documented as a deployment rule in [troubleshooting.md](troubleshooting.md#bt--wifi-scanners-over-mesh-dont) rather than a TODO — see the Platform ideas below for the follow-on work that would lift the constraint.)_
 
 ## 📋 Planned
 
-Concrete next things, roughly in order. The current Planned list is the remaining "In flight" items promoted — the v1 distributed C2 feature set from docs/roadmap.md:19 is now all shipped.
-
-1. **Agent per-persona rate-limit + batch coalescing** — root fix for BT/WiFi outbox saturation: aggregate "30 unique BLE personas in last minute" into a single DET-BATCH frame before enqueueing, instead of one DET per advertisement.
+_(Empty — every "In flight" item from docs/roadmap.md as of bf1c51a has shipped. Next increment of work comes from the Ideas list below when it's promoted.)_
 
 ## 💡 Ideas / future
 
@@ -93,3 +89,4 @@ Speculative / research-grade / someday. Kept here so they're not lost.
 - **Uptime-Kuma–style agent health dashboard** — ping history / STAT freshness / outbox depth over time. Groundwork: the C2 comms log already captures every frame.
 - **Remote log pull over mesh** — on-demand `LOG` spill of the last N lines of `journalctl -u sigint-agent` from the web UI.
 - **Field-replaceable scanner profiles** — YAML-defined profile that pins one SDR to one task (e.g. "drone-watch at this GPS coordinate, alert on any RemoteID"), distributed to agents via CFG. Per-agent scanner control panel is the dashboard-side half; this is the missing declarative half.
+- **Out-of-band high-rate DET transport** — lift the BT/WiFi-over-mesh constraint. EU 868 MHz LoRa is capped at ~1% duty cycle (~1 frame / 6 s), while a single nearby phone can produce 50+ BLE/WiFi observations in that window. No amount of batching or compression makes the mesh carry that firehose in real time without dropping frames, and per-persona dedup would discard the repeat RSSI samples triangulation + movement analysis depend on. The architectural fix is an alternate transport for high-rate scanners when the agent has one (HTTPS/rsync over WiFi or Ethernet), letting the mesh stay for low-rate C2 + ADS-B/AIS/keyfob/PMR/ISM that comfortably fit in the duty-cycle budget. For pure mesh-only field nodes the rule stays "don't run `bt`/`wifi` continuously; pull the agent's local `.db` out-of-band instead" — same workflow `sdr.py tri` / `heatmap` / `calibrate` already use.
