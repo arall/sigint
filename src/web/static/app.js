@@ -850,6 +850,7 @@ const _CATEGORY_BODY_IDS = {
   meshtastic: 'meshtastic-body',
   pagers:     'pagers-body',
   jamming:    'jamming-body',
+  rogue:      'rogue-body',
 };
 
 // Raw rows cache for client-side filtering
@@ -1221,6 +1222,38 @@ function renderJamming(rows) {
   }).join('');
 }
 
+function renderRogue(rows) {
+  const tbody = document.getElementById('rogue-body');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">'
+      + 'no rogue-AP activity detected. Requires the WiFi monitor-mode '
+      + 'adapter and the <code>deauth</code> / <code>evil_twin</code> '
+      + 'parsers enabled on a <code>wifi</code> capture.'
+      + '</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const ts = (r.timestamp || '').replace('T', ' ').split('.')[0];
+    const snr = r.snr_db != null ? r.snr_db.toFixed(1) : '';
+    const isDeauth = r.signal_type === 'WiFi-Deauth';
+    const tagColor = isDeauth ? '#f44336' : '#ff9800';
+    const tagLabel = isDeauth ? 'DEAUTH' : 'EVIL-TWIN';
+    const tag = '<span style="padding:1px 5px;border-radius:3px;'
+      + 'color:#fff;background:' + tagColor + ';font-size:10px;'
+      + 'font-weight:600">' + tagLabel + '</span>';
+    return '<tr>'
+      + '<td style="font-size:11px;color:#888">' + esc(ts) + '</td>'
+      + '<td>' + tag + '</td>'
+      + '<td style="font-weight:600">' + esc(r.channel || '') + '</td>'
+      + '<td style="font-family:monospace;font-size:11px">' + esc(r.subject || '') + '</td>'
+      + '<td>' + esc(r.detail || '') + '</td>'
+      + '<td style="font-size:11px;color:#888">' + esc(r.notes || '') + '</td>'
+      + '<td class="num">' + esc(snr) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
 const _CATEGORY_RENDERERS = {
   voice:    renderVoice,
   drones:   renderDrones,
@@ -1234,6 +1267,7 @@ const _CATEGORY_RENDERERS = {
   meshtastic: renderMeshtastic,
   pagers:     renderPagers,
   jamming:    renderJamming,
+  rogue:      renderRogue,
 };
 
 // --- FPV Video Feed ---

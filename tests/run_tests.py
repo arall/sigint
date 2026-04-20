@@ -68,6 +68,7 @@ SW_TESTS = [
     ("Server-side category pager",     "tests/sw/test_web_category_pager.py"),
     ("Jammer DSP (flatness + decide)", "tests/sw/test_jammer_dsp.py"),
     ("Jammer inference (post-hoc)",    "tests/sw/test_jammer_detect.py"),
+    ("WiFi rogue-AP (deauth + evil-twin)", "tests/sw/test_wifi_rogue.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")

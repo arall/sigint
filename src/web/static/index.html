@@ -134,6 +134,7 @@
     <button class="sig-subtab-btn" data-sub="meshtastic">Meshtastic</button>
     <button class="sig-subtab-btn" data-sub="pagers">Pagers</button>
     <button class="sig-subtab-btn" data-sub="jamming">Jamming</button>
+    <button class="sig-subtab-btn" data-sub="rogue">Rogue</button>
   </div>
 
 <!-- Sub-pane: Voice -->
@@ -512,6 +513,34 @@
       </tbody>
     </table>
     <div id="jamming-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
+  </div>
+</div>
+
+<!-- Sub-pane: Rogue -->
+<div class="sig-subpane" data-sub="rogue" style="display:none">
+  <div class="section">
+    <div class="section-title">
+      <span>Rogue-AP activity</span>
+      <div class="filter-bar">
+        <button onclick="loadCategory('rogue')">Refresh</button>
+      </div>
+    </div>
+    <div class="tab-desc">WiFi monitor-mode attack signatures. <b>Deauth</b> rows fire when ≥ 5 deauth/disassoc frames from the same source hit within 10s — the signature of <code>aireplay-ng</code>, <code>mdk4</code>, or similar client-kick tools (one legitimate disconnect doesn't count). <b>Evil-twin</b> rows fire when an SSID we've already catalogued this session appears with a BSSID from a different MAC prefix; chain-hotel false positives are expected — treat <code>crypto_mismatch</code> rows (legit WPA2 → rogue open) as the high-signal ones.</div>
+    <table>
+      <thead><tr>
+        <th class="sortable" data-tbl="rogue-body" data-key="timestamp">Time</th>
+        <th class="sortable" data-tbl="rogue-body" data-key="signal_type">Type</th>
+        <th class="sortable" data-tbl="rogue-body" data-key="channel">CH</th>
+        <th class="sortable" data-tbl="rogue-body" data-key="subject">Subject</th>
+        <th class="sortable" data-tbl="rogue-body" data-key="detail">Detail</th>
+        <th class="sortable" data-tbl="rogue-body" data-key="notes">Notes</th>
+        <th class="sortable num" data-tbl="rogue-body" data-key="snr_db">SNR (dB)</th>
+      </tr></thead>
+      <tbody id="rogue-body">
+        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+      </tbody>
+    </table>
+    <div id="rogue-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
   </div>
 </div>
 </div><!-- /tab-signals -->

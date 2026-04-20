@@ -334,6 +334,14 @@ def _create_parser(name, logger, channel_cfg=None, capture_cfg=None):
         from parsers.wifi.remote_id import WiFiRemoteIDParser
         return WiFiRemoteIDParser(logger=logger)
 
+    elif name == "deauth":
+        from parsers.wifi.deauth import DeauthParser
+        return DeauthParser(logger=logger)
+
+    elif name == "evil_twin":
+        from parsers.wifi.evil_twin import EvilTwinParser
+        return EvilTwinParser(logger=logger)
+
     else:
         print(f"  [WARN] Unknown parser: {name}")
         return None

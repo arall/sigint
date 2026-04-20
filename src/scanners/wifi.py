@@ -40,6 +40,8 @@ import signal as sig
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from capture.wifi import WiFiCaptureSource  # noqa: E402
+from parsers.wifi.deauth import DeauthParser  # noqa: E402
+from parsers.wifi.evil_twin import EvilTwinParser  # noqa: E402
 from parsers.wifi.probe_request import ProbeRequestParser  # noqa: E402
 from parsers.wifi.remote_id import WiFiRemoteIDParser  # noqa: E402
 from utils.logger import SignalLogger  # noqa: E402
@@ -96,10 +98,15 @@ class WiFiScanner:
             logger=self.logger,
             min_rssi=min_rssi,
         )
+        self.deauth_parser = DeauthParser(logger=self.logger)
+        self.evil_twin_parser = EvilTwinParser(
+            logger=self.logger, min_rssi=min_rssi)
 
         # Wire parsers to capture
         self.capture.add_parser(self.probe_parser.handle_frame)
         self.capture.add_parser(self.remoteid_parser.handle_frame)
+        self.capture.add_parser(self.deauth_parser.handle_frame)
+        self.capture.add_parser(self.evil_twin_parser.handle_frame)
 
     def scan(self):
         """Main scan loop."""
@@ -135,6 +142,17 @@ class WiFiScanner:
         if db_summary:
             print(f"[*] Persona DB: {db_summary['total']} total known, "
                   f"{db_summary['returning']} returning")
+
+        # Rogue-AP summaries
+        deauth_sources = self.deauth_parser.get_summary()
+        if deauth_sources:
+            total_fires = sum(s["fire_count"] for s in deauth_sources.values())
+            print(f"\n[*] Deauth spikes: {total_fires} across "
+                  f"{len(deauth_sources)} source(s)")
+        twins = self.evil_twin_parser.get_summary()
+        if twins:
+            print(f"[*] Evil-twin suspects: {len(twins)} SSID(s) with "
+                  f"multiple BSSID prefixes")
 
         # Print RemoteID drone summary
         drones = self.remoteid_parser.get_summary()

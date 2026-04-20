@@ -123,11 +123,11 @@ Requires `sudo` (HCI access).
   "type": "wifi",
   "interface": "wlan1",
   "band": "all",
-  "parsers": ["probe_request", "beacon", "remoteid_wifi"]
+  "parsers": ["probe_request", "beacon", "remoteid_wifi", "deauth", "evil_twin"]
 }
 ```
 
-`band`: `"2.4"`, `"5"`, or `"all"`. Custom channel list via `"channels": [1, 6, 11, 36, 48]`. Requires `sudo` + a monitor-mode capable adapter.
+`band`: `"2.4"`, `"5"`, or `"all"`. Custom channel list via `"channels": [1, 6, 11, 36, 48]`. Requires `sudo` + a monitor-mode capable adapter. `deauth` flags deauth/disassoc floods (default ≥ 5 frames / 10s per source). `evil_twin` flags SSID collisions across different BSSID prefixes — both surface in the dashboard's Rogue sub-tab.
 
 #### `type: "standalone"`
 
@@ -150,7 +150,7 @@ Wrap an existing `sdr.py <subcommand>` as a managed subprocess (stdout drained i
 - `keyfob`, `tpms`
 - `gsm`, `lte`
 - `apple_continuity`, `remoteid_ble`
-- `probe_request`, `beacon`, `remoteid_wifi`
+- `probe_request`, `beacon`, `remoteid_wifi`, `deauth`, `evil_twin`
 - `lora`, `elrs`, `meshtastic`
 
 ### Example configs in the repo

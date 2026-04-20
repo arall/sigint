@@ -32,6 +32,7 @@ CATEGORIES = {
     ],
     "pagers":   ["pocsag"],
     "jamming":  ["jamming", "jamming-inferred"],
+    "rogue":    ["WiFi-Deauth", "WiFi-EvilTwin"],
 }
 
 CATEGORY_LABELS = {
@@ -48,12 +49,13 @@ CATEGORY_LABELS = {
     "meshtastic": "Meshtastic",
     "pagers":   "Pagers",
     "jamming":  "Jamming",
+    "rogue":    "Rogue",
 }
 
 CATEGORY_ORDER = [
     "voice", "drones", "aircraft", "vessels",
     "keyfobs", "tpms", "cellular", "devices",
-    "ism", "lora", "meshtastic", "pagers", "jamming",
+    "ism", "lora", "meshtastic", "pagers", "jamming", "rogue",
 ]
 
 TYPE_TO_CATEGORY = {sig: cat for cat, sigs in CATEGORIES.items() for sig in sigs}

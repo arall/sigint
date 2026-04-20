@@ -836,6 +836,59 @@ def _load_jamming(detections):
     return rows
 
 
+def _load_rogue(detections):
+    """Rogue-AP detections — deauth floods + evil-twin SSID collisions.
+
+    Both emit from the WiFi monitor-mode adapter. The `signal_type`
+    discriminator keeps the two concerns visible in one table while the
+    metadata surfaces the specific attack shape (spike count, crypto
+    mismatch, etc.).
+    """
+    rows = []
+    for d in reversed(detections):
+        if d.get("category") != "rogue":
+            continue
+        meta = d.get("meta") or {}
+        if d["signal_type"] == "WiFi-Deauth":
+            target = (
+                "broadcast" if meta.get("broadcast")
+                else f"{meta.get('target_count', 0)} clients"
+            )
+            detail = (
+                f"{meta.get('count_in_window', 0)} frames / "
+                f"{int(meta.get('window_seconds', 0))}s → {target}"
+            )
+            subject = meta.get("src") or d.get("device_id") or ""
+            notes = ", ".join(meta.get("reasons") or []) or ""
+        else:  # WiFi-EvilTwin
+            parts = []
+            if meta.get("crypto_mismatch"):
+                parts.append(
+                    f"crypto {meta.get('ref_crypto')}→{meta.get('new_crypto')}"
+                )
+            if meta.get("manufacturer_mismatch"):
+                parts.append(
+                    f"vendor {meta.get('ref_manufacturer')}→"
+                    f"{meta.get('new_manufacturer')}"
+                )
+            detail = "  ".join(parts) or "prefix mismatch"
+            subject = f"SSID {meta.get('ssid', '')!r}"
+            notes = f"ref {meta.get('ref_bssid', '')} vs {meta.get('new_bssid', '')}"
+        rows.append({
+            "timestamp": d["timestamp"],
+            "signal_type": d["signal_type"],
+            "channel": d["channel"],
+            "frequency_mhz": d["frequency_mhz"],
+            "snr_db": d["snr_db"],
+            "subject": subject,
+            "detail": detail,
+            "notes": notes,
+        })
+        if len(rows) >= 200:
+            break
+    return rows
+
+
 CATEGORY_LOADERS = {
     "voice":    _load_voice,
     "drones":   _load_drones,
@@ -849,4 +902,5 @@ CATEGORY_LOADERS = {
     "meshtastic": _load_meshtastic,
     "pagers":     _load_pagers,
     "jamming":    _load_jamming,
+    "rogue":      _load_rogue,
 }
