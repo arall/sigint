@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 import threading
+import time
 
 from agent.config import AgentConfig
 from agent.agent import Agent
@@ -83,6 +84,24 @@ def run(argv=None) -> int:
 
     # Tail the scanner's per-session DB and forward each new detection
     # as a DET message through the agent's outbox.
+    gps_sidecar_path = os.path.join(state_dir, "scanner", "gps.json")
+
+    def _read_sidecar_position():
+        # Used when the scanner doesn't itself open a GPS (e.g. BLE on a node
+        # whose only GPS is inside the meshtastic radio). The agent writes
+        # the sidecar from MeshtasticGpsReader; we inject those coordinates
+        # into outgoing DETs so triangulation has positions.
+        try:
+            import json as _json
+            st = os.stat(gps_sidecar_path)
+            if time.time() - st.st_mtime > 60:
+                return None, None
+            with open(gps_sidecar_path) as f:
+                d = _json.load(f)
+            return d.get("lat"), d.get("lon")
+        except Exception:
+            return None, None
+
     def _on_scanner_row(row):
         try:
             freq_mhz = float(row["frequency_hz"]) / 1e6
@@ -90,9 +109,13 @@ def run(argv=None) -> int:
             ts_unix = int(float(row["ts_epoch"]))
             snr_raw = row.get("snr_db")
             snr = int(round(float(snr_raw))) if snr_raw is not None else None
+            lat = row.get("latitude")
+            lon = row.get("longitude")
+            if lat is None or lon is None:
+                lat, lon = _read_sidecar_position()
             agent.enqueue_det(
                 type_=row["signal_type"], freq_mhz=freq_mhz, rssi=rssi,
-                lat=row.get("latitude"), lon=row.get("longitude"),
+                lat=lat, lon=lon,
                 ts_unix=ts_unix, summary=row.get("channel") or "",
                 snr=snr,
             )

@@ -67,8 +67,8 @@ class Agent:
             cs = self._state.current_scanner
             try:
                 self._scanner_mgr.start(cs["type"], cs.get("args", []))
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"[agent] scanner_mgr.start failed: {_e!r}", flush=True)
 
         # Fire one CFGINFO at start so the dashboard can render the
         # agent's static config view. AgentManager keeps the latest
