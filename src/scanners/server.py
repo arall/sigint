@@ -1054,18 +1054,37 @@ class ServerOrchestrator:
             except Exception:
                 break
 
+        # `pgrep -fa` matches anywhere in the full cmdline, which means a
+        # shell wrapper like `bash -c 'pgrep rtl_sdr'` or our own polling
+        # loops with `... | grep sdr.py` get flagged as if they had the
+        # device open. Use `-a` (matches the process *name*, the comm
+        # field — i.e. the executable's basename) for binary patterns,
+        # and only fall back to -fa for the python-script case where
+        # the comm is just "python3".
+        #
+        # `(name_pattern, full_cmd_pattern, desc)`. Use `name_pattern`
+        # alone unless the binary is a generic interpreter — then add
+        # `full_cmd_pattern` to disambiguate.
+        checks = [
+            ("hackrf_transfer", None,                "HackRF"),
+            ("python3",         r"sdr\.py.*server", "SDR server"),
+            ("rtl_sdr",         None,                "RTL-SDR"),
+            ("rtl_test",        None,                "RTL-SDR"),
+            ("rtl_power",       None,                "RTL-SDR"),
+            ("rtl_433",         None,                "RTL-SDR"),
+            ("rtl_ais",         None,                "RTL-SDR"),
+            ("hcitool",         r"lescan",           "BLE scanner"),
+            ("hcidump",         None,                "BLE dump"),
+        ]
         conflicts = []
-        for pattern, desc in [
-            ("hackrf_transfer", "HackRF"),
-            ("sdr.py.*server", "SDR server"),
-            ("rtl_", "RTL-SDR"),
-            ("hcitool.*lescan", "BLE scanner"),
-            ("hcidump", "BLE dump"),
-        ]:
+        for name_pat, cmd_pat, desc in checks:
             try:
-                result = sp.run(
-                    ["pgrep", "-fa", pattern],
-                    capture_output=True, text=True, timeout=3)
+                args = ["pgrep", "-a"]
+                if cmd_pat is not None:
+                    args += ["-f", f"{name_pat}.*{cmd_pat}"]
+                else:
+                    args += [name_pat]
+                result = sp.run(args, capture_output=True, text=True, timeout=3)
                 for line in result.stdout.strip().split('\n'):
                     if not line:
                         continue
