@@ -111,7 +111,109 @@ Each drop marks the capture `degraded` for the web UI; detection continues.
 
 ## RTL-SDR `usb_claim_interface error -6`
 
-Another process has the SDR. `rtl_test`, a running `sdr.py pmr`, `readsb`, or `rtl_ais` — only one can talk to each dongle at a time. `pgrep -af rtl_|sdr.py` and kill the stray.
+Another process has the SDR. Two cases:
+
+**Userspace conflict.** `rtl_test`, a running `sdr.py pmr`, `readsb`, or `rtl_ais` — only one can talk to each dongle at a time. `pgrep -af 'rtl_|sdr.py'` and kill the stray.
+
+**Kernel DVB driver.** On a fresh Pi the kernel auto-claims the dongle as a DVB-T tuner. `dmesg` shows `dvb_usb_rtl28xxu` events, `lsmod` lists `rtl2832_sdr` / `dvb_usb_rtl28xxu`. Blacklist + unload — see [install.md → Blacklist the kernel DVB driver](install.md#blacklist-the-kernel-dvb-driver).
+
+## RTL-SDR Blog V4: 0 detections, channel powers stuck at noise floor
+
+### Symptoms
+- PMR scanner (or any `pyrtlsdr`-based scanner) starts cleanly, prints `RTL-SDR Blog V4 Detected`, but every channel reads the same value (~20 dB) regardless of TX
+- `Gain: 0.0 dB` in scanner startup output even though `--gain 40` was passed
+- A direct `rtl_test -t` shows the full V4 gain table (29 values up to 49.6 dB), but `python3 -c "from rtlsdr import RtlSdr; s=RtlSdr(0); s.set_manual_gain_enabled(True); s.gain=40.2; print(s.gain)"` returns `0.0`
+
+### Why
+`pyrtlsdr`'s `gain` setter calls `rtlsdr_set_tuner_gain()` (via ctypes). On the V4's R828D tuner the call returns success (rc=0) but the hardware silently ignores it — gain stays at the V4's hardware default. `rtlsdr_set_tuner_gain_ext()` has the same outcome. We tested this against a fresh `rtlsdr_open()` bypassing pyrtlsdr's `RtlSdr` class entirely, same result.
+
+The C tools (`rtl_sdr`, `rtl_power`) program the V4 correctly. So the workaround is to acquire IQ via the CLI rather than via pyrtlsdr.
+
+### Fix
+`scanners/pmr.py` ships an `_RtlSdrSubprocess` shim (enabled by default via the `PMR_USE_RTL_SDR_CLI=1` env var) that spawns `rtl_sdr -d N -f F -s R -g G -` and pipes the raw u8 IQ into the same processing path. Set `PMR_USE_RTL_SDR_CLI=0` to fall back to pyrtlsdr if you have hardware where pyrtlsdr's gain works.
+
+If you write a new scanner, copy this pattern — the bug affects every pyrtlsdr-based capture path on the V4, not just PMR.
+
+### Don't drop LD_LIBRARY_PATH for the rtl_sdr subprocess
+The locally-built `rtl_sdr` binary requires the V4-fork lib at runtime (it calls `rtlsdr_set_and_get_tuner_bandwidth`, which Debian's 2.0.1 lib doesn't export). The pmr.py shim enforces `LD_LIBRARY_PATH=/usr/local/lib` for the subprocess. If you're spinning up your own ad-hoc test, wrap with `env LD_LIBRARY_PATH=/usr/local/lib rtl_sdr ...`, or you'll hit `undefined symbol: rtlsdr_set_and_get_tuner_bandwidth`.
+
+## Scanner runs but its main loop never displays / never logs detections
+
+### Symptom
+- Scanner subprocess at >100% CPU (one core saturated)
+- `[dbg] processing chunk #1` appears in the log; chunk #2 never does
+- `pmr-direct.log` gets ~10 lines and stops
+- `py-spy dump --pid <scanner-pid>` shows the main thread permanently in `calculate_power_spectrum` / `np.blackman` / `_process_all_channels`
+
+### Why
+On a Pi 4, a 256K-pt complex FFT takes ~150–300 ms; `rtl_sdr` at 2.4 MS/s emits a chunk every ~110 ms. The scanner's "drain queued chunks" inner loop (`while not sample_queue.empty()`) can't keep up — but the reader thread keeps refilling the bounded queue faster than the consumer drains it, so the inner `empty()` check never returns True. Display + detection logging starve forever.
+
+### Fix
+`pmr.py`'s drain loop is now capped to `display_interval` (200 ms): it processes chunks until the deadline, then exits to update the display + run any pending detections. If you copy the pmr.py async pattern into a new scanner, keep the deadline cap.
+
+## Server refuses to start: "Conflicting processes detected"
+
+The server's pre-flight checks for any process holding `hci0` (BLE), the RTL-SDR, or HackRF before starting its own captures. False-positive sources we've seen:
+
+- A leftover standalone `sdr.py bt`, `sdr.py pmr`, `hcitool`, or `hcidump` from an earlier debugging session
+- A background polling shell whose **command line** literally contains `sdr.py` (e.g. `until ssh ... 'ps -ef | grep sdr.py'; do sleep 5; done`) — the pre-flight regex matches these too
+
+`sudo pkill -9 -f 'hcitool|hcidump'`, kill any stray `sdr.py` polling loops, then `systemctl restart sigint-server`. The error message lists the exact PIDs.
+
+## "Failed to import scanner module: ..."
+
+The `sdr.py` dispatch imports every scanner's module up-front, so any one missing dep fails all scanners — even ones that don't use the missing package.
+
+- `No module named 'numpy'` / `'scipy'` / `'rtlsdr'` → `venv/bin/pip install -r requirements.txt`
+- `Error loading librtlsdr` → install librtlsdr V4 fork (see [install.md](install.md))
+- `librtlsdr.so: undefined symbol: rtlsdr_set_dithering` → Debian librtlsdr is being loaded; rebuild the V4 fork or set `LD_LIBRARY_PATH=/usr/local/lib`
+- `The scipy install you are using seems to be broken` → partial download; reinstall: `sudo venv/bin/pip install --force-reinstall --no-deps --resume-retries 5 scipy`
+
+## "Could not open port ... [Errno 5] Input/output error" (Heltec / meshtastic)
+
+The Heltec Tracker's USB-serial bridge sometimes wedges, especially after a power loss or a long session. `meshtastic.stream_interface` can't open the port; the agent's watchdog catches it (via `_rxThread.is_alive()`) and exits with code 2 so systemd restarts. If the wedge is at the firmware level rather than the host driver, the restart loops indefinitely.
+
+Recovery:
+
+1. Physically unplug + replug the Heltec USB cable on the affected node.
+2. Confirm the device re-enumerates: `dmesg | tail -10` should show a fresh `cdc_acm` event.
+3. The systemd `Restart=always` will pick it up at the next iteration.
+
+If the symptom recurs frequently on one specific Heltec unit, the device-side USB chip is flaky — swap to a different radio.
+
+## USB cable enumerates as power-only
+
+When a fresh SDR or radio refuses to enumerate (`lsusb` shows the hub but not the device, no `dmesg` event on plug), check the cable before assuming the SDR is dead. Many short USB cables ship with the data lines unconnected (charge-only). Swap with a known-good data cable.
+
+## Triangulation: dashboard shows no triangulations even though agents are forwarding DETs
+
+### Likely causes (in order)
+
+**1. Correlation window too tight for mesh latency.** The mesh's `det_rate_sec=6` plus LoRa airtime makes "the same emission heard at N nodes" land at the server 6–15 s apart. If `triangulate_live.py:DEFAULT_CORRELATION_WINDOW_S` is set tighter than that, the same emission ends up in different correlation buckets and you only get per-node singletons. We default to **30 s** for this reason.
+
+**2. Forwarded DETs missing GPS coordinates.** A DET without lat/lon is invisible to triangulation — `_shape_detection` filters it out. Two cases:
+
+- The scanner subprocess never writes GPS into its local DB (it has no `--gps` and isn't reading any sidecar). Fix: make sure the agent writes the meshtastic-GPS sidecar, and that `agent/main.py:_on_scanner_row` falls back to that sidecar when `row.latitude is None`. Both are in `main` — check yours hasn't drifted.
+- The scanner has GPS but the receiver-end (server) loses it. Inspect the agent's `outbox.db`: `SELECT payload FROM outbox WHERE kind='DET' LIMIT 5` — the wire format is `DET|node|seq|type|freq|rssi|lat|lon|...`; lat/lon should be populated.
+
+**3. BLE-Adv: every device collapses to one trilat group.** Older `apple_continuity.py` set `channel="BLE"` for all detections. The DET wire format only carries one freeform field (`summary`) which becomes the server-side `channel`; trilat's `metadata_id` strategy falls back to that field. Result: every BLE device ends up in one giant correlation bucket and the trilat is meaningless. Fix shipped: parser now sets `channel=mac` so per-device correlation works. Verify with: `SELECT DISTINCT channel FROM detections WHERE signal_type='BLE-Adv' LIMIT 10` — should be MAC-shaped, not the literal string `"BLE"`.
+
+**4. Server's own captures lack a position.** The server has no GPS — its lat/lon is configured in `server.json` as `server_position`. If your version of `triangulate_live.py` doesn't inject this for non-agent rows, server-side detections are dropped from the trilat input. Workaround: run captures via the agent flow (so they go through the GPS-injection path) or patch `_shape_detection` to fall back to `server_position`.
+
+## Server's PMR HackRF capture: "running" but 0 detections
+
+Server's PMR HackRF reports `running` but logs zero detections regardless of how strong the signal is.
+
+- **HackRF unplugged after server start.** `hackrf_transfer` is alive as a child process but the device went away — SIGINT and SIGTERM don't propagate cleanly, and the parent server doesn't notice for ~60 s. Symptom: `hackrf_info` reports a different device count than what's in `output/server_info.json`. Fix: `systemctl restart sigint-server` after replugging.
+- **HackRF queue 1-block drop at startup.** Server marks the capture `degraded`. Often the capture continues fine after the initial drop. If it actually stops producing samples after the drop, the FM voice parser thread sees no input and the dashboard sits at "waiting for detections..." — restart the server and watch the first 30 s of `journalctl -u sigint-server`.
+
+## Pi 0 W2 specifically
+
+Pi 0 W2 is slow (single core ARM Cortex-A53) and easily under-powered:
+
+- Agent + scanner startup takes 30–60 s, not the ~10 s of a Pi 4. Don't conclude the agent is wedged just because no scanner has spawned 20 s after restart — wait at least a minute.
+- `pip install scipy` is fragile over slow connections. Use `--resume-retries 5`. A partial install will produce `The scipy install you are using seems to be broken` at runtime.
+- USB power budget is tight. Bus-powered SDR + meshtastic radio on the same hub can brown out. `vcgencmd get_throttled` should return `0x0`; non-zero means under-voltage was detected at some point. Use a powered hub if you see this.
 
 ## `readsb` finds no aircraft
 

@@ -30,16 +30,48 @@ sudo venv/bin/python3 src/sdr.py server configs/server.json
 sudo apt-get install -y cmake libusb-1.0-0-dev ffmpeg python3-full python3-venv
 ```
 
-### librtlsdr (keenerd fork)
+### librtlsdr (V4-aware fork)
 
-Required for RTL-SDR Blog V4 + `pyrtlsdr`. The Debian `librtlsdr0` package is too old and missing `rtlsdr_set_dithering`:
+Required for RTL-SDR Blog V4 + `pyrtlsdr`. The Debian `librtlsdr0` package (2.0.x) is missing `rtlsdr_set_dithering` (pyrtlsdr import fails) and `rtlsdr_set_and_get_tuner_bandwidth` (rtl_sdr CLI fails). Build the V4-aware fork that ships those symbols (`librtlsdr.so.0.9git`):
 
 ```sh
 git clone https://github.com/librtlsdr/librtlsdr.git /tmp/librtlsdr
 cd /tmp/librtlsdr && mkdir build && cd build
-cmake .. && make -j4
+cmake .. -DINSTALL_UDEV_RULES=ON -DDETACH_KERNEL_DRIVER=ON && make -j4
 sudo make install && sudo ldconfig
 ```
+
+Verify both required symbols are present:
+
+```sh
+nm -D /usr/local/lib/librtlsdr.so | grep -E 'set_dithering|set_and_get_tuner_bandwidth'
+```
+
+Both must show `T` (defined). If only one is present, the fork is too old — update.
+
+### Blacklist the kernel DVB driver
+
+The kernel auto-claims any RTL2832-based dongle as a DVB-T tuner, blocking userspace SDR access (you'll see `usb_claim_interface error -6` and `Resource busy`). Even the udev rules from the librtlsdr build don't always prevent this on Raspberry Pi OS. Force a blacklist:
+
+```sh
+echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/blacklist-rtl.conf
+sudo rmmod rtl2832_sdr dvb_usb_rtl28xxu rtl2832 dvb_usb_v2 2>/dev/null
+```
+
+The `rmmod` only succeeds while no process is using the SDR. If it errors with "Module ... is in use", reboot or unplug+replug the SDR after writing the blacklist file.
+
+### Configure systemd unit to find the V4 lib
+
+The agent's spawned scanner subprocess (`sdr.py pmr` and friends) opens the RTL-SDR via `pyrtlsdr` → `librtlsdr.so`. The dynamic linker default order (`/lib/aarch64-linux-gnu` first) loads Debian's 2.0.1 lib which is missing V4 symbols. Pin `/usr/local/lib` for the agent:
+
+```ini
+# /etc/systemd/system/sigint-agent.service
+[Service]
+Environment="LD_LIBRARY_PATH=/usr/local/lib"
+...
+```
+
+`pmr.py` automatically inherits this and forces it for the `rtl_sdr` subprocess too (which itself was built against the V4 fork lib).
 
 ### WiFi scanner
 
