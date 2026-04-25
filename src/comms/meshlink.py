@@ -6,7 +6,7 @@ In tests, pass a custom backend that implements `send_text(text)` and
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 
 # Module-level registry of active backends keyed by id(). pypubsub listeners
@@ -70,6 +70,27 @@ class MeshLink:
             def send_text(self, text):
                 self._state.iface.sendText(text, channelIndex=self._state.channel_index)
 
+            def get_local_position(self) -> Tuple[Optional[float], Optional[float], int]:
+                # Returns (lat, lon, sats) for the local node, or (None,None,0)
+                # if no fix. Drives MeshtasticGpsReader on nodes whose only GPS
+                # is inside the meshtastic radio (T-Echo's L76K, Heltec
+                # Wireless Tracker's UC6580 — both wired internally to the
+                # device's MCU, not exposed on USB serial).
+                iface = self._state.iface
+                if iface is None:
+                    return None, None, 0
+                try:
+                    info = iface.getMyNodeInfo()
+                except Exception:
+                    return None, None, 0
+                if not info:
+                    return None, None, 0
+                pos = info.get("position") or {}
+                lat = pos.get("latitude")
+                lon = pos.get("longitude")
+                sats = pos.get("satsInView") or pos.get("sats") or 0
+                return lat, lon, int(sats or 0)
+
         return cls(backend=_SerialBackend(state))
 
     def on_message(self, handler: Callable[[str], None]) -> None:
@@ -77,6 +98,15 @@ class MeshLink:
 
     def send(self, text: str) -> None:
         self._backend.send_text(text)
+
+    def get_local_position(self) -> Tuple[Optional[float], Optional[float], int]:
+        getter = getattr(self._backend, "get_local_position", None)
+        if getter is None:
+            return None, None, 0
+        try:
+            return getter()
+        except Exception:
+            return None, None, 0
 
     def _dispatch(self, text: str) -> None:
         cb = self._on_message

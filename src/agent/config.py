@@ -17,6 +17,9 @@ class AgentConfig:
     mesh_channel_index: int = 0
     state_dir: str = "/var/lib/sigint"
     gps_port: Optional[str] = None
+    # "meshtastic" → pull position from the radio (T-Echo, Heltec Tracker).
+    # None → traditional flow (NMEA serial via gps_port, written by scanner).
+    gps_source: Optional[str] = None
 
     @classmethod
     def load(cls, path: str = DEFAULT_CONF_PATH) -> "AgentConfig":
@@ -30,4 +33,5 @@ class AgentConfig:
             mesh_channel_index=int(data.get("mesh_channel_index", 0)),
             state_dir=data.get("state_dir", "/var/lib/sigint"),
             gps_port=data.get("gps_port"),
+            gps_source=data.get("gps_source"),
         )

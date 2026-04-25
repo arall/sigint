@@ -5,11 +5,12 @@ Reads NMEA sentences from a serial GPS (e.g. u-blox) and provides
 current coordinates for signal detection logging.
 """
 
+import json
 import os
 import re
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 
 # NMEA checksum validation
@@ -177,3 +178,101 @@ class GPSReader:
                     with self._lock:
                         self._lat = lat
                         self._lon = lon
+
+
+PositionProvider = Callable[[], Tuple[Optional[float], Optional[float], int]]
+
+
+class MeshtasticGpsReader:
+    """GPS reader backed by the local Meshtastic node's position field.
+
+    Same surface as GPSReader (start/stop, position, satellites) but pulls
+    `(lat, lon, sats)` from a provider callable instead of reading NMEA off
+    a serial port. The agent passes a callable that wraps `MeshLink
+    .get_local_position()` so the existing meshtastic serial connection
+    is reused — no second port, no extra hardware.
+    """
+
+    def __init__(self, provider: PositionProvider, poll_interval: float = 5.0):
+        self._provider = provider
+        self._poll_interval = poll_interval
+        self._lat: Optional[float] = None
+        self._lon: Optional[float] = None
+        self._sats: int = 0
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+
+    def start(self):
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+            self._thread = None
+
+    @property
+    def position(self) -> Tuple[Optional[float], Optional[float]]:
+        with self._lock:
+            return (self._lat, self._lon)
+
+    @property
+    def satellites(self) -> int:
+        with self._lock:
+            return self._sats
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                lat, lon, sats = self._provider()
+            except Exception:
+                lat, lon, sats = None, None, 0
+            with self._lock:
+                self._lat = lat
+                self._lon = lon
+                self._sats = int(sats or 0)
+            self._stop.wait(self._poll_interval)
+
+
+def write_gps_sidecar(reader, path: str, interval: float = 30.0,
+                      stop_event: Optional[threading.Event] = None) -> threading.Thread:
+    """Periodically write `reader.position` + `reader.satellites` to `path`.
+
+    The agent's `_stat_loop` reads this same path and uses the values for
+    STAT messages and DET tagging — see agent.py:_stat_loop. Only writes
+    when there's a fix; an unwritten/stale sidecar yields lat/lon=None
+    on the consumer side, which is correct.
+
+    Returns the daemon thread (already started). Pass a stop_event to
+    halt it deterministically; otherwise it dies with the process.
+    """
+    stop = stop_event or threading.Event()
+
+    def _loop():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        while not stop.is_set():
+            lat, lon = reader.position
+            if lat is not None and lon is not None:
+                payload = {
+                    "lat": lat,
+                    "lon": lon,
+                    "sats": reader.satellites,
+                    "ts": time.time(),
+                }
+                tmp = path + ".tmp"
+                try:
+                    with open(tmp, "w") as f:
+                        json.dump(payload, f)
+                    os.replace(tmp, path)
+                except OSError:
+                    pass
+            stop.wait(interval)
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    return t

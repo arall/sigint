@@ -42,6 +42,24 @@ def run(argv=None) -> int:
     # stamped by the scanner's logger, and DET messages forward them.
 
     link = MeshLink.from_serial(port=port, channel_index=cfg.mesh_channel_index)
+
+    # Optional: derive position from the meshtastic radio's own GPS (e.g.
+    # T-Echo / Heltec Wireless Tracker). Writes the same gps.json sidecar
+    # that scanner subprocesses normally produce, so _stat_loop and
+    # downstream DET tagging consume it transparently.
+    gps_reader = None
+    gps_writer_stop = None
+    if cfg.gps_source == "meshtastic":
+        from utils.gps import MeshtasticGpsReader, write_gps_sidecar
+        gps_reader = MeshtasticGpsReader(provider=link.get_local_position)
+        gps_reader.start()
+        gps_writer_stop = threading.Event()
+        write_gps_sidecar(
+            gps_reader,
+            os.path.join(state_dir, "scanner", "gps.json"),
+            stop_event=gps_writer_stop,
+        )
+
     src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sdr_py = os.path.join(src_dir, "sdr.py")
     scanner_mgr = ScannerManager(
@@ -93,6 +111,10 @@ def run(argv=None) -> int:
     signal.signal(signal.SIGTERM, _sig)
     done.wait()
     tailer.stop()
+    if gps_writer_stop is not None:
+        gps_writer_stop.set()
+    if gps_reader is not None:
+        gps_reader.stop()
     agent.stop()
     return 0
 
