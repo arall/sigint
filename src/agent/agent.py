@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import time
 from typing import List, Optional
@@ -11,6 +12,30 @@ from comms import protocol as P
 from comms.meshlink import MeshLink
 from agent.outbox import Outbox
 from agent.state import AgentState
+
+
+def _get_primary_ip() -> str:
+    """Best-effort 'what IP would I use to reach the internet'.
+
+    Opens a UDP socket to a public address (no traffic actually sent —
+    UDP connect just fills in the kernel's source-address selection)
+    and reads the local end. Works without internet too: when the
+    default route is offline the kernel still picks an address from
+    the iface that owns the route. Returns "" on failure so the wire
+    payload stays valid.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 53))
+        return s.getsockname()[0]
+    except Exception:
+        return ""
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
 from agent.scanner_mgr import ScannerManager
 
 
@@ -91,6 +116,7 @@ class Agent:
             state_dir=str(cfg.get("state_dir") or ""),
             version=str(cfg.get("version") or "0.1"),
             hw=str(cfg.get("hw") or "rpi"),
+            net_ip=_get_primary_ip(),
         )
         self._outbox.update_payload(seq, payload)
 

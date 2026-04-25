@@ -179,6 +179,7 @@ class AgentManager:
                 "state_dir": fields.get("state_dir", ""),
                 "version": fields.get("version", ""),
                 "hw": fields.get("hw", ""),
+                "net_ip": fields.get("net_ip", ""),
                 "received_at": time.time(),
             }
         if seq is not None:

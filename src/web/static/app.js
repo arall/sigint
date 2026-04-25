@@ -2546,6 +2546,7 @@ function _renderAgentConfig(id, info) {
     parts.push(`<div style="margin-bottom:8px">
       <div style="color:#aaa; font-weight:600; margin-bottom:4px">Agent config</div>
       <div><span style="color:#888">version:</span> ${esc(cfg.version || '')} (${esc(cfg.hw || '')})</div>
+      <div><span style="color:#888">net_ip:</span> ${esc(cfg.net_ip || '(unknown)')}</div>
       <div><span style="color:#888">meshtastic_port:</span> ${esc(cfg.meshtastic_port || '')}</div>
       <div><span style="color:#888">mesh_channel_index:</span> ${esc(cfg.mesh_channel_index)}</div>
       <div><span style="color:#888">gps_port:</span> ${esc(cfg.gps_port || '(none)')}</div>

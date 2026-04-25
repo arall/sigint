@@ -125,12 +125,18 @@ def encode_log(agent_id: str, seq: int, level: str, text: str) -> str:
 
 def encode_cfginfo(agent_id: str, seq: int, mesh_channel_index: int,
                    meshtastic_port: str, gps_port: str,
-                   state_dir: str, version: str, hw: str) -> str:
+                   state_dir: str, version: str, hw: str,
+                   net_ip: str = "") -> str:
     """One-shot snapshot of the agent's static config, sent at startup
-    so the dashboard can render the agent's "Config" view."""
+    so the dashboard can render the agent's "Config" view.
+
+    `net_ip` is the agent's primary IPv4 address — useful for finding
+    the node after it associates to a hotspot in the field, where you
+    don't have an arp table or an mDNS broadcast domain handy.
+    """
     return (f"CFGINFO|{agent_id}|{seq}|{mesh_channel_index}|"
             f"{_esc(meshtastic_port)}|{_esc(gps_port)}|{_esc(state_dir)}|"
-            f"{_esc(version)}|{_esc(hw)}")
+            f"{_esc(version)}|{_esc(hw)}|{_esc(net_ip)}")
 
 
 def encode_scaninfo(agent_id: str, seq: int, scanner_type: str,
@@ -228,7 +234,10 @@ def decode(wire: str) -> Message:
                             "gps_port": _unesc(parts[5]),
                             "state_dir": _unesc(parts[6]),
                             "version": _unesc(parts[7]),
-                            "hw": _unesc(parts[8])},
+                            "hw": _unesc(parts[8]),
+                            # Optional 10th field added later — older
+                            # agents send 9 parts; default to "" then.
+                            "net_ip": _unesc(parts[9]) if len(parts) > 9 else ""},
                            raw=wire)
         if tag == "SCANINFO":
             _check_min(parts, 9)
