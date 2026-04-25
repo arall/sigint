@@ -387,7 +387,7 @@ class AppleContinuityParser(BaseParser):
                 frequency_hz=BLE_ADV_FREQ,
                 power_db=float(rssi),
                 noise_floor_db=noise_floor,
-                channel="BLE",
+                channel=mac,
                 metadata=json.dumps(persona_snapshot),
             )
             self.logger.log(detection)
