@@ -151,6 +151,14 @@ Examples:
         default=0,
         help="RTL-SDR frequency correction in ppm (e.g. -28, default: 0)",
     )
+    pmr_parser.add_argument(
+        "--sample-rate-mhz",
+        type=float,
+        default=2.4,
+        help="RTL-SDR sample rate in MHz (default: 2.4). "
+        "Drop to 1.2 on slow CPUs (Pi 0 W2) to reduce FFT load — "
+        "loses upper digital channels (446.1-446.2) but keeps all 8 analog.",
+    )
 
     # Keyfob scanner
     keyfob_parser = subparsers.add_parser(
@@ -1331,6 +1339,7 @@ def _dispatch_scanner(args):
             language=args.language,
             digital=args.digital,
             ppm=args.ppm,
+            sample_rate=args.sample_rate_mhz * 1e6,
         )
         if gps:
             scanner.logger.gps = gps

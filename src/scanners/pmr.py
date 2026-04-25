@@ -21,11 +21,114 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import utils.loader  # noqa: F401,E402 - Must be imported before rtlsdr
 
+import subprocess  # noqa: E402
 import time  # noqa: E402
 
 import numpy as np  # noqa: E402
 from rtlsdr import RtlSdr  # noqa: E402
 from scipy import signal as scipy_signal  # noqa: E402
+
+# Switch to rtl_sdr CLI subprocess on hardware that pyrtlsdr's gain setter
+# can't drive (RTL-SDR Blog V4 — pyrtlsdr's set_tuner_gain accepts the call
+# but silently fails to apply, leaving the tuner at gain=0). The CLI tool
+# uses the same librtlsdr but with a different open/init sequence that
+# successfully programs the R828D. Set PMR_USE_RTL_SDR_CLI=1 to enable.
+USE_RTL_SDR_CLI = os.environ.get("PMR_USE_RTL_SDR_CLI", "1") not in ("0", "")
+
+
+class _RtlSdrSubprocess:
+    """Minimal RtlSdr-shaped wrapper that streams IQ from `rtl_sdr` CLI.
+
+    Mirrors only the surface area pmr.py uses: `sample_rate`, `center_freq`,
+    `gain` properties (set-only; reflected via attributes), `freq_correction`
+    setter, and `read_samples_async(callback, num_samples)` plus
+    `cancel_read_async()`. Bypasses pyrtlsdr's broken V4 gain path.
+    """
+
+    def __init__(self, device_index: int = 0):
+        self.device_index = device_index
+        self.sample_rate = 0
+        self.center_freq = 0
+        self.gain = 0
+        self.freq_correction = 0
+        self._proc = None
+        self._cancel = False
+
+    def read_samples_async(self, callback, num_samples):
+        cmd = [
+            "rtl_sdr",
+            "-d", str(self.device_index),
+            "-f", str(int(self.center_freq)),
+            "-s", str(int(self.sample_rate)),
+            "-g", str(int(self.gain)),
+        ]
+        if self.freq_correction:
+            cmd += ["-p", str(int(self.freq_correction))]
+        cmd += ["-"]
+        # rtl_sdr needs LD_LIBRARY_PATH=/usr/local/lib so it finds the V4
+        # fork librtlsdr.so.0.9git (which has rtlsdr_set_and_get_tuner_bandwidth
+        # — Debian's 2.0.1 doesn't). The systemd agent unit sets this
+        # variable already; inherit it. If unset (e.g. local dev), force it.
+        env = os.environ.copy()
+        if not env.get("LD_LIBRARY_PATH"):
+            env["LD_LIBRARY_PATH"] = "/usr/local/lib"
+        self._proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        )
+        # Drain stderr to a per-instance buffer so an unexpected exit can be
+        # surfaced (rtl_sdr writes "Sampling at 2400000 S/s" + tuner detect
+        # to stderr; if it dies, the message is on stderr too).
+        import threading as _t
+        self._stderr_buf = bytearray()
+        def _drain():
+            try:
+                for line in self._proc.stderr:
+                    self._stderr_buf.extend(line)
+            except Exception:
+                pass
+        _t.Thread(target=_drain, daemon=True).start()
+        chunk = max(1, int(num_samples)) * 2  # u8 I + u8 Q per sample
+        try:
+            while not self._cancel:
+                # Need exactly `chunk` bytes per sample buffer; PIPE.read can
+                # short-read on partial pipe drains, so loop until full chunk
+                # or pipe close.
+                raw = bytearray()
+                while len(raw) < chunk and not self._cancel:
+                    part = self._proc.stdout.read(chunk - len(raw))
+                    if not part:
+                        break
+                    raw.extend(part)
+                if len(raw) < chunk:
+                    err = bytes(self._stderr_buf)[-400:].decode('utf-8', 'replace')
+                    print(f"[rtl_sdr] subprocess ended early "
+                          f"(got {len(raw)}/{chunk} bytes). stderr tail:\n{err}")
+                    break
+                arr = np.frombuffer(bytes(raw), dtype=np.uint8).astype(np.float64)
+                arr = (arr - 127.5) / 127.5
+                samples = arr[0::2] + 1j * arr[1::2]  # complex128 (numpy default)
+                callback(samples, None)
+        finally:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2.0)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+
+    def cancel_read_async(self):
+        self._cancel = True
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+
+    def close(self):
+        self.cancel_read_async()
 
 from utils.logger import SignalLogger  # noqa: E402
 from utils.transcriber import transcribe  # noqa: E402
@@ -705,7 +808,10 @@ class PMRScanner:
         stop_event = threading.Event()
 
         try:
-            self.sdr = RtlSdr(self.device_index)
+            if USE_RTL_SDR_CLI:
+                self.sdr = _RtlSdrSubprocess(self.device_index)
+            else:
+                self.sdr = RtlSdr(self.device_index)
             if self.ppm:
                 try:
                     self.sdr.freq_correction = int(self.ppm)
@@ -764,7 +870,13 @@ class PMRScanner:
                     samples, freqs, power_spectrum, noise_floor, current_offset)
 
                 # Drain any additional queued chunks (process all, display once)
-                while not sample_queue.empty():
+                # Cap to display_interval so we don't starve the display + the
+                # detection logging path when the consumer is slower than the
+                # producer (256K-pt FFT on Pi 4 ~150-300ms; rtl_sdr at 2.4 MS/s
+                # delivers ~9 chunks/sec, so without a cap this loop never
+                # exits).
+                _drain_deadline = time.time() + display_interval
+                while not sample_queue.empty() and time.time() < _drain_deadline:
                     try:
                         samples = sample_queue.get_nowait()
                     except queue.Empty:
