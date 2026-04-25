@@ -37,7 +37,7 @@ from .sessions import is_session_db_name
 
 DEFAULT_WINDOW_SECONDS = 300    # 5 min — map is "what's live right now"
 DEFAULT_MAX_RESULTS = 50
-DEFAULT_CORRELATION_WINDOW_S = 5.0
+DEFAULT_CORRELATION_WINDOW_S = 30.0
 
 # Per-file load cap: stops a screamingly busy agent DB (WiFi / BLE at a
 # festival) from blowing out memory when the map tab refreshes.
