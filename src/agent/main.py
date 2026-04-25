@@ -45,21 +45,43 @@ def run(argv=None) -> int:
     link = MeshLink.from_serial(port=port, channel_index=cfg.mesh_channel_index)
 
     # Optional: derive position from the meshtastic radio's own GPS (e.g.
-    # T-Echo / Heltec Wireless Tracker). Writes the same gps.json sidecar
-    # that scanner subprocesses normally produce, so _stat_loop and
-    # downstream DET tagging consume it transparently.
+    # T-Echo / Heltec Wireless Tracker), or write a static surveyed
+    # position straight to the sidecar (indoor deployments where GPS
+    # can't lock). Either way the sidecar at <state>/scanner/gps.json
+    # is what _stat_loop and DET tagging consume.
     gps_reader = None
     gps_writer_stop = None
+    sidecar_path = os.path.join(state_dir, "scanner", "gps.json")
     if cfg.gps_source == "meshtastic":
         from utils.gps import MeshtasticGpsReader, write_gps_sidecar
         gps_reader = MeshtasticGpsReader(provider=link.get_local_position)
         gps_reader.start()
         gps_writer_stop = threading.Event()
-        write_gps_sidecar(
-            gps_reader,
-            os.path.join(state_dir, "scanner", "gps.json"),
-            stop_event=gps_writer_stop,
-        )
+        write_gps_sidecar(gps_reader, sidecar_path, stop_event=gps_writer_stop)
+    elif cfg.gps_source == "static" and cfg.static_position:
+        # One-shot write — the sidecar reader (_read_sidecar_position
+        # below, plus agent.py:_stat_loop) accepts anything <60 s old,
+        # so refresh every 30 s to keep it from going stale.
+        import json as _json
+        os.makedirs(os.path.dirname(sidecar_path), exist_ok=True)
+        gps_writer_stop = threading.Event()
+        def _static_loop():
+            while not gps_writer_stop.is_set():
+                payload = {
+                    "lat": cfg.static_position["lat"],
+                    "lon": cfg.static_position["lon"],
+                    "sats": 0,
+                    "ts": time.time(),
+                }
+                tmp = sidecar_path + ".tmp"
+                try:
+                    with open(tmp, "w") as f:
+                        _json.dump(payload, f)
+                    os.replace(tmp, sidecar_path)
+                except OSError:
+                    pass
+                gps_writer_stop.wait(30.0)
+        threading.Thread(target=_static_loop, daemon=True).start()
 
     src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sdr_py = os.path.join(src_dir, "sdr.py")

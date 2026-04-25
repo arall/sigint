@@ -18,8 +18,14 @@ class AgentConfig:
     state_dir: str = "/var/lib/sigint"
     gps_port: Optional[str] = None
     # "meshtastic" → pull position from the radio (T-Echo, Heltec Tracker).
-    # None → traditional flow (NMEA serial via gps_port, written by scanner).
+    # "static"    → use static_position; useful for indoor deployments
+    #               where GPS can't lock.
+    # None        → traditional flow (NMEA serial via gps_port, written
+    #               by scanner).
     gps_source: Optional[str] = None
+    # Used when gps_source == "static": surveyed position of the node.
+    # Stored as {"lat": float, "lon": float} in agent.json.
+    static_position: Optional[dict] = None
 
     @classmethod
     def load(cls, path: str = DEFAULT_CONF_PATH) -> "AgentConfig":
@@ -34,4 +40,5 @@ class AgentConfig:
             state_dir=data.get("state_dir", "/var/lib/sigint"),
             gps_port=data.get("gps_port"),
             gps_source=data.get("gps_source"),
+            static_position=data.get("static_position"),
         )
