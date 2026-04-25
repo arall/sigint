@@ -140,3 +140,28 @@ class Outbox:
                 (cutoff,),
             )
             return cur.rowcount or 0
+
+    def vacuum_stale_unacked(self, kinds: tuple, older_than_sec: float) -> int:
+        """Drop unacked rows of the given kinds older than `older_than_sec`.
+
+        Use for time-sensitive payloads (DETs) where a stale observation
+        is worse than no observation: if a DET has been retrying for >10
+        min, the data is no longer correlatable with anything live, and
+        the row is just blocking newer DETs of the same kind from being
+        sent (FIFO order within a priority bucket).
+
+        Control messages (CFGINFO/SCANINFO/STAT) shouldn't go through
+        this — they convey state that's still useful when it eventually
+        lands.
+        """
+        if not kinds:
+            return 0
+        cutoff = time.time() - older_than_sec
+        placeholders = ",".join("?" * len(kinds))
+        with self._lock:
+            cur = self._conn.execute(
+                f"DELETE FROM outbox WHERE acked=0 "
+                f"AND kind IN ({placeholders}) AND enqueued_at < ?",
+                (*kinds, cutoff),
+            )
+            return cur.rowcount or 0

@@ -240,7 +240,23 @@ class Agent:
     # -- loops ------------------------------------------------------------
 
     def _drainer_loop(self, rate_sec: float) -> None:
+        # Drop DETs older than 10 min that the server never ACKed. Otherwise
+        # the FIFO send order means a single failed DET (post-server-restart
+        # gap, brief LoRa outage, etc.) blocks every subsequent DET behind
+        # it from ever leaving the outbox. STAT/CFGINFO/SCANINFO are state-
+        # carrying and keep retrying; only time-sensitive observations get
+        # vacuumed.
+        DET_STALE_SEC = 600.0
+        VACUUM_EVERY_N_TICKS = 50  # ~5 min at default 6 s drain rate
+        i = 0
         while not self._stop.is_set():
+            i += 1
+            if i % VACUUM_EVERY_N_TICKS == 0:
+                try:
+                    self._outbox.vacuum_stale_unacked(("DET",), DET_STALE_SEC)
+                    self._outbox.vacuum_acked(older_than_sec=86400.0)
+                except Exception:
+                    pass
             row = self._outbox.next_due(now=time.time())
             if row is not None and row.payload:
                 try:
