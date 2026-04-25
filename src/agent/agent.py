@@ -57,7 +57,9 @@ class Agent:
                               args=(stat_interval,), daemon=True)
         t3 = threading.Thread(target=self._hello_loop,
                               args=(hello_interval,), daemon=True)
-        for t in (t1, t2, t3):
+        t4 = threading.Thread(target=self._iface_watchdog_loop,
+                              args=(30.0,), daemon=True)
+        for t in (t1, t2, t3, t4):
             t.start()
             self._threads.append(t)
 
@@ -303,6 +305,23 @@ class Agent:
                                  lat=lat, lon=lon, sats=sats, cpu=cpu,
                                  uptime_sec=uptime_sec)
         self._outbox.update_payload(seq, payload)
+
+    def _iface_watchdog_loop(self, interval: float) -> None:
+        # If the meshtastic SerialInterface goes down (USB hiccup, radio
+        # power-cycle), the lib sets _wantExit but doesn't kill our process.
+        # The agent then "zombies": systemd thinks active, but no traffic
+        # flows. Catch that and exit so systemd Restart=always brings us
+        # back with a fresh iface.
+        import os, sys
+        # Grace period — at boot the iface needs time to hand-shake before
+        # is_alive() trusts it.
+        self._stop.wait(15.0)
+        while not self._stop.is_set():
+            if not self._link.is_alive():
+                print("[agent] meshtastic iface dead — exiting for restart",
+                      file=sys.stderr, flush=True)
+                os._exit(2)
+            self._stop.wait(interval)
 
     def _hello_loop(self, interval: float) -> None:
         # Once adopted, HELLO at 10x the unadopted cadence. Lets the server

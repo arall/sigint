@@ -91,6 +91,16 @@ class MeshLink:
                 sats = pos.get("satsInView") or pos.get("sats") or 0
                 return lat, lon, int(sats or 0)
 
+            def is_alive(self) -> bool:
+                iface = self._state.iface
+                if iface is None:
+                    return False
+                # meshtastic library sets _wantExit when the SerialInterface
+                # goes down (e.g. USB disconnect). Public API doesn't expose
+                # the connection state, so we read the private attribute —
+                # cheap, and the alternative is letting the agent zombie out.
+                return not getattr(iface, "_wantExit", False)
+
         return cls(backend=_SerialBackend(state))
 
     def on_message(self, handler: Callable[[str], None]) -> None:
@@ -107,6 +117,20 @@ class MeshLink:
             return getter()
         except Exception:
             return None, None, 0
+
+    def is_alive(self) -> bool:
+        # True if the underlying meshtastic iface (or test backend) is healthy.
+        # When the meshtastic SerialInterface hits a USB disconnect it sets
+        # _wantExit but doesn't tear the agent process down — agents go
+        # "zombie" (active service, dead radio). The agent's watchdog uses
+        # this to decide when to exit so systemd restarts.
+        checker = getattr(self._backend, "is_alive", None)
+        if checker is None:
+            return True  # test backends without the method are always alive
+        try:
+            return bool(checker())
+        except Exception:
+            return False
 
     def _dispatch(self, text: str) -> None:
         cb = self._on_message
