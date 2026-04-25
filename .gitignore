@@ -9,3 +9,5 @@ __pycache__/
 *.pyc
 atak/*
 configs/*.json
+configs/*.bak
+experimental/
