@@ -95,10 +95,17 @@ class MeshLink:
                 iface = self._state.iface
                 if iface is None:
                     return False
-                # meshtastic library sets _wantExit when the SerialInterface
-                # goes down (e.g. USB disconnect). Public API doesn't expose
-                # the connection state, so we read the private attribute —
-                # cheap, and the alternative is letting the agent zombie out.
+                # The meshtastic StreamInterface reader thread is the only
+                # robust signal across version skew: on a USB disconnect, the
+                # `__reader` thread catches SerialException/OSError, calls
+                # `_disconnected()`, and exits — but it does NOT set
+                # `_wantExit` (only `close()` does). So checking _wantExit
+                # alone misses real-world disconnects (verified against
+                # meshtastic 2.7.8 stream_interface.py:212-232). The reader
+                # thread being dead is the unambiguous "iface is dead" signal.
+                rx = getattr(iface, "_rxThread", None)
+                if rx is not None and not rx.is_alive():
+                    return False
                 return not getattr(iface, "_wantExit", False)
 
         return cls(backend=_SerialBackend(state))
