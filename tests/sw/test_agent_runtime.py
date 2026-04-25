@@ -62,7 +62,7 @@ def test_unadopted_agent_sends_hello_beacon(tmp_path):
     assert any(t.startswith("HELLO|N01|") for t in got)
 
 
-def test_approve_sets_adopted_and_stops_hello(tmp_path):
+def test_approve_sets_adopted_and_slows_hello(tmp_path):
     bus = Bus()
     from comms.meshlink import MeshLink
     peer = MeshLink(backend=FakeBackend(bus))
@@ -76,11 +76,12 @@ def test_approve_sets_adopted_and_stops_hello(tmp_path):
     peer_link.send("APPROVE|N01")
     time.sleep(0.3)
 
-    # After approval, no more HELLO messages
+    # After approval, HELLOs slow to 10x interval — at most one HELLO in the
+    # next 5 intervals (0.5s @ 0.1s interval, vs 1.0s adopted cadence).
     before = len([t for t in texts if t.startswith("HELLO|")])
     time.sleep(0.5)
     after = len([t for t in texts if t.startswith("HELLO|")])
-    assert after == before
+    assert after - before <= 1, f"adopted agent sent {after-before} HELLOs in 5 intervals"
     agent.stop()
 
     # state persisted

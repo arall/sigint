@@ -305,10 +305,16 @@ class Agent:
         self._outbox.update_payload(seq, payload)
 
     def _hello_loop(self, interval: float) -> None:
+        # Once adopted, HELLO at 10x the unadopted cadence. Lets the server
+        # recover if its agents.json is wiped/restored — auto-re-approve is
+        # idempotent — without spending mesh airtime on rapid HELLOs.
+        adopted_every = 10
+        i = 0
         while not self._stop.is_set():
-            if not self._state.adopted:
+            if not self._state.adopted or i % adopted_every == 0:
                 try:
                     self._link.send(P.encode_hello(self._state.agent_id, "0.1", "rpi0"))
                 except Exception:
                     pass
+            i += 1
             self._stop.wait(interval)
