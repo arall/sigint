@@ -290,6 +290,9 @@ class AgentManager:
             })
             if agent_id in self._approved:
                 self._approved[agent_id]["last_seen_at"] = time.time()
+                # Persist so a server bounce keeps the live last_seen_at
+                # rather than reverting to the value at the last approve.
+                self._save_agents_json_locked()
             self._save_info_json_locked()
         if seq is not None:
             self._send(P.encode_ack(agent_id, seq))
