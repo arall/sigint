@@ -182,6 +182,7 @@ class AgentManager:
                 "net_ip": fields.get("net_ip", ""),
                 "received_at": time.time(),
             }
+            self._save_info_json_locked()
         if seq is not None:
             self._send(P.encode_ack(agent_id, seq))
 
@@ -197,6 +198,7 @@ class AgentManager:
                 "parsers": fields.get("parsers", ""),
                 "received_at": time.time(),
             }
+            self._save_info_json_locked()
         if seq is not None:
             self._send(P.encode_ack(agent_id, seq))
 
@@ -288,6 +290,7 @@ class AgentManager:
             })
             if agent_id in self._approved:
                 self._approved[agent_id]["last_seen_at"] = time.time()
+            self._save_info_json_locked()
         if seq is not None:
             self._send(P.encode_ack(agent_id, seq))
 
@@ -313,14 +316,33 @@ class AgentManager:
     def _agents_json_path(self) -> str:
         return os.path.join(self._state_dir, "agents.json")
 
+    def _info_json_path(self) -> str:
+        return os.path.join(self._state_dir, "info.json")
+
     def _load_agents_json(self) -> None:
         path = self._agents_json_path()
         try:
             with open(path) as f:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        else:
+            self._approved.update(data.get("approved", {}) or {})
+
+        # Restore last-known agent info so the dashboard isn't blank for
+        # ~5 min after a server restart while waiting for the next CFGINFO
+        # refresh. Last_seen_at, position, scanner state etc. all live
+        # here; a fresh STAT will update them within seconds anyway.
+        info_path = self._info_json_path()
+        try:
+            with open(info_path) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
             return
-        self._approved.update(data.get("approved", {}) or {})
+        if isinstance(data, dict):
+            for aid, entry in data.items():
+                if isinstance(entry, dict):
+                    self._info[aid] = entry
 
     def _save_agents_json_locked(self) -> None:
         path = self._agents_json_path()
@@ -328,3 +350,15 @@ class AgentManager:
         with open(tmp, "w") as f:
             json.dump({"approved": self._approved}, f, indent=2)
         os.replace(tmp, path)
+
+    def _save_info_json_locked(self) -> None:
+        path = self._info_json_path()
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(self._info, f, indent=2)
+            os.replace(tmp, path)
+        except OSError:
+            # Best-effort persistence: a write failure shouldn't crash
+            # the server's mesh receive path.
+            pass

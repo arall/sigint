@@ -301,7 +301,7 @@ class Agent:
         # Re-fire CFGINFO + SCANINFO every Nth STAT so the dashboard
         # heals automatically after a server restart (server-side info
         # is in-memory only). 10 keeps the cadence ~10 min at default.
-        REFRESH_EVERY = 10
+        REFRESH_EVERY = 5
         i = 0
         while not self._stop.is_set():
             self._emit_stat()
