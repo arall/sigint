@@ -37,7 +37,11 @@ from .sessions import is_session_db_name
 
 DEFAULT_WINDOW_SECONDS = 300    # 5 min — map is "what's live right now"
 DEFAULT_MAX_RESULTS = 50
-DEFAULT_CORRELATION_WINDOW_S = 30.0
+DEFAULT_CORRELATION_WINDOW_S = 60.0  # widened from 30 — Pi 0 nodes have a
+# 20-30 s FFT-processing lag, so the same TX legitimately reaches the
+# detection state machine on different nodes 30+ s apart. 60 s still
+# rejects unrelated TXes on the same channel (PMR voice events are
+# typically short and well-separated).
 
 # Per-file load cap: stops a screamingly busy agent DB (WiFi / BLE at a
 # festival) from blowing out memory when the map tab refreshes.

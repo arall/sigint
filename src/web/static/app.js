@@ -2220,9 +2220,11 @@ function _renderMap(data) {
       : 'no GPS positions in the current session — run a capture with GPS, or wait for RemoteID / ADS-B / AIS';
   }
 
-  // On first load, fit to data if we have any
+  // On first load, fit to data if we have any. maxZoom 19 (OSM ceiling) so
+  // tightly-clustered points (e.g. nodes a few metres apart for a triangulation
+  // test) actually zoom in close instead of stopping at city scale.
   if (!_map._hasFit && bounds.length) {
-    _map.fitBounds(bounds, {padding: [40, 40], maxZoom: 12});
+    _map.fitBounds(bounds, {padding: [40, 40], maxZoom: 19});
     _map._hasFit = true;
   }
 }
@@ -2237,7 +2239,7 @@ function mapFitAll() {
       bounds.push([ll.lat, ll.lng]);
     });
   }
-  if (bounds.length) _map.fitBounds(bounds, {padding: [40, 40], maxZoom: 14});
+  if (bounds.length) _map.fitBounds(bounds, {padding: [40, 40], maxZoom: 19});
 }
 
 // Auto-refresh the Map tab on the same cadence as category tabs

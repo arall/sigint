@@ -676,9 +676,21 @@ class WebHandler(BaseHTTPRequestHandler):
                 pos = server_pos
                 pos_source = "config" if server_pos else None
             else:
-                p = agent_positions.get(sid)
-                pos = {"lat": p["lat"], "lon": p["lon"]} if p else None
-                pos_source = "detection" if pos else None
+                # Prefer the live STAT position from agent_manager over a
+                # potentially-stale detection-derived one. STAT updates every
+                # ~5 min with the agent's current GPS; the detection path
+                # only refreshes when the node fires a new geo-tagged DET,
+                # which can lag by hours if no signals are seen.
+                info = mgr.agent_info(sid) if mgr else None
+                if (info and info.get("lat") is not None
+                        and info.get("lon") is not None):
+                    pos = {"lat": float(info["lat"]),
+                           "lon": float(info["lon"])}
+                    pos_source = "stat"
+                else:
+                    p = agent_positions.get(sid)
+                    pos = {"lat": p["lat"], "lon": p["lon"]} if p else None
+                    pos_source = "detection" if pos else None
             label = "Server" if sid == "server" else sid
             sources.append({
                 "id": sid,

@@ -475,9 +475,16 @@ class PMRScanner:
                 signal_duration = self._tx_signal_samples[channel] / self.sample_rate
 
                 if signal_duration < self.MIN_TX_DURATION:
-                    # Too short — noise spike, discard
+                    # Too short — noise spike. Discard buffer, reset state,
+                    # and skip log_signal so a single-chunk leakage flicker
+                    # doesn't become a phantom detection row.
                     self._wideband_buffers[channel] = []
-                elif self.record_audio and self._wideband_buffers[channel]:
+                    self._tx_peak_snr[channel] = 0.0
+                    self._tx_peak_power[channel] = -100.0
+                    self._tx_last_active[channel] = None
+                    self._tx_signal_samples[channel] = 0
+                    return None
+                if self.record_audio and self._wideband_buffers[channel]:
                     try:
                         full_audio, audio_rate = extract_and_demodulate_buffers(
                             self._wideband_buffers[channel], self.sample_rate,
@@ -620,8 +627,14 @@ class PMRScanner:
                 audio_file = None
                 decoded = False
                 if duration < self.MIN_TX_DURATION:
+                    # Too short — discard, reset state, skip log_signal.
                     self._dpmr_buffers[channel] = []
-                elif self.record_audio and self._dpmr_buffers[channel]:
+                    self._dpmr_peak_snr[channel] = 0.0
+                    self._dpmr_peak_power[channel] = -100.0
+                    self._dpmr_last_active[channel] = None
+                    self._dpmr_signal_samples[channel] = 0
+                    return
+                if self.record_audio and self._dpmr_buffers[channel]:
                     try:
                         audio_file = self._save_discriminator_audio(
                             self._dpmr_buffers[channel], channel_freq)

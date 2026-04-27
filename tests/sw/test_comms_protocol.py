@@ -49,7 +49,7 @@ def test_encode_det_roundtrip():
         agent_id="N01", seq=1247, type_="pmr", freq_mhz=446.00625,
         rssi=-62, lat=48.1234, lon=2.4567, ts_unix=1744812345, summary="ch3",
     )
-    assert wire == "DET|N01|1247|pmr|446.00625|-62|48.1234|2.4567|1744812345|ch3"
+    assert wire == "DET|N01|1247|pmr|446.00625|-62|48.12340|2.45670|1744812345|ch3"
     msg = decode(wire)
     assert msg.tag == "DET"
     assert msg.agent_id == "N01"

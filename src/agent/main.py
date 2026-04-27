@@ -135,11 +135,22 @@ def run(argv=None) -> int:
             lon = row.get("longitude")
             if lat is None or lon is None:
                 lat, lon = _read_sidecar_position()
+            dur_s = None
+            md = row.get("metadata")
+            if md:
+                try:
+                    import json as _json
+                    md_obj = _json.loads(md) if isinstance(md, str) else md
+                    raw_dur = md_obj.get("duration_s")
+                    if raw_dur is not None:
+                        dur_s = float(raw_dur)
+                except Exception:
+                    pass
             agent.enqueue_det(
                 type_=row["signal_type"], freq_mhz=freq_mhz, rssi=rssi,
                 lat=lat, lon=lon,
                 ts_unix=ts_unix, summary=row.get("channel") or "",
-                snr=snr,
+                snr=snr, dur_s=dur_s,
             )
         except Exception:
             pass

@@ -123,6 +123,16 @@ Async transcription: detection logged to SQLite immediately; transcript arrives 
 - HackRF: 4-block queue with drop-oldest (latency ~130ms). Drops mark capture `degraded`.
 - Persona/AP DB flushed every 30s. Correlations computed on demand from SQL (no sidecar).
 
+### Agent GPS
+
+The agent's `configs/agent.json` has `gps_source` (`"meshtastic"` | `"static"` | `null`) which decides where its `gps.json` sidecar values come from. **Two gotchas that have eaten hours:**
+
+1. **`gps_source: "static"` makes Meshtastic invisible.** With `gps_source: "static"`, the agent reads `static_position: {lat, lon}` from the same config and never queries the radio. Debugging meshtastic GPS settings is then a dead end. If `gps.json` shows wrong/coarse positions, **first** check `gps_source` and `static_position` on each node — only then look at the radio.
+
+2. **Channel `module_settings.position_precision` defaults to 18 (~91 m grid) for privacy.** With `gps_source: "meshtastic"`, the agent reads `iface.getMyNodeInfo()['position']`, and that value goes through the **channel-level** position-precision filter. At default 18 bits, lat/lon round to ~4 decimals before reaching us. To get full precision (1e-7 deg, ~1 cm — the protobuf limit), set the primary channel to 32: `meshtastic --port <dev> --ch-set module_settings.position_precision 32 --ch-index 0`. Each node has its own setting; do all of them. Note: this controls precision in mesh broadcasts *and* in local readback through the API — both are clamped by the same setting.
+
+For nodes that don't have a working GPS lock yet, set `position.fixed_position true` plus `--setlat/--setlon` so the radio reports a known fixed coordinate; the agent's meshtastic path will then return that coordinate as if it were a live fix.
+
 ### BLE Scanner
 
 `apple_continuity` parser is the **all-BLE persona tracker** (not just Apple). `BT_COMPANIES` dict uses **decimal** values, not hex. RemoteID parser detects drones via service UUID `0xFFFA`. AirTag classification: `{0x12}` only = Find My accessory; Proximity Pairing model IDs are **big-endian**.

@@ -244,6 +244,11 @@ class AgentManager:
             # SignalDetection.create() recomputes the same SNR. If not, fall
             # back to the old assumption of SNR=10.
             noise_floor = rssi - (float(snr) if snr is not None else 10.0)
+            md = {"mesh": True, "seq": seq,
+                  "ts_unix": fields.get("ts_unix")}
+            dur_s = fields.get("dur_s")
+            if dur_s is not None:
+                md["duration_s"] = dur_s
             det = SignalDetection.create(
                 signal_type=fields["type"],
                 frequency_hz=float(fields["freq_mhz"]) * 1e6,
@@ -253,8 +258,7 @@ class AgentManager:
                 latitude=fields.get("lat"),
                 longitude=fields.get("lon"),
                 device_id=agent_id,
-                metadata=json.dumps({"mesh": True, "seq": seq,
-                                      "ts_unix": fields.get("ts_unix")}),
+                metadata=json.dumps(md),
             )
             try:
                 ts_unix = int(fields.get("ts_unix") or 0)

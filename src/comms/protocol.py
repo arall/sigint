@@ -75,8 +75,8 @@ def encode_hello(agent_id: str, version: str, hw: str) -> str:
 def encode_stat(agent_id: str, seq: int, scanner: str, state: str,
                 lat: Optional[float], lon: Optional[float],
                 sats: int, cpu: int, uptime_sec: int) -> str:
-    lat_s = f"{lat:.4f}" if lat is not None else ""
-    lon_s = f"{lon:.4f}" if lon is not None else ""
+    lat_s = f"{lat:.5f}" if lat is not None else ""
+    lon_s = f"{lon:.5f}" if lon is not None else ""
     return (f"STAT|{agent_id}|{seq}|{_esc(scanner)}|{_esc(state)}|"
             f"{lat_s}|{lon_s}|{sats}|{cpu}|{uptime_sec}")
 
@@ -84,26 +84,31 @@ def encode_stat(agent_id: str, seq: int, scanner: str, state: str,
 def encode_det(agent_id: str, seq: int, type_: str, freq_mhz: float,
                rssi: int, lat: Optional[float], lon: Optional[float],
                ts_unix: int, summary: str = "",
-               snr: Optional[int] = None) -> str:
-    lat_s = f"{lat:.4f}" if lat is not None else ""
-    lon_s = f"{lon:.4f}" if lon is not None else ""
+               snr: Optional[int] = None,
+               dur_s: Optional[float] = None) -> str:
+    lat_s = f"{lat:.5f}" if lat is not None else ""
+    lon_s = f"{lon:.5f}" if lon is not None else ""
     base = (f"DET|{agent_id}|{seq}|{_esc(type_)}|{freq_mhz:.5f}|{rssi}|"
             f"{lat_s}|{lon_s}|{ts_unix}|{_esc(summary)}")
-    if snr is None:
+    if snr is None and dur_s is None:
         return base
-    return f"{base}|{snr}"
+    snr_s = "" if snr is None else str(int(snr))
+    if dur_s is None:
+        return f"{base}|{snr_s}"
+    return f"{base}|{snr_s}|{dur_s:.2f}"
 
 
 def encode_det_truncated(agent_id: str, seq: int, type_: str, freq_mhz: float,
                           rssi: int, lat: Optional[float], lon: Optional[float],
                           ts_unix: int, summary: str,
                           snr: Optional[int] = None,
+                          dur_s: Optional[float] = None,
                           max_bytes: int = 200) -> str:
     """Encode DET, progressively dropping optional tail fields if oversized.
 
-    Drop order: summary -> lat/lon -> ts_unix (field becomes empty). SNR is
-    preserved across drops — it's small and the server needs it to compute
-    the real noise floor."""
+    Drop order: summary -> lat/lon -> ts_unix (field becomes empty). SNR and
+    dur_s are preserved across drops — both are small and the server uses
+    them to reconstruct noise floor / TX duration."""
     attempts = [
         (summary, lat, lon, ts_unix),
         ("", lat, lon, ts_unix),
@@ -113,7 +118,7 @@ def encode_det_truncated(agent_id: str, seq: int, type_: str, freq_mhz: float,
     for s, la, lo, ts in attempts:
         ts_eff = ts if ts else 0
         wire = encode_det(agent_id, seq, type_, freq_mhz, rssi, la, lo,
-                          ts_eff, s, snr=snr)
+                          ts_eff, s, snr=snr, dur_s=dur_s)
         if len(wire.encode("utf-8")) <= max_bytes:
             return wire
     return wire  # best effort
@@ -210,6 +215,12 @@ def decode(wire: str) -> Message:
                     snr = int(parts[10])
                 except ValueError:
                     snr = None
+            dur_s = None
+            if len(parts) > 11 and parts[11]:
+                try:
+                    dur_s = float(parts[11])
+                except ValueError:
+                    dur_s = None
             return Message(tag, parts[1], int(parts[2]),
                            {"type": _unesc(parts[3]),
                             "freq_mhz": float(parts[4]) if parts[4] else 0.0,
@@ -218,7 +229,8 @@ def decode(wire: str) -> Message:
                             "lon": float(parts[7]) if parts[7] else None,
                             "ts_unix": int(parts[8]) if parts[8] else 0,
                             "summary": _unesc(parts[9]) if len(parts) > 9 else "",
-                            "snr": snr},
+                            "snr": snr,
+                            "dur_s": dur_s},
                            raw=wire)
         if tag == "LOG":
             _check_min(parts, 5)
