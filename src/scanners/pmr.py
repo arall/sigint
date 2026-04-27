@@ -834,11 +834,14 @@ class PMRScanner:
             # Configure SDR
             self.sdr.sample_rate = self.sample_rate
             self.sdr.center_freq = self.center_freq
+            # V4 caveat: gain SETs work, but rtlsdr_get_tuner_gain is broken
+            # on V4 in keenerd's fork (always returns 0). Print the requested
+            # value, not self.sdr.gain.
             self.sdr.gain = self.gain
 
             print(f"Sample Rate: {self.sdr.sample_rate / 1e6:.1f} MHz")
             print(f"Center Frequency: {self.sdr.center_freq / 1e6:.3f} MHz")
-            print(f"Gain: {self.sdr.gain} dB")
+            print(f"Gain: {self.gain} dB (requested; V4 readback unreliable)")
             if self.ppm:
                 print(f"PPM correction: {self.ppm}")
 

@@ -508,6 +508,10 @@ class WidebandScanner:
             self.sdr = RtlSdr(self.device_index)
             self.sdr.sample_rate = self.sample_rate
             self.sdr.center_freq = self.center_freq
+            # NOTE: setting gain via pyrtlsdr works fine on V4, but the
+            # readback (rtlsdr_get_tuner_gain) is broken on V4 in keenerd
+            # — it always returns 0. Don't print self.sdr.gain anywhere;
+            # use self.gain (the requested value) instead.
             self.sdr.gain = self.gain
 
             # Count known channels in our range
@@ -521,7 +525,7 @@ class WidebandScanner:
             print(f"Wideband scanner initialized")
             print(f"  Sample rate: {self.sdr.sample_rate/1e6:.1f} MHz")
             print(f"  Center freq: {self.sdr.center_freq/1e6:.3f} MHz")
-            print(f"  Gain: {self.sdr.gain} dB")
+            print(f"  Gain: {self.gain} dB (requested; V4 readback unreliable)")
             print(f"  Bins: {self.num_bins} x {self.bin_width/1e3:.1f} kHz")
             print(f"  Known channels in range: {len(known_in_range)}")
             if known_in_range:
