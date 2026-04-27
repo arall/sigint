@@ -837,8 +837,13 @@ class ADSBScanner:
                         '--write-json', self._json_dir]
             if dump1090_cmd == 'readsb':
                 cmd_args += ['--device-type', 'rtlsdr', '--net-sbs-port', '30003', '--no-interactive']
+                # Pin to a specific dongle. RTL-SDR Blog V4s all share serial
+                # "00000001", so without --device the binary grabs whichever
+                # is enumerated first and races other scanners.
+                cmd_args += ['--device', str(self.device_index)]
             else:
                 cmd_args.append('--quiet')
+                cmd_args += ['--device-index', str(self.device_index)]
 
             # Start dump1090/readsb with network output
             self.dump1090_process = subprocess.Popen(

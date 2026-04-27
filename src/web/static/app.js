@@ -465,6 +465,8 @@ let _devSubtab = 'wifi_aps';
 let _devExpanded = { wifi_aps: new Set(), wifi_clients: new Set(), ble: new Set() };
 // null = server-default sort; otherwise {key, dir: 'asc'|'desc'}
 let _devSort = { wifi_aps: null, wifi_clients: null, ble: null };
+let _devPage = { wifi_aps: 0, wifi_clients: 0, ble: 0 };
+const _DEV_PAGE_SIZE = 50;
 
 function _devSortValue(row, key) {
   if (key === 'channel') {
@@ -513,7 +515,13 @@ function devSortBy(sub, key) {
   } else {
     _devSort[sub] = { key, dir: 'desc' };
   }
+  _devPage[sub] = 0;
   _devUpdateSortIndicators();
+  renderDevices();
+}
+
+function devGoToPage(sub, offset) {
+  _devPage[sub] = Math.max(0, Math.floor(offset / _DEV_PAGE_SIZE));
   renderDevices();
 }
 
@@ -560,10 +568,16 @@ function renderWifiAps(activeOnly) {
   const tbody = document.getElementById('ap-body');
   if (!aps.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="empty">no APs found — run sdr.py server to collect beacon data</td></tr>';
+    _renderPager('ap-pager', { total: 0, limit: _DEV_PAGE_SIZE, offset: 0, onChange: o => devGoToPage('wifi_aps', o) });
     return;
   }
+  const total = aps.length;
+  const maxPage = Math.max(0, Math.ceil(total / _DEV_PAGE_SIZE) - 1);
+  if (_devPage.wifi_aps > maxPage) _devPage.wifi_aps = maxPage;
+  const offset = _devPage.wifi_aps * _DEV_PAGE_SIZE;
+  const pageRows = aps.slice(offset, offset + _DEV_PAGE_SIZE);
   const rows = [];
-  aps.forEach((a, i) => {
+  pageRows.forEach((a, i) => {
     const key = a.group_key || i;
     const isExp = _devExpanded.wifi_aps.has(String(key));
     const label = a.hidden ? '<span style="color:#888">(hidden)</span>' : esc(a.label || '');
@@ -623,6 +637,10 @@ function renderWifiAps(activeOnly) {
     }
   });
   tbody.innerHTML = rows.join('');
+  _renderPager('ap-pager', {
+    total, limit: _DEV_PAGE_SIZE, offset,
+    onChange: o => devGoToPage('wifi_aps', o),
+  });
 }
 
 function _fmtRssi(v) {
@@ -642,10 +660,16 @@ function renderWifiClients(activeOnly) {
   const tbody = document.getElementById('wc-body');
   if (!items.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="empty">no clients found</td></tr>';
+    _renderPager('wc-pager', { total: 0, limit: _DEV_PAGE_SIZE, offset: 0, onChange: o => devGoToPage('wifi_clients', o) });
     return;
   }
+  const total = items.length;
+  const maxPage = Math.max(0, Math.ceil(total / _DEV_PAGE_SIZE) - 1);
+  if (_devPage.wifi_clients > maxPage) _devPage.wifi_clients = maxPage;
+  const offset = _devPage.wifi_clients * _DEV_PAGE_SIZE;
+  const pageRows = items.slice(offset, offset + _DEV_PAGE_SIZE);
   const rows = [];
-  items.forEach((c, i) => {
+  pageRows.forEach((c, i) => {
     const key = c.persona_key || c.dev_sig || String(i);
     const isExp = _devExpanded.wifi_clients.has(key);
     const sessColor = c.sessions >= 20 ? '#f44336' : c.sessions >= 5 ? '#ffeb3b' : '#e0e0e0';
@@ -681,6 +705,10 @@ function renderWifiClients(activeOnly) {
     }
   });
   tbody.innerHTML = rows.join('');
+  _renderPager('wc-pager', {
+    total, limit: _DEV_PAGE_SIZE, offset,
+    onChange: o => devGoToPage('wifi_clients', o),
+  });
 }
 
 function renderBle(activeOnly) {
@@ -689,10 +717,16 @@ function renderBle(activeOnly) {
   const tbody = document.getElementById('ble-body');
   if (!items.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="empty">no BLE devices found</td></tr>';
+    _renderPager('ble-pager', { total: 0, limit: _DEV_PAGE_SIZE, offset: 0, onChange: o => devGoToPage('ble', o) });
     return;
   }
+  const total = items.length;
+  const maxPage = Math.max(0, Math.ceil(total / _DEV_PAGE_SIZE) - 1);
+  if (_devPage.ble > maxPage) _devPage.ble = maxPage;
+  const offset = _devPage.ble * _DEV_PAGE_SIZE;
+  const pageRows = items.slice(offset, offset + _DEV_PAGE_SIZE);
   const rows = [];
-  items.forEach((d, i) => {
+  pageRows.forEach((d, i) => {
     const key = d.persona_key || d.dev_sig || String(i);
     const isExp = _devExpanded.ble.has(key);
     const sessColor = d.sessions >= 20 ? '#f44336' : d.sessions >= 5 ? '#ffeb3b' : '#e0e0e0';
@@ -727,6 +761,10 @@ function renderBle(activeOnly) {
     }
   });
   tbody.innerHTML = rows.join('');
+  _renderPager('ble-pager', {
+    total, limit: _DEV_PAGE_SIZE, offset,
+    onChange: o => devGoToPage('ble', o),
+  });
 }
 
 function toggleDevRow(sub, encKey) {
@@ -755,7 +793,12 @@ document.querySelectorAll('th.sortable').forEach(th => {
     else if (th.dataset.tbl) tblSortBy(th.dataset.tbl, th.dataset.key);
   });
 });
-document.getElementById('dev-active-only').addEventListener('change', () => renderDevices());
+document.getElementById('dev-active-only').addEventListener('change', () => {
+  _devPage.wifi_aps = 0;
+  _devPage.wifi_clients = 0;
+  _devPage.ble = 0;
+  renderDevices();
+});
 
 // --- Session switcher (header dropdown) ---
 // "" = LIVE (tailed current session). Non-empty = basename of a historical

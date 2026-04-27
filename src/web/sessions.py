@@ -23,6 +23,7 @@ from datetime import datetime
 # rather than per-session detection history.
 _SUPPORT_DB_NAMES = {
     "devices.db",      # PersonaDB + ApDB cross-session store
+    "calibration.db",  # Calibration sample / offset store (no detections table)
 }
 
 

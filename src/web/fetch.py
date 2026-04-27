@@ -13,6 +13,7 @@ category loaders in `web/loaders.py` consume them with no changes.
 
 import json
 import os
+import sqlite3
 import time
 from collections import Counter
 from datetime import datetime, timedelta
@@ -251,6 +252,11 @@ def fetch_detections_for_category(
         return []
     try:
         rows = list(conn.execute(sql, full_params))
+    except sqlite3.OperationalError:
+        # Support DBs (calibration.db etc.) lack a `detections` table.
+        # Returning [] keeps the union fetch alive instead of poisoning
+        # every category endpoint via the outer try/except.
+        rows = []
     finally:
         try:
             conn.close()

@@ -115,6 +115,11 @@ class ISMScanner:
         """Build rtl_433 command line."""
         cmd = ["rtl_433"]
 
+        # Pin to a specific dongle. RTL-SDR Blog V4s all share serial
+        # "00000001", so without -d rtl_433 grabs the first free RTL and
+        # races other scanners.
+        cmd += ["-d", str(self.device_index)]
+
         if self.hop:
             for freq in ISM_FREQUENCIES.values():
                 cmd += ["-f", str(int(freq))]
