@@ -84,7 +84,7 @@ def _slant_and_elevation(node_lat: float, node_lon: float, node_alt_m: float,
 
 # --- reference emitter registry ---------------------------------------------
 def empty_registry() -> dict:
-    return {"wifi": {}, "fm": {}, "cell": {}, "adsb_eirp": {}}
+    return {"wifi": {}, "fm": {}, "cell": {}, "pmr": {}, "adsb_eirp": {}}
 
 
 def load_reference_emitters(path: str) -> dict:
@@ -104,7 +104,7 @@ def load_reference_emitters(path: str) -> dict:
     with open(path) as f:
         raw = json.load(f)
     reg = empty_registry()
-    for section in ("wifi", "fm", "cell", "adsb_eirp"):
+    for section in ("wifi", "fm", "cell", "pmr", "adsb_eirp"):
         if section in raw and isinstance(raw[section], dict):
             reg[section] = raw[section]
     # Normalize WiFi BSSIDs to lower-case with colons.
@@ -186,6 +186,11 @@ def extract_samples(
                 sample = _try_surveyed_fm(row, meta, node_id, node_lat,
                                           node_lon, node_alt, emitters,
                                           db_file, rowid)
+        elif sig_type in ("pmr", "pmr446", "pmr_446", "frs", "gmrs"):
+            if _source_enabled("surveyed", source_filter):
+                sample = _try_surveyed_pmr(row, meta, node_id, node_lat,
+                                            node_lon, node_alt, emitters,
+                                            db_file, rowid)
         elif sig_type in ("gsm", "lte"):
             if _source_enabled("surveyed", source_filter):
                 sample = _try_surveyed_cell(row, meta, node_id, node_lat,
@@ -427,6 +432,69 @@ def _try_surveyed_fm(row, meta, node_id, node_lat, node_lon, node_alt,
     }
 
 
+# --- surveyed PMR / FRS / GMRS (close-range UHF reference TX) ---------------
+def _try_surveyed_pmr(row, meta, node_id, node_lat, node_lon, node_alt,
+                       emitters, db_file, rowid) -> Optional[dict]:
+    """Match a PMR446 / FRS / GMRS detection to a registered close-range
+    reference transmitter (e.g. server's HackRF used as a calibration TX).
+
+    Differs from _try_surveyed_fm by allowing 1-1000 m distances; FM gates at
+    500 m because at urban broadcast power any closer hit is more likely a
+    different signal mistaken for the station. Here close-range is the point.
+    """
+    try:
+        power_db = float(row["power_db"] or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if power_db == 0.0:
+        return None
+
+    freq_hz = float(row["frequency_hz"] or 0.0)
+    if freq_hz <= 0:
+        return None
+
+    reg = (emitters or {}).get("pmr", {})
+    # PMR446 channels are 12.5 kHz wide; tolerate ±20 kHz so a TX at the
+    # band edge that the scanner snaps to an adjacent channel still matches.
+    ref = _match_by_frequency(reg, freq_hz, tol_hz=20_000)
+    if ref is None:
+        return None
+    try:
+        tgt_lat = float(ref["lat"])
+        tgt_lon = float(ref["lon"])
+        eirp_dbm = float(ref["eirp_dbm"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    eirp_stderr = float(ref.get("eirp_stderr", 3.0))
+
+    distance_m = _haversine_m(node_lat, node_lon, tgt_lat, tgt_lon)
+    if distance_m < 1.0 or distance_m > 1000.0:
+        return None
+
+    band = _cal.band_for(freq_hz) or "UHF"
+    expected = _cal.expected_rssi_fspl(eirp_dbm, distance_m, freq_hz)
+    offset = power_db - expected
+    snr = max(float(row["snr_db"] or 0.0), 1.0)
+    weight = snr / (eirp_stderr + 1.0)
+
+    return {
+        "ts_epoch": float(row["ts_epoch"] or 0.0),
+        "device_id": node_id,
+        "band": band,
+        "frequency_hz": freq_hz,
+        "source": "surveyed-pmr",
+        "ref_id": ref.get("_key", f"{freq_hz / 1e6:.4f}MHz"),
+        "power_db": power_db,
+        "expected_db": expected,
+        "offset_db": offset,
+        "distance_m": distance_m,
+        "elevation_deg": None,
+        "weight": weight,
+        "session_db": db_file,
+        "det_rowid": rowid,
+    }
+
+
 # --- surveyed cell towers ---------------------------------------------------
 def _try_surveyed_cell(row, meta, node_id, node_lat, node_lon, node_alt,
                        emitters, db_file, rowid) -> Optional[dict]:
@@ -491,6 +559,8 @@ def _match_by_frequency(reg: dict, freq_hz: float, tol_hz: float) -> Optional[di
     best = None
     best_delta = tol_hz
     for key, entry in reg.items():
+        if not isinstance(entry, dict):
+            continue  # skip "_comment" string keys
         try:
             f = float(entry.get("freq_hz"))
         except (TypeError, ValueError):

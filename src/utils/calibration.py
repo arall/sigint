@@ -331,6 +331,13 @@ def _cli_ingest(args) -> int:
         cal_conn.close()
         return 2
 
+    if not emitters_path:
+        # Match the CLI help text: default to configs/calibration_emitters.json
+        # if it exists. Falls through to empty registry only when the file is
+        # absent — keeps adsb/ais sources working without a registry.
+        default_emitters = os.path.join("configs", "calibration_emitters.json")
+        if os.path.exists(default_emitters):
+            emitters_path = default_emitters
     emitters = _src.load_reference_emitters(emitters_path) if emitters_path else _src.empty_registry()
     node_alt = float(args.node_alt) if args.node_alt is not None else 0.0
 
