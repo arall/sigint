@@ -111,6 +111,14 @@
           <div style="font-weight: 600; padding: 4px 4px 8px; border-bottom: 1px solid #1d2533; margin-bottom: 8px;">Triangulations</div>
           <div id="map-triangulations-body" style="color: #888">loading…</div>
         </div>
+        <div id="map-calibration" style="background: #0e1420; border: 1px solid #1d2533; border-radius: 4px; padding: 8px; font-size: 12px;">
+          <div style="font-weight: 600; padding: 4px 4px 8px; border-bottom: 1px solid #1d2533; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+            <span>Calibration</span>
+            <button id="cal-run-btn" onclick="runCalibration()" style="font-size: 11px; padding: 2px 8px;">Run</button>
+          </div>
+          <div id="map-calibration-status" style="color: #888; margin-bottom: 6px; font-size: 11px;">idle</div>
+          <div id="map-calibration-body" style="color: #ccc">no offsets yet</div>
+        </div>
       </div>
     </div>
     <div id="map-summary" style="padding: 8px 16px; font-size: 12px; color: #888">

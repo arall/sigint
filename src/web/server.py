@@ -128,6 +128,10 @@ class WebHandler(BaseHTTPRequestHandler):
             self._serve_fpv_frame()
         elif path == '/api/fpv/stream':
             self._serve_fpv_stream()
+        elif path == '/api/calibrate/status':
+            self._serve_calibrate_status()
+        elif path == '/api/calibrate/offsets':
+            self._serve_calibrate_offsets()
         elif path.startswith('/audio/'):
             self._serve_audio(path[7:])
         else:
@@ -152,6 +156,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._agents_cfg(data)
         elif path == '/api/map/sources/position':
             self._map_sources_set_position(data)
+        elif path == '/api/calibrate/run':
+            self._calibrate_run(data)
         else:
             self.send_error(404)
 
@@ -863,6 +869,118 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         mgr.send_cfg(aid, key, str(value))
         self._send_json({"ok": True})
+
+    # --- calibration ----------------------------------------------------
+
+    _CAL_STATUS_PATH = "/tmp/calibrate_status.json"
+    _CAL_SCRIPT = "/home/arall/code/sigint/scripts/run_calibration.py"
+
+    def _calibrate_run(self, _data):
+        """Kick off a one-shot calibration cycle in a detached subprocess.
+
+        The script stops sigint-server (this very process), TXes a tone, and
+        restarts the server — so the response has to be sent and the child
+        has to be detached BEFORE systemctl stop fires. start_new_session
+        plus systemd-run-style detachment both work; we use Popen with
+        start_new_session=True and let the child outlive us.
+        """
+        import subprocess
+        if not os.path.exists(self._CAL_SCRIPT):
+            self.send_error(500, f"calibration script missing: {self._CAL_SCRIPT}")
+            return
+        # Reset status file so the UI sees a fresh "starting" rather than
+        # the previous run's "done".
+        try:
+            with open(self._CAL_STATUS_PATH, "w") as f:
+                json.dump({"step": "queued", "message": "Calibration queued",
+                            "ts": time.time(), "done": False, "ok": True}, f)
+        except OSError:
+            pass
+        # Detach via systemd-run so `systemctl stop sigint-server` (which
+        # the script triggers a few lines into its run) doesn't also kill
+        # *us* — start_new_session escapes the POSIX session but not the
+        # systemd cgroup. Transient unit lives independently. Use the venv
+        # python so numpy is available for the IQ-tone generator.
+        try:
+            subprocess.run(
+                ["systemd-run", "--quiet", "--no-block",
+                 "--unit", "sigint-calibrate",
+                 "--collect",  # auto-clean unit on exit
+                 "/home/arall/code/sigint/venv/bin/python3",
+                 self._CAL_SCRIPT],
+                check=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            )
+        except subprocess.CalledProcessError as e:
+            self.send_error(500,
+                f"systemd-run failed: {(e.stderr or b'').decode()[:200]}")
+            return
+        except Exception as e:
+            self.send_error(500, f"failed to spawn calibration: {e}")
+            return
+        self._send_json({"ok": True, "status_url": "/api/calibrate/status"})
+
+    def _serve_calibrate_status(self):
+        """Return the latest progress JSON written by run_calibration.py."""
+        try:
+            with open(self._CAL_STATUS_PATH) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            data = {"step": "idle", "message": "No calibration has run yet",
+                    "ts": 0, "done": True, "ok": True}
+        self._send_json(data)
+
+    def _serve_calibrate_offsets(self):
+        """Return current cal_samples summary + solved offsets per node.
+
+        Read-only view of calibration.db. Matches what `sdr.py calibrate
+        show` would produce, but in JSON for the dashboard."""
+        try:
+            from utils import calibration_db as _cdb
+            cal_path = _cdb.default_path(self.server.output_dir)
+        except Exception as e:
+            self._send_json({"error": str(e), "samples": [], "offsets": []})
+            return
+        if not os.path.exists(cal_path):
+            self._send_json({"samples": [], "offsets": []})
+            return
+        import sqlite3
+        samples = []
+        offsets = []
+        try:
+            c = sqlite3.connect(f"file:{cal_path}?mode=ro", uri=True)
+            for r in c.execute(
+                "SELECT device_id, COUNT(*), AVG(offset_db), AVG(distance_m), "
+                "MIN(offset_db), MAX(offset_db) "
+                "FROM cal_samples GROUP BY device_id ORDER BY device_id"
+            ):
+                samples.append({
+                    "node": r[0],
+                    "n": r[1],
+                    "mean_offset_db": round(r[2], 2) if r[2] is not None else None,
+                    "mean_distance_m": round(r[3], 2) if r[3] is not None else None,
+                    "min_offset_db": round(r[4], 2) if r[4] is not None else None,
+                    "max_offset_db": round(r[5], 2) if r[5] is not None else None,
+                })
+            for r in c.execute(
+                "SELECT device_id, band, offset_db, stderr_db, n_samples "
+                "FROM cal_offsets ORDER BY device_id, band"
+            ):
+                offsets.append({
+                    "node": r[0], "band": r[1],
+                    "offset_db": round(r[2], 2),
+                    "stderr_db": round(r[3], 2) if r[3] is not None else None,
+                    "n_samples": r[4],
+                })
+            c.close()
+        except Exception as e:
+            self._send_json({"error": str(e), "samples": samples,
+                              "offsets": offsets})
+            return
+        self._send_json({"samples": samples, "offsets": offsets})
 
 
 # ---------------------------------------------------------------------------

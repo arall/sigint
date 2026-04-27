@@ -861,6 +861,10 @@ Examples:
                             help="Samples older than N days are excluded from the fit")
     cal_ingest.add_argument("--dry-run", action="store_true",
                             help="Print what would be ingested without writing")
+    cal_ingest.add_argument("--device-id-filter", default=None,
+                            help="Only ingest rows where device_id matches "
+                                 "(useful when a single agents_*.db contains "
+                                 "DETs from multiple agents)")
 
     cal_show = cal_sub.add_parser("show", help="Print current solved offsets")
     cal_show.add_argument("--db", default=None)

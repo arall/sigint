@@ -2242,6 +2242,109 @@ function mapFitAll() {
   if (bounds.length) _map.fitBounds(bounds, {padding: [40, 40], maxZoom: 19});
 }
 
+// --- Calibration UI -------------------------------------------------------
+//
+// "Run calibration" triggers a server-side cycle that stops sigint-server,
+// TXes a known tone from the HackRF, restarts the server, and ingests the
+// resulting agent DETs as `cal_samples` rows. The dashboard is briefly
+// disconnected from the server during the stop window — that's expected.
+let _calPollTimer = null;
+async function runCalibration() {
+  const btn = document.getElementById('cal-run-btn');
+  const statusEl = document.getElementById('map-calibration-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  if (statusEl) statusEl.textContent = 'starting…';
+  try {
+    const res = await fetch('/api/calibrate/run', {method: 'POST'});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'failed to start: ' + e;
+    if (btn) { btn.disabled = false; btn.textContent = 'Run'; }
+    return;
+  }
+  if (_calPollTimer) clearInterval(_calPollTimer);
+  _calPollTimer = setInterval(_pollCalStatus, 2500);
+  _pollCalStatus();
+}
+
+async function _pollCalStatus() {
+  const btn = document.getElementById('cal-run-btn');
+  const statusEl = document.getElementById('map-calibration-status');
+  let s;
+  try {
+    const res = await fetch('/api/calibrate/status', {cache: 'no-store'});
+    s = await res.json();
+  } catch (e) {
+    // Server may be mid-restart; keep polling
+    if (statusEl) statusEl.textContent = 'server restarting…';
+    return;
+  }
+  if (statusEl) {
+    const stamp = s.ts ? new Date(s.ts * 1000).toLocaleTimeString() : '';
+    statusEl.textContent = (s.ok === false ? '❌ ' : '') + (s.step || 'idle')
+      + (s.message ? ' — ' + s.message : '') + (stamp ? '  (' + stamp + ')' : '');
+  }
+  if (s.done) {
+    if (_calPollTimer) { clearInterval(_calPollTimer); _calPollTimer = null; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Run'; }
+    _refreshCalOffsets();
+  }
+}
+
+async function _refreshCalOffsets() {
+  const body = document.getElementById('map-calibration-body');
+  if (!body) return;
+  try {
+    const res = await fetch('/api/calibrate/offsets', {cache: 'no-store'});
+    const data = await res.json();
+    const samples = data.samples || [];
+    const offsets = data.offsets || [];
+    if (!samples.length && !offsets.length) {
+      body.textContent = 'no samples yet';
+      return;
+    }
+    let html = '';
+    if (samples.length) {
+      html += '<div style="margin-bottom:6px;font-weight:500">samples</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
+      html += '<tr style="color:#888"><td>node</td><td style="text-align:right">n</td>'
+            + '<td style="text-align:right">μ offset</td><td style="text-align:right">μ dist</td></tr>';
+      for (const s of samples) {
+        html += `<tr><td>${esc(s.node)}</td><td style="text-align:right">${s.n}</td>`
+              + `<td style="text-align:right">${s.mean_offset_db}dB</td>`
+              + `<td style="text-align:right">${s.mean_distance_m}m</td></tr>`;
+      }
+      html += '</table>';
+    }
+    if (offsets.length) {
+      html += '<div style="margin:8px 0 4px;font-weight:500">solved offsets</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
+      html += '<tr style="color:#888"><td>node</td><td>band</td>'
+            + '<td style="text-align:right">offset</td><td style="text-align:right">±</td></tr>';
+      for (const o of offsets) {
+        html += `<tr><td>${esc(o.node)}</td><td>${esc(o.band)}</td>`
+              + `<td style="text-align:right">${o.offset_db}dB</td>`
+              + `<td style="text-align:right">${o.stderr_db ?? '?'}</td></tr>`;
+      }
+      html += '</table>';
+    } else if (samples.length) {
+      html += '<div style="color:#888;font-size:11px;margin-top:4px">'
+            + 'need 20+ samples per band before offsets fit</div>';
+    }
+    body.innerHTML = html;
+  } catch (e) {
+    body.textContent = 'failed to load offsets: ' + e;
+  }
+}
+// Refresh offsets table whenever the Map tab is opened
+document.querySelectorAll('.tab-btn').forEach(b => {
+  if (b.dataset.tab === 'map') {
+    b.addEventListener('click', () => setTimeout(_refreshCalOffsets, 100));
+  }
+});
+// Initial population on load
+setTimeout(_refreshCalOffsets, 500);
+
 // Auto-refresh the Map tab on the same cadence as category tabs
 setInterval(() => {
   if (_selectedSession) return;

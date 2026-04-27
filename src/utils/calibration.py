@@ -368,6 +368,7 @@ def _cli_ingest(args) -> int:
                 source_filter=source_filter,
                 since_epoch=since_epoch,
                 skip_rowids=already,
+                device_id_filter=getattr(args, "device_id_filter", None),
             ))
         finally:
             det_conn.close()

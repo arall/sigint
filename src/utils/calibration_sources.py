@@ -120,15 +120,22 @@ def _norm_mac(mac: str) -> str:
 
 # --- detection parsing helpers ----------------------------------------------
 def _iter_raw_detections(det_conn: sqlite3.Connection,
-                         since_epoch: Optional[float] = None
+                         since_epoch: Optional[float] = None,
+                         device_id_filter: Optional[str] = None
                          ) -> Iterator[sqlite3.Row]:
     sql = "SELECT id, timestamp, ts_epoch, signal_type, frequency_hz, " \
           "power_db, noise_floor_db, snr_db, channel, latitude, longitude, " \
           "device_id, audio_file, metadata FROM detections"
+    where = []
     params: list = []
     if since_epoch is not None:
-        sql += " WHERE ts_epoch >= ?"
+        where.append("ts_epoch >= ?")
         params.append(since_epoch)
+    if device_id_filter is not None:
+        where.append("device_id = ?")
+        params.append(device_id_filter)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY id"
     yield from det_conn.execute(sql, params)
 
@@ -156,11 +163,13 @@ def extract_samples(
     source_filter: Optional[set] = None,
     since_epoch: Optional[float] = None,
     skip_rowids: Optional[set] = None,
+    device_id_filter: Optional[str] = None,
 ) -> Iterator[dict]:
     """Iterate over detections and emit calibration samples for matched ones."""
     skip_rowids = skip_rowids or set()
 
-    for row in _iter_raw_detections(det_conn, since_epoch=since_epoch):
+    for row in _iter_raw_detections(det_conn, since_epoch=since_epoch,
+                                    device_id_filter=device_id_filter):
         rowid = int(row["id"])
         if rowid in skip_rowids:
             continue
