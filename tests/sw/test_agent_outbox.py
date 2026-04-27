@@ -15,7 +15,10 @@ def _tmp_outbox():
     return Outbox(path)
 
 
-def test_enqueue_and_next_due_returns_fifo():
+def test_enqueue_and_next_due_returns_priority_then_fifo():
+    """Within a priority bucket, oldest seq wins. Across buckets,
+    CFGINFO/SCANINFO/RES > STAT/LOG > DET — so a STAT enqueued after
+    DETs still drains first."""
     outbox = _tmp_outbox()
     s1 = outbox.enqueue("DET", "payload-1")
     s2 = outbox.enqueue("DET", "payload-2")
@@ -25,9 +28,8 @@ def test_enqueue_and_next_due_returns_fifo():
 
     row = outbox.next_due(now=time.time())
     assert row is not None
-    assert row.seq == s1
-    assert row.kind == "DET"
-    assert row.payload == "payload-1"
+    assert row.kind == "STAT"
+    assert row.seq == s3
 
 
 def test_ack_removes_from_due_list():
@@ -105,3 +107,34 @@ def test_ack_idempotent():
     outbox.ack(s1)
     outbox.ack(s1)  # no raise
     outbox.ack(99999)  # unknown seq, no raise
+
+
+def test_vacuum_stale_unacked_drops_old_cfginfo_and_scaninfo():
+    """An old unacked CFGINFO can sit at the head of the priority-0 bucket
+    forever (servers don't track CFGINFO seqs). The drainer's periodic
+    vacuum drops control rows older than the threshold so fresh
+    re-enqueues from `_stat_loop` aren't starved behind them."""
+    import sqlite3
+    outbox = _tmp_outbox()
+    # Backdate a CFGINFO + SCANINFO to look 1 hour old, plus a fresh
+    # one of each that should survive the vacuum.
+    s_old_cfg = outbox.enqueue("CFGINFO", "stale-cfg")
+    s_old_scan = outbox.enqueue("SCANINFO", "stale-scan")
+    s_fresh_cfg = outbox.enqueue("CFGINFO", "fresh-cfg")
+    s_fresh_scan = outbox.enqueue("SCANINFO", "fresh-scan")
+    s_stat = outbox.enqueue("STAT", "stat")
+    long_ago = time.time() - 3600
+    conn = sqlite3.connect(outbox._path)
+    conn.execute("UPDATE outbox SET enqueued_at=? WHERE seq IN (?, ?)",
+                 (long_ago, s_old_cfg, s_old_scan))
+    conn.commit()
+    conn.close()
+
+    n = outbox.vacuum_stale_unacked(("CFGINFO", "SCANINFO"), 1800.0)
+    assert n == 2
+    assert outbox.get(s_old_cfg) is None
+    assert outbox.get(s_old_scan) is None
+    # Fresh control rows + STAT untouched.
+    assert outbox.get(s_fresh_cfg) is not None
+    assert outbox.get(s_fresh_scan) is not None
+    assert outbox.get(s_stat) is not None

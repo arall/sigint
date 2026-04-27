@@ -144,15 +144,19 @@ class Outbox:
     def vacuum_stale_unacked(self, kinds: tuple, older_than_sec: float) -> int:
         """Drop unacked rows of the given kinds older than `older_than_sec`.
 
-        Use for time-sensitive payloads (DETs) where a stale observation
-        is worse than no observation: if a DET has been retrying for >10
-        min, the data is no longer correlatable with anything live, and
-        the row is just blocking newer DETs of the same kind from being
-        sent (FIFO order within a priority bucket).
+        Two classes of payload need this:
 
-        Control messages (CFGINFO/SCANINFO/STAT) shouldn't go through
-        this — they convey state that's still useful when it eventually
-        lands.
+        1. Time-sensitive observations (DETs): a stale detection is no
+           longer correlatable with anything live, and the row just
+           blocks newer DETs behind it from being sent (FIFO order
+           within a priority bucket).
+
+        2. Re-enqueued state announcements (CFGINFO/SCANINFO): the
+           agent's `_stat_loop` re-fires these every 5 STATs, so an old
+           unacked one is redundant. If the server failed to ack one
+           (e.g. seq predates a server restart and slips through
+           whatever logic the server has), it sits at the head of the
+           priority-0 bucket forever and starves STAT/LOG/DET behind it.
         """
         if not kinds:
             return 0

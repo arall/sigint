@@ -148,6 +148,16 @@ class AgentManager:
         with self._lock:
             approved = msg.agent_id in self._approved
         if not approved:
+            # Unapproved agent. ACK its seq'd control/heartbeat messages
+            # anyway so its outbox doesn't pile up while it waits for the
+            # operator (or a re-HELLO round-trip) to grant approval — a
+            # wedged priority-0 row blocks every STAT and DET behind it,
+            # and we already know we're going to discard the payload, so
+            # the kind thing is to let it move on. DET is deliberately
+            # excluded: we refuse to ACK unauthorized observations
+            # (test_det_from_unapproved_agent_is_ignored).
+            if msg.seq is not None and msg.tag in ("CFGINFO", "SCANINFO", "STAT", "LOG"):
+                self._send(P.encode_ack(msg.agent_id, msg.seq))
             return
 
         if msg.tag == "DET":

@@ -270,10 +270,17 @@ class Agent:
         # Drop DETs older than 10 min that the server never ACKed. Otherwise
         # the FIFO send order means a single failed DET (post-server-restart
         # gap, brief LoRa outage, etc.) blocks every subsequent DET behind
-        # it from ever leaving the outbox. STAT/CFGINFO/SCANINFO are state-
-        # carrying and keep retrying; only time-sensitive observations get
-        # vacuumed.
+        # it from ever leaving the outbox.
+        #
+        # Same trick for CFGINFO/SCANINFO at a longer threshold: `_stat_loop`
+        # re-enqueues fresh ones every 5 STATs (~5 min at default cadence),
+        # so an unacked priority-0 row older than 30 min is guaranteed
+        # redundant. Without this, a single seq the server fails to ack
+        # (observed after server restarts where the agent's outbox carries
+        # rows from the previous session) sits at the head of the priority-0
+        # bucket forever, retrying every 300 s and starving STAT behind it.
         DET_STALE_SEC = 600.0
+        CONTROL_STALE_SEC = 1800.0
         VACUUM_EVERY_N_TICKS = 50  # ~5 min at default 6 s drain rate
         i = 0
         while not self._stop.is_set():
@@ -281,6 +288,8 @@ class Agent:
             if i % VACUUM_EVERY_N_TICKS == 0:
                 try:
                     self._outbox.vacuum_stale_unacked(("DET",), DET_STALE_SEC)
+                    self._outbox.vacuum_stale_unacked(
+                        ("CFGINFO", "SCANINFO"), CONTROL_STALE_SEC)
                     self._outbox.vacuum_acked(older_than_sec=86400.0)
                 except Exception:
                     pass

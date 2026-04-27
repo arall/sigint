@@ -217,3 +217,39 @@ def test_hello_from_unknown_agent_still_goes_pending(tmp_path):
     assert "N99" in mgr.pending()
     # No APPROVE emitted for pending agents.
     assert not any(t.startswith("APPROVE|") for t in link.sent)
+
+
+def test_cfginfo_from_unapproved_agent_is_acked_but_not_processed(tmp_path):
+    """Wedge prevention: an agent whose approval predates the server's
+    current state (or is briefly out-of-sync) keeps re-emitting CFGINFO
+    via `_stat_loop`. The server must ACK so its outbox drains, even
+    though we discard the payload."""
+    from server.agent_manager import AgentManager
+    link = FakeLink()
+    mgr = AgentManager(link=link, state_dir=str(tmp_path),
+                       detection_db_path=str(tmp_path / "agents.db"))
+    # Not approved.
+    link._cb("CFGINFO|N99|7|0|/dev/ttyUSB0||/var/lib/sigint|0.1|rpi|192.168.1.99")
+    assert any(t == "ACK|N99|7|ok" for t in link.sent)
+    # No state was written.
+    assert mgr.agent_info("N99") == {}
+
+
+def test_scaninfo_from_unapproved_agent_is_acked(tmp_path):
+    from server.agent_manager import AgentManager
+    link = FakeLink()
+    mgr = AgentManager(link=link, state_dir=str(tmp_path),
+                       detection_db_path=str(tmp_path / "agents.db"))
+    link._cb("SCANINFO|N99|3|pmr|446.0|2.4|16|0|fm")
+    assert any(t == "ACK|N99|3|ok" for t in link.sent)
+    assert mgr.agent_info("N99") == {}
+
+
+def test_stat_from_unapproved_agent_is_acked(tmp_path):
+    from server.agent_manager import AgentManager
+    link = FakeLink()
+    mgr = AgentManager(link=link, state_dir=str(tmp_path),
+                       detection_db_path=str(tmp_path / "agents.db"))
+    link._cb("STAT|N99|9|pmr|running|48.1|2.4|9|42|1000")
+    assert any(t == "ACK|N99|9|ok" for t in link.sent)
+    assert mgr.agent_info("N99") == {}
