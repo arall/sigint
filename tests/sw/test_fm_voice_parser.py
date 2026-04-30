@@ -438,6 +438,130 @@ def test_server_parser_factory():
     return result
 
 
+def test_dpmr_band_routes_through_digital_path():
+    """Regression: dPMR/DMR band must NOT save analog FM WAVs from 4FSK.
+
+    For weeks the pmr446_digital band silently routed through the analog
+    FM demod, saving raw 4FSK baseband as fm_dPMR_*.wav and feeding it to
+    Whisper, which hallucinated random transcripts on the noise. The fix
+    adds digital="dpmr" to the band profile and a separate finalize path
+    that runs dsdccx and only logs audio_file on decode success.
+
+    This test reproduces a strong "signal" on a digital channel from
+    synthetic carrier-only IQ (no decodable AMBE+2 frames) and asserts:
+      - the digital band profile carries the 'digital' flag
+      - the parser detects the energy and logs a detection
+      - the detection metadata says modulation='4FSK' (not 'FM')
+      - on decode failure: NO analog fm_dPMR_*.wav file is written, and
+        the logged detection has empty audio_file (so Whisper isn't fed
+        4FSK noise and the transcripts table doesn't fill with hallucinations)
+
+    If any of those break, we're back in the silent-regression state we
+    just spent a session diagnosing.
+    """
+    result = TestResult("dPMR band routes through digital decode path")
+    try:
+        # Profile-level invariant
+        assert BAND_PROFILES["pmr446_digital"].get("digital") == "dpmr", \
+            "pmr446_digital profile lost its digital='dpmr' flag"
+        assert "digital" not in BAND_PROFILES["pmr446"], \
+            "analog pmr446 profile must NOT have digital flag"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logged = []
+
+            class CapturingLogger(SignalLogger):
+                def log(self, detection):
+                    logged.append(detection)
+                    return super().log(detection)
+
+            logger = CapturingLogger(
+                output_dir=tmpdir, signal_type="test", device_id="test")
+            logger.start()
+
+            sample_rate = 250e3
+            d1_freq = 446.103125e6
+            center_freq = (446.103125e6 + 446.196875e6) / 2  # band midpoint
+
+            parser = FMVoiceParser(
+                logger=logger,
+                sample_rate=sample_rate,
+                center_freq=center_freq,
+                band="pmr446_digital",
+                output_dir=tmpdir,
+                min_snr_db=5.0,
+                transcribe=False,  # don't actually call Whisper
+            )
+
+            assert parser.digital == "dpmr", \
+                f"parser.digital should be 'dpmr', got {parser.digital!r}"
+
+            # Generate a strong tone on D1 — has no real AMBE+2 frames so
+            # dsdccx will fail to decode (or be unavailable in test env)
+            d1_offset = d1_freq - center_freq
+            chunk_samples = int(sample_rate * 0.1)
+            for _ in range(8):  # 0.8s of "signal"
+                iq = generate_fm_signal(
+                    freq_offset=d1_offset,
+                    sample_rate=sample_rate,
+                    duration=0.1,
+                    deviation=2500,
+                    tone_freq=1000,
+                    snr_db=25,
+                )
+                parser.handle_frame(iq)
+
+            # Trigger holdover expiry with silence
+            time.sleep(0.1)
+            for _ in range(30):
+                noise = (np.random.randn(chunk_samples) +
+                         1j * np.random.randn(chunk_samples)) * 0.001
+                parser.handle_frame(noise.astype(np.complex64))
+                time.sleep(0.05)
+
+            parser.shutdown()
+            logger.stop()
+
+            # 1. Detection was logged
+            assert parser.detection_count >= 1, \
+                f"Expected ≥1 dPMR detection, got {parser.detection_count}"
+
+            # 2. Metadata says 4FSK not FM
+            d1_dets = [d for d in logged if d.signal_type == "dPMR"]
+            assert len(d1_dets) >= 1, \
+                f"No dPMR detections logged (got types: {set(d.signal_type for d in logged)})"
+            meta = json.loads(d1_dets[0].metadata)
+            assert meta.get("modulation") == "4FSK", \
+                f"expected modulation='4FSK', got {meta.get('modulation')!r}"
+            assert "decoded" in meta, \
+                f"metadata missing 'decoded' field (got {meta})"
+
+            # 3. CRITICAL: no fm_dPMR_*.wav files (analog FM noise WAVs)
+            audio_dir = os.path.join(tmpdir, "audio")
+            audio_files = (os.listdir(audio_dir)
+                           if os.path.isdir(audio_dir) else [])
+            fm_dpmr_files = [f for f in audio_files if f.startswith("fm_dPMR")]
+            assert not fm_dpmr_files, (
+                f"Regression: dPMR band saved analog FM noise WAVs "
+                f"({fm_dpmr_files}) — digital path bypassed. "
+                f"This is the bug we fixed; the digital flag is being ignored.")
+
+            # 4. discriminator WAVs cleaned up on decode failure
+            disc_files = [f for f in audio_files if f.endswith(".disc.wav")]
+            assert not disc_files, (
+                f"discriminator WAVs left behind on decode failure: {disc_files}")
+
+            # 5. On decode failure, audio_file must be empty so Whisper isn't fed noise
+            if not meta.get("decoded"):
+                assert not d1_dets[0].audio_file, (
+                    f"Regression: decode failed but audio_file={d1_dets[0].audio_file!r} "
+                    f"is non-empty — would feed 4FSK noise to Whisper")
+        result.passed = True
+    except Exception as e:
+        result.error = str(e)
+    return result
+
+
 def main():
     print("=" * 60)
     print("FM Voice Parser Tests (software-only, no hardware)")
@@ -454,6 +578,7 @@ def main():
         test_shutdown_finalizes,
         test_multiple_channels,
         test_server_parser_factory,
+        test_dpmr_band_routes_through_digital_path,
     ]
 
     results = []
