@@ -90,6 +90,11 @@ BAND_PROFILES = {
         },
         "channel_bw": 6250,
         "fm_deviation": 2500,
+        # 4FSK digital — FM-demodulating without DSD/AMBE+2 yields the raw
+        # symbol baseband (audible noise, Whisper hallucinates on it).
+        # digital="dpmr" routes through dsdccx; if decode fails, the audio
+        # is dropped and only the energy detection is logged.
+        "digital": "dpmr",
     },
     "70cm_eu": {
         "name": "70cm EU Simplex",
@@ -220,6 +225,7 @@ class FMVoiceParser(BaseParser):
         self.channel_bw = profile["channel_bw"]
         self.fm_deviation = profile["fm_deviation"]
         self.record_audio = profile.get("record_audio", True)
+        self.digital = profile.get("digital")  # None | "dpmr"
 
         # Filter channels to those within our bandwidth
         half_bw = sample_rate / 2
@@ -384,6 +390,18 @@ class FMVoiceParser(BaseParser):
             self._detection_count += 1
             return
 
+        # Digital voice (dPMR/DMR): the channels carry 4FSK with the AMBE+2
+        # codec. FM-demodulating to a 3.4 kHz voice WAV produces unintelligible
+        # noise; we save a 48 kHz discriminator and run dsdccx to recover voice.
+        # Only successfully decoded audio gets logged + transcribed; on decode
+        # failure we still log the energy detection but drop the audio so the
+        # transcripts table doesn't fill with Whisper hallucinations on noise.
+        if self.digital == "dpmr":
+            self._finalize_digital_tx(
+                ch_label, ch_freq, peak_power, noise_floor,
+                signal_duration, buffers)
+            return
+
         # Coalesce adjacent small channelizer blocks into larger contiguous
         # chunks so extract_and_demodulate_buffers can process them
         # efficiently (the channelizer delivers ~325 samples per block at
@@ -449,6 +467,133 @@ class FMVoiceParser(BaseParser):
         # Enqueue background transcription — detection is already logged,
         # so the web UI shows it immediately and back-fills the text later.
         if self._async_transcriber and audio_path:
+            self._async_transcriber.submit(
+                audio_path,
+                model=self.whisper_model,
+                language=self.language,
+            )
+
+    # Discriminator sample rate for DSD: dsdccx expects 48 kHz S16 mono with
+    # the full 4FSK baseband intact (no voice-band low-pass filter).
+    DSD_DISCRIMINATOR_RATE = 48000
+
+    def _finalize_digital_tx(self, ch_label, ch_freq, peak_power, noise_floor,
+                              signal_duration, buffers):
+        """Save a 48 kHz discriminator, run dsdccx, log only on decode success.
+
+        Mirrors PMRScanner._save_discriminator_audio + _process_digital_channel
+        but adapted for narrowband channelizer input (samples already centered
+        on the channel, just decimate to 48 kHz and FM-demod with no LPF).
+        """
+        import wave
+        from scipy import signal as scipy_signal
+        from utils.dpmr_decode import decode_dpmr, is_available
+
+        # Coalesce adjacent channelizer blocks for clean decimation
+        coalesced = []
+        cur_off, cur_samp = buffers[0]
+        for off, samp in buffers[1:]:
+            if off == cur_off + len(cur_samp):
+                cur_samp = np.concatenate([cur_samp, samp])
+            else:
+                coalesced.append((cur_off, cur_samp))
+                cur_off, cur_samp = off, samp
+        coalesced.append((cur_off, cur_samp))
+
+        decimation = max(1, int(self.sample_rate / self.DSD_DISCRIMINATOR_RATE))
+        actual_rate = int(self.sample_rate / decimation)
+
+        # Channelizer already centered the channel; just decimate + FM demod
+        chunks = []
+        prev_last = None
+        for offset, chunk in coalesced:
+            if len(chunk) < 200:
+                continue
+            pad = decimation * 12
+            padded = np.concatenate([np.zeros(pad, dtype=chunk.dtype),
+                                     chunk,
+                                     np.zeros(pad, dtype=chunk.dtype)])
+            decimated = scipy_signal.resample_poly(padded, 1, decimation)
+            pad_out = pad // decimation
+            iq = decimated[pad_out:-pad_out] if pad_out > 0 else decimated
+            if prev_last is not None:
+                iq = np.concatenate([[prev_last], iq])
+            if len(iq) > 1:
+                prev_last = iq[-1]
+                phase = np.angle(iq[1:] * np.conj(iq[:-1]))
+                chunks.append(phase.astype(np.float32))
+
+        if not chunks:
+            return
+
+        full_audio = np.concatenate(chunks)
+
+        ts_str = time.strftime("%Y%m%d_%H%M%S")
+        freq_mhz = ch_freq / 1e6
+        disc_filename = (f"dpmr_{ch_label}_{freq_mhz:.5f}_{ts_str}.disc.wav")
+        disc_path = os.path.join(self._audio_dir, disc_filename)
+
+        # Normalize to int16 manually — save_audio's auto-normalization
+        # changes per-file gain, which can confuse dsdccx's symbol slicer
+        max_val = np.max(np.abs(full_audio))
+        if max_val > 0:
+            samples_i16 = (full_audio / max_val * 32000).astype(np.int16)
+        else:
+            samples_i16 = full_audio.astype(np.int16)
+
+        with wave.open(disc_path, 'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(actual_rate)
+            wav.writeframes(samples_i16.tobytes())
+
+        decoded_path = None
+        if is_available():
+            try:
+                decoded_path = decode_dpmr(disc_path)
+            except Exception as e:
+                print(f"  [WARN] dsdccx failed for {ch_label}: {e}")
+
+        # If decode worked, replace discriminator with decoded voice;
+        # otherwise drop the discriminator so we don't pollute Whisper.
+        audio_file = None
+        audio_path = None
+        decoded = False
+        if decoded_path and os.path.exists(decoded_path):
+            try:
+                os.remove(disc_path)
+            except OSError:
+                pass
+            audio_path = decoded_path
+            audio_file = os.path.basename(decoded_path)
+            decoded = True
+        else:
+            try:
+                os.remove(disc_path)
+            except OSError:
+                pass
+
+        metadata = {
+            "duration_s": round(signal_duration, 2),
+            "band": self.band_name,
+            "modulation": "4FSK",
+            "decoded": decoded,
+        }
+
+        detection = SignalDetection.create(
+            signal_type=self.signal_type,
+            frequency_hz=ch_freq,
+            power_db=peak_power,
+            noise_floor_db=noise_floor,
+            channel=ch_label,
+            audio_file=audio_file,
+            metadata=json.dumps(metadata),
+        )
+        self.logger.log(detection)
+        self._detection_count += 1
+
+        # Only transcribe successfully decoded voice — never the raw 4FSK
+        if self._async_transcriber and audio_path and decoded:
             self._async_transcriber.submit(
                 audio_path,
                 model=self.whisper_model,
