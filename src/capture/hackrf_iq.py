@@ -84,7 +84,7 @@ class HackRFCaptureSource(BaseCaptureSource):
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=self.block_size * 4,  # Large pipe buffer
+            bufsize=0,  # unbuffered — read raw fd via os.read in _pipe_reader
         )
 
         # Read stderr in background
@@ -128,15 +128,34 @@ class HackRFCaptureSource(BaseCaptureSource):
     WARMUP_SECONDS = 10
 
     def _pipe_reader(self, sample_queue):
-        """Dedicated thread: read raw bytes from pipe and convert to complex64."""
+        """Dedicated thread: read raw bytes from pipe and convert to complex64.
+
+        Uses os.read on the raw fd (bufsize=0 in Popen) instead of
+        BufferedReader.read(N). The buffered version blocks until exactly N
+        bytes are accumulated, which deadlocks against hackrf_transfer at
+        high rates: hackrf_transfer's write() blocks once the kernel pipe
+        is full, while the reader is still inside one big read() that won't
+        return until the buffer fills — but it can't fill if the writer is
+        blocked. os.read returns whatever is currently in the pipe (drains
+        it on every syscall), so the writer can keep flowing.
+        """
         bytes_per_block = self.block_size * 2  # 2 bytes per IQ sample (int8 I + int8 Q)
         warmup_deadline = time.time() + self.WARMUP_SECONDS
+        fd = self._process.stdout.fileno()
+        leftover = bytearray()
 
         while not self._stop_event.is_set():
             try:
-                raw = self._process.stdout.read(bytes_per_block)
-                if not raw:
+                # os.read returns whatever's available, up to bytes_per_block.
+                # Accumulate until we have a full block, then dispatch.
+                chunk = os.read(fd, bytes_per_block - len(leftover))
+                if not chunk:
                     break
+                leftover.extend(chunk)
+                if len(leftover) < bytes_per_block:
+                    continue
+                raw = bytes(leftover)
+                leftover = bytearray()
 
                 # Convert int8 IQ pairs to complex64
                 iq_int8 = np.frombuffer(raw, dtype=np.int8)
@@ -164,16 +183,23 @@ class HackRFCaptureSource(BaseCaptureSource):
                     if now < warmup_deadline:
                         # Startup transient — don't surface as "degraded".
                         continue
-                    if not hasattr(self, '_drop_count'):
-                        self._drop_count = 0
+                    # Initialise drop tracking lazily. server.py:_run_capture
+                    # pre-creates _drop_count=0 between retries but deletes
+                    # _drop_first, so anchor the "is this a fresh window?"
+                    # check on _drop_first, not _drop_count.
+                    if not hasattr(self, '_drop_first'):
                         self._drop_first = now
+                        self._drop_count = 0
                     self._drop_count += 1
                     # Log every 50 drops to avoid spam
                     if self._drop_count % 50 == 1:
                         print(f"  [WARN] HackRF can't keep up — dropped {self._drop_count} blocks "
                               f"({(now - self._drop_first):.1f}s); reduce sample rate or move parsers off this capture")
-            except Exception:
+            except Exception as e:
                 if not self._stop_event.is_set():
+                    import traceback
+                    print(f"  [ERROR] HackRF reader thread died ({self.center_freq/1e6:.1f} MHz): {type(e).__name__}: {e}", flush=True)
+                    traceback.print_exc()
                     break
 
     def _drain_stderr(self):
