@@ -32,8 +32,6 @@ from datetime import datetime
 from utils import db as _db
 from utils import triangulate as _tri
 
-from .sessions import is_session_db_name
-
 
 DEFAULT_WINDOW_SECONDS = 300    # 5 min — map is "what's live right now"
 DEFAULT_MAX_RESULTS = 50
@@ -43,9 +41,9 @@ DEFAULT_CORRELATION_WINDOW_S = 60.0  # widened from 30 — Pi 0 nodes have a
 # rejects unrelated TXes on the same channel (PMR voice events are
 # typically short and well-separated).
 
-# Per-file load cap: stops a screamingly busy agent DB (WiFi / BLE at a
-# festival) from blowing out memory when the map tab refreshes.
-_PER_FILE_LIMIT = 5000
+# Load cap: stops a screamingly busy session (WiFi / BLE at a festival)
+# from blowing out memory when the map tab refreshes.
+_LOAD_LIMIT = 20000
 
 
 def fetch_triangulations(
@@ -71,41 +69,36 @@ def fetch_triangulations(
 
     by_type_node: dict[tuple[str, str], list[dict]] = {}
 
-    try:
-        names = sorted(
-            (f for f in os.listdir(output_dir) if is_session_db_name(f)),
-            reverse=True,
-        )
-    except OSError:
+    db_path = _db.default_db_path(output_dir)
+    if not os.path.exists(db_path):
         return []
-
-    for name in names:
-        path = os.path.join(output_dir, name)
-        is_agent_db = name.startswith("agents_")
+    try:
+        conn = _db.connect(db_path, readonly=True)
+    except Exception:
+        return []
+    try:
+        cur = conn.execute(
+            "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
+            "power_db, noise_floor_db, snr_db, channel, latitude, "
+            "longitude, device_id, agent_id, metadata FROM detections "
+            "WHERE ts_epoch >= ? ORDER BY id DESC LIMIT ?",
+            (since, _LOAD_LIMIT),
+        )
+        for r in cur:
+            det = _shape_detection(r, cal=cal)
+            if det is None:
+                continue
+            key = (det["signal_type"], det["_node_id"])
+            by_type_node.setdefault(key, []).append(det)
+    except Exception:
+        # Malformed row / schema mismatch — give up cleanly, don't kill
+        # the request.
+        pass
+    finally:
         try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
-        try:
-            cur = conn.execute(
-                "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
-                "power_db, noise_floor_db, snr_db, channel, latitude, "
-                "longitude, device_id, metadata FROM detections "
-                "WHERE ts_epoch >= ? ORDER BY id DESC LIMIT ?",
-                (since, _PER_FILE_LIMIT),
-            )
-            for r in cur:
-                det = _shape_detection(r, is_agent_db=is_agent_db, cal=cal)
-                if det is None:
-                    continue
-                key = (det["signal_type"], det["_node_id"])
-                by_type_node.setdefault(key, []).append(det)
-        except Exception:
-            # Malformed row / schema mismatch — skip this file, don't kill
-            # the request.
-            pass
-        finally:
             conn.close()
+        except Exception:
+            pass
 
     # `correlate` auto-detects strategy from the first detection's signal
     # type, so call it once per type to keep strategy stable.
@@ -153,7 +146,7 @@ def fetch_triangulations(
     return deduped
 
 
-def _shape_detection(row, *, is_agent_db: bool, cal) -> dict | None:
+def _shape_detection(row, *, cal) -> dict | None:
     """Build a dict that matches what `triangulate.correlate` expects.
 
     Returns None for rows that can't be triangulated (missing GPS, self-
@@ -169,8 +162,9 @@ def _shape_detection(row, *, is_agent_db: bool, cal) -> dict | None:
     except (TypeError, ValueError):
         return None
 
-    # See module docstring for the node-attribution rule.
-    node_id = (row["device_id"] or "server") if is_agent_db else "server"
+    # node_id comes from the `agent_id` column on forwarded rows;
+    # server-local rows are NULL and grouped under "server".
+    node_id = row["agent_id"] or "server"
 
     try:
         meta = json.loads(row["metadata"] or "{}") if row["metadata"] else {}

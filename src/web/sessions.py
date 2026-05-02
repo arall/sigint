@@ -1,140 +1,96 @@
 """
-Session discovery for the web dashboard.
+Session listing for the web dashboard.
 
-Each per-run detection .db file is a "session". The session switcher
-lets the user pick a historical .db from a dropdown and have category
-tabs query that file instead of the currently-tailed one. The Live /
-Log / Timeline / Devices tabs keep showing the active session for
-this iteration.
+Sessions are rows in the `sessions` table inside the unified
+`output/detections.db`. Each scanner run, server run, or agent ingest
+session inserts one row at start and stamps `ended_at` at stop.
 
 Public:
-  list_sessions(output_dir)            — list all .db files with metadata
-  resolve_session_path(output_dir, name) — path-traversal-safe lookup
+  list_sessions(output_dir)        — list every row in the sessions table
+  session_exists(output_dir, sid)  — guard for ?session=<id>
 """
 
 import os
 import sqlite3
 from datetime import datetime
 
-
-# Reserved support-file names that must NOT appear in the session
-# dropdown or get tailed by the DBTailer. These live in the same
-# output directory but hold persistent state (persona/AP store)
-# rather than per-session detection history.
-_SUPPORT_DB_NAMES = {
-    "devices.db",      # PersonaDB + ApDB cross-session store
-    "calibration.db",  # Calibration sample / offset store (no detections table)
-}
-
-
-def is_session_db_name(name):
-    """Return True if `name` looks like a per-session detection .db.
-
-    We use a name-based deny list rather than a regex because scanners
-    may use any basename convention and we don't want to be surprised
-    by a new one. Anything ending in `.db` that isn't in the reserved
-    set and isn't a WAL/SHM sidecar is a session file.
-    """
-    if not name.endswith('.db'):
-        return False
-    if name.endswith('-wal') or name.endswith('-shm'):
-        return False
-    if name in _SUPPORT_DB_NAMES:
-        return False
-    return True
-
-
-# path → (mtime, metadata_dict) cache. Historical sessions don't change,
-# so after the first read we can serve their metadata indefinitely. The
-# active session's mtime bumps on every detection, so we recompute it.
-_metadata_cache = {}
+from utils import db as _db
 
 
 def list_sessions(output_dir):
-    """Return a list of detection .db files with metadata, newest first.
+    """Return all rows from the `sessions` table, newest first.
 
     Each session dict carries:
-      name              — basename of the .db file (the dropdown value)
-      mtime_iso         — last modification time
-      size_bytes        — on-disk size including the main file (WAL excluded)
-      detection_count   — COUNT(*) from the detections table
-      types             — distinct signal_type list (sorted)
-      first_ts / last_ts — min/max timestamp in the file
-      live              — True for the newest file (the tailer writes here)
+      id                 — row id (used as the dropdown value)
+      kind               — "server" / "scanner:<type>" / "agent_ingest"
+      label              — free-form label set by the producer
+      started_at_iso     — ISO 8601 of `started_at`
+      ended_at_iso       — ISO 8601 of `ended_at`, or "" while active
+      detection_count    — COUNT(*) of detections tagged with this id
+      types              — distinct signal_type list (sorted)
+      first_ts / last_ts — min/max detection timestamp for this session
+      live               — True if `ended_at IS NULL` (active session)
     """
-    try:
-        names = [
-            f for f in os.listdir(output_dir)
-            if is_session_db_name(f)
-            and not f.endswith('-wal')
-            and not f.endswith('-shm')
-        ]
-    except OSError:
+    db_path = _db.default_db_path(output_dir)
+    if not os.path.exists(db_path):
         return []
-
-    sessions = []
-    for name in names:
-        path = os.path.join(output_dir, name)
-        try:
-            st = os.stat(path)
-        except OSError:
-            continue
-        meta = _get_metadata(path, st.st_mtime)
-        sessions.append({
-            "name": name,
-            "mtime_iso": datetime.fromtimestamp(st.st_mtime).isoformat(timespec='seconds'),
-            "size_bytes": st.st_size,
-            "detection_count": meta.get("detection_count", 0),
-            "types": meta.get("types", []),
-            "first_ts": meta.get("first_ts", ""),
-            "last_ts": meta.get("last_ts", ""),
-            "live": False,
-        })
-
-    sessions.sort(key=lambda s: s["mtime_iso"], reverse=True)
-    if sessions:
-        sessions[0]["live"] = True
-    return sessions
-
-
-def _get_metadata(path, mtime):
-    cached = _metadata_cache.get(path)
-    if cached and cached[0] == mtime:
-        return cached[1]
-    meta = _read_metadata(path)
-    _metadata_cache[path] = (mtime, meta)
-    return meta
-
-
-def _read_metadata(path):
-    """Read summary stats from a detection .db. Returns empty values if
-    the file is unreadable or the schema is missing — never raises."""
-    empty = {"detection_count": 0, "types": [], "first_ts": "", "last_ts": ""}
     try:
-        uri = f"file:{os.path.abspath(path)}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+        conn = _db.connect(db_path, readonly=True)
     except Exception:
-        return empty
+        return []
     try:
-        row = conn.execute(
-            "SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM detections"
-        ).fetchone()
-        count = row[0] or 0
-        first_ts = row[1] or ""
-        last_ts = row[2] or ""
-        types = [
-            r[0] for r in conn.execute(
-                "SELECT DISTINCT signal_type FROM detections ORDER BY signal_type"
+        try:
+            sessions_rows = conn.execute(
+                "SELECT id, started_at, ended_at, label, kind, pid "
+                "FROM sessions ORDER BY started_at DESC"
             ).fetchall()
-        ]
-        return {
-            "detection_count": int(count),
-            "types": types,
-            "first_ts": first_ts,
-            "last_ts": last_ts,
-        }
-    except sqlite3.Error:
-        return empty
+        except sqlite3.OperationalError:
+            return []
+
+        out = []
+        for s in sessions_rows:
+            sid = int(s["id"])
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*), MIN(timestamp), MAX(timestamp) "
+                    "FROM detections WHERE session_id = ?",
+                    (sid,),
+                ).fetchone()
+                count = int(row[0] or 0)
+                first_ts = row[1] or ""
+                last_ts = row[2] or ""
+                types = [
+                    r[0] for r in conn.execute(
+                        "SELECT DISTINCT signal_type FROM detections "
+                        "WHERE session_id = ? ORDER BY signal_type",
+                        (sid,),
+                    ).fetchall()
+                ]
+            except sqlite3.OperationalError:
+                count, first_ts, last_ts, types = 0, "", "", []
+
+            started_iso = (
+                datetime.fromtimestamp(s["started_at"]).isoformat(timespec="seconds")
+                if s["started_at"] else ""
+            )
+            ended_iso = (
+                datetime.fromtimestamp(s["ended_at"]).isoformat(timespec="seconds")
+                if s["ended_at"] else ""
+            )
+            out.append({
+                "id": sid,
+                "kind": s["kind"] or "",
+                "label": s["label"] or "",
+                "pid": s["pid"],
+                "started_at_iso": started_iso,
+                "ended_at_iso": ended_iso,
+                "detection_count": count,
+                "types": types,
+                "first_ts": first_ts,
+                "last_ts": last_ts,
+                "live": s["ended_at"] is None,
+            })
+        return out
     finally:
         try:
             conn.close()
@@ -142,21 +98,31 @@ def _read_metadata(path):
             pass
 
 
-def resolve_session_path(output_dir, session_name):
-    """Given a user-supplied session name from the dropdown, return the
-    absolute .db path if it's a valid session in output_dir, else None.
-
-    Rejects anything that contains a path separator or '..', and
-    anything that doesn't end in '.db'. This prevents a client from
-    reading arbitrary files on disk via `?session=../../etc/passwd`.
-    """
-    if not session_name:
-        return None
-    if "/" in session_name or "\\" in session_name or ".." in session_name:
-        return None
-    if not session_name.endswith(".db"):
-        return None
-    path = os.path.join(output_dir, session_name)
-    if not os.path.isfile(path):
-        return None
-    return path
+def session_exists(output_dir, session_id):
+    """Return True if `session_id` is a row in the sessions table."""
+    if session_id is None:
+        return False
+    try:
+        sid = int(session_id)
+    except (TypeError, ValueError):
+        return False
+    db_path = _db.default_db_path(output_dir)
+    if not os.path.exists(db_path):
+        return False
+    try:
+        conn = _db.connect(db_path, readonly=True)
+    except Exception:
+        return False
+    try:
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM sessions WHERE id = ?", (sid,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return False
+        return row is not None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

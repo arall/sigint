@@ -863,8 +863,8 @@ Examples:
                             help="Print what would be ingested without writing")
     cal_ingest.add_argument("--device-id-filter", default=None,
                             help="Only ingest rows where device_id matches "
-                                 "(useful when a single agents_*.db contains "
-                                 "DETs from multiple agents)")
+                                 "(useful when the unified detections.db "
+                                 "carries rows from multiple nodes)")
 
     cal_show = cal_sub.add_parser("show", help="Print current solved offsets")
     cal_show.add_argument("--db", default=None)

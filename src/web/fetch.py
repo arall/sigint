@@ -1,14 +1,13 @@
 """
-SQL-backed category fetch.
+SQL-backed fetchers for the web dashboard.
 
-The tailer keeps a 50k-row in-memory deque that evaporates once a busy
-session rolls past the limit. Category tabs need to browse history
-beyond that window, so this module reads directly from the current
-SQLite detection file using the `(signal_type, ts_epoch)` index.
+All readers open one connection to the unified `output/detections.db`
+that the SignalLogger writes to. Sessions are rows in the `sessions`
+table; the dashboard's session selector passes a session id which
+becomes a `WHERE session_id = ?` clause.
 
-Each fetch returns rows shaped *exactly* like DBTailer's in-memory
-detection dicts — same keys, same types — so the existing pure-function
-category loaders in `web/loaders.py` consume them with no changes.
+Forwarded detections from remote agents live in the same table tagged
+with `agent_id = "<aid>"`; server-local rows have `agent_id IS NULL`.
 """
 
 import json
@@ -23,7 +22,7 @@ from utils import calibration as _cal
 from utils import calibration_db as _cdb
 
 from .categories import CATEGORIES, CATEGORY_LABELS, CATEGORY_ORDER, category_of
-from .tailer import _extract_detail, _extract_uid
+from .tailer import _extract_detail
 
 
 DEFAULT_WINDOW_SECONDS = None   # no time window — rely on DEFAULT_LIMIT
@@ -55,28 +54,29 @@ def _get_calibration(output_dir):
     return _CAL_CACHE["cal"]
 
 
-def _load_transcripts_for_db(db_path):
-    """Read the `transcripts` table from one detection .db and return
-    {audio_file: text}. Empty dict on any read error or missing table
-    (old .db files predating the transcripts table schema)."""
+def _open_ro(output_dir):
+    """Open a readonly connection to `output/detections.db`. Returns
+    None if the file isn't there yet (no scanner has ever run)."""
+    path = _db.default_db_path(output_dir)
+    if not os.path.exists(path):
+        return None
     try:
-        conn = _db.connect(db_path, readonly=True)
+        return _db.connect(path, readonly=True)
     except Exception:
-        return {}
+        return None
+
+
+def _close_quiet(conn):
+    if conn is None:
+        return
     try:
-        return _db.get_transcripts(conn)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
+    except Exception:
+        pass
 
 
 def _load_transcripts(output_dir):
-    """Union transcripts from every .db file in `output_dir`. Used by
-    the single-file session fetch path when the caller didn't pre-load;
-    the multi-file fetchers call `_load_transcripts_for_db` per file
-    to keep each .db's transcripts scoped to its own detections.
+    """Return {audio_file: text} for every transcript in the unified DB.
 
     Also reads `transcripts.json` if it still exists — purely for
     backwards compatibility with sessions created before the table
@@ -92,14 +92,13 @@ def _load_transcripts(output_dir):
     except (OSError, json.JSONDecodeError):
         pass
 
-    from .sessions import is_session_db_name
-    try:
-        names = [f for f in os.listdir(output_dir) if is_session_db_name(f)]
-    except OSError:
+    conn = _open_ro(output_dir)
+    if conn is None:
         return merged
-    for name in names:
-        path = os.path.join(output_dir, name)
-        merged.update(_load_transcripts_for_db(path))
+    try:
+        merged.update(_db.get_transcripts(conn))
+    finally:
+        _close_quiet(conn)
     return merged
 
 
@@ -162,11 +161,11 @@ def _row_to_detection_dict(row, transcripts=None):
     dict layout that DBTailer._process_row produces, so category
     loaders don't care where the row came from.
 
-    `transcripts` is the parsed transcripts.json sidecar; if provided
-    and the row has an audio_file, the sidecar's text overrides
-    whatever was in the metadata blob. Matches DBTailer._process_row's
-    overlay behavior so the Voice tab shows transcripts no matter
-    which path a row took to the renderer.
+    `transcripts` is the parsed transcripts dict; if provided and the
+    row has an audio_file, the text overrides whatever was in the
+    metadata blob. Matches DBTailer._process_row's overlay behavior so
+    the Voice tab shows transcripts no matter which path a row took to
+    the renderer.
     """
     try:
         meta = json.loads(row["metadata"]) if row["metadata"] else {}
@@ -207,201 +206,65 @@ def _row_to_detection_dict(row, transcripts=None):
 
 
 def fetch_detections_for_category(
-    db_path,
+    output_dir,
     category,
+    session_id=None,
     window_seconds=DEFAULT_WINDOW_SECONDS,
     limit=DEFAULT_LIMIT,
     now=None,
     transcripts=None,
 ):
-    """Pull recent detections for a category from a SQLite DB and return
-    them in the DBTailer deque shape (oldest first, newest last).
+    """Pull recent detections for a category from the unified DB.
 
     Args:
-        db_path: path to a detections .db file.
+        output_dir: the output directory containing detections.db.
         category: one of 'voice', 'drones', 'aircraft', 'vessels',
                   'keyfobs', 'tpms', 'cellular', 'ism', 'lora', 'pagers'.
+        session_id: if set, restrict to rows from that session row.
         window_seconds: only rows newer than (now - window_seconds).
         limit: hard cap on rows returned (newest rows kept).
         now: override current time (for tests).
 
-    Returns:
-        list of dicts shaped like DBTailer._detections entries.
+    Returns list of dicts shaped like DBTailer._detections entries
+    (oldest first, newest last — matches the deque ordering).
     """
     predicate, params = _category_predicate(category)
 
-    if window_seconds is None:
-        sql = (
-            f"SELECT * FROM detections "
-            f"WHERE {predicate} "
-            f"ORDER BY id DESC LIMIT ?"
-        )
-        full_params = list(params) + [int(limit)]
-    else:
+    clauses = [predicate]
+    if session_id is not None:
+        clauses.append("session_id = ?")
+        params.append(int(session_id))
+    if window_seconds is not None:
         since_epoch = (now if now is not None else time.time()) - window_seconds
-        sql = (
-            f"SELECT * FROM detections "
-            f"WHERE {predicate} AND ts_epoch >= ? "
-            f"ORDER BY id DESC LIMIT ?"
-        )
-        full_params = list(params) + [since_epoch, int(limit)]
+        clauses.append("ts_epoch >= ?")
+        params.append(since_epoch)
 
-    try:
-        conn = _db.connect(db_path, readonly=True)
-    except Exception:
+    where = " AND ".join(clauses)
+    sql = (
+        f"SELECT * FROM detections "
+        f"WHERE {where} "
+        f"ORDER BY id DESC LIMIT ?"
+    )
+    full_params = list(params) + [int(limit)]
+
+    conn = _open_ro(output_dir)
+    if conn is None:
         return []
     try:
-        rows = list(conn.execute(sql, full_params))
-    except sqlite3.OperationalError:
-        # Support DBs (calibration.db etc.) lack a `detections` table.
-        # Returning [] keeps the union fetch alive instead of poisoning
-        # every category endpoint via the outer try/except.
-        rows = []
-    finally:
         try:
-            conn.close()
-        except Exception:
-            pass
+            rows = list(conn.execute(sql, full_params))
+        except sqlite3.OperationalError:
+            rows = []
+    finally:
+        _close_quiet(conn)
 
-    # If the caller didn't pre-load transcripts, read them from this
-    # one .db's `transcripts` table. The union fetcher pre-loads across
-    # all .db files and passes the merged dict in so we don't re-query
-    # the same table N times.
     if transcripts is None:
-        transcripts = _load_transcripts_for_db(db_path)
+        transcripts = _load_transcripts(output_dir)
     shaped = [_row_to_detection_dict(r, transcripts) for r in rows]
     # We pulled newest-first; the deque is oldest-first and the loaders
     # that use `reversed(detections)` assume that ordering. Flip.
     shaped.reverse()
     return shaped
-
-
-def fetch_detections_for_category_all(
-    output_dir,
-    category,
-    window_seconds=DEFAULT_WINDOW_SECONDS,
-    limit=DEFAULT_LIMIT,
-    now=None,
-):
-    # Load transcripts once across all files in this directory so every
-    # voice row can overlay its Whisper text without re-reading the sidecar
-    # per .db file.
-    transcripts = _load_transcripts(output_dir)
-    """Union the category fetch across *every* .db file in an output dir.
-
-    The single-file fetcher above is scoped to one session — which breaks
-    for standalone scanners that write to their own DB (e.g. `sdr.py pmr`
-    as a server subprocess writes to pmr446_*.db, while the main server
-    writes server_*.db). In LIVE mode the user expects /api/cat/voice to
-    see voice transmissions regardless of which file carried them; this
-    helper does the union.
-
-    When the user picks a specific session from the header dropdown we
-    stay on the single-file path so the UI respects their scope.
-    """
-    from .sessions import is_session_db_name
-    try:
-        names = sorted(f for f in os.listdir(output_dir) if is_session_db_name(f))
-    except OSError:
-        return []
-
-    merged = []
-    for name in names:
-        path = os.path.join(output_dir, name)
-        rows = fetch_detections_for_category(
-            path, category,
-            window_seconds=window_seconds,
-            limit=limit,
-            now=now,
-            transcripts=transcripts,
-        )
-        merged.extend(rows)
-
-    # Sort by timestamp (oldest first, matching single-file output), then
-    # keep only the most recent `limit` rows across all files.
-    merged.sort(key=lambda r: r.get("timestamp", ""))
-    if len(merged) > limit:
-        merged = merged[-limit:]
-    return merged
-
-
-# ---------------------------------------------------------------------------
-# Generic SQL helpers — back the Log tab, Timeline tab, Live tab, Devices
-# tab active flag, and the SSE state stream. They all union across every
-# .db file in the output dir so a standalone scanner subprocess writing
-# to its own file (pmr446_*.db, adsb_*.db, …) doesn't hide detections
-# from the dashboard.
-# ---------------------------------------------------------------------------
-
-def _iter_db_paths(output_dir):
-    """Yield every session .db file in `output_dir`, sorted alphabetically
-    so the order across calls is stable (makes debugging less confusing).
-    Excludes support DBs like devices.db (persistent persona/AP store)."""
-    from .sessions import is_session_db_name
-    try:
-        names = sorted(
-            f for f in os.listdir(output_dir)
-            if is_session_db_name(f)
-        )
-    except OSError:
-        return
-    for name in names:
-        yield os.path.join(output_dir, name)
-
-
-def fetch_agent_last_positions(output_dir):
-    """Return {agent_id: {lat, lon, ts_epoch}} from each agent's most
-    recently *inserted* geo-tagged detection.
-
-    Iterates agents_*.db newest-first and picks the first match per
-    agent by rowid DESC — that's deterministic even when multiple rows
-    share the same ts_epoch (outbox retries on the same original
-    detection) and avoids the SQLite `MAX() + bare-columns` quirk
-    where the returned lat/lon can come from a different row than the
-    one with the max timestamp.
-    """
-    try:
-        names = sorted(
-            (f for f in os.listdir(output_dir)
-             if f.startswith("agents_") and f.endswith(".db")),
-            reverse=True,
-        )
-    except OSError:
-        return {}
-    out: dict = {}
-    seen_ids: set = set()
-    for name in names:
-        path = os.path.join(output_dir, name)
-        try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
-        try:
-            # Pull the newest geo-tagged row per agent in this DB.
-            cur = conn.execute(
-                "SELECT device_id, ts_epoch, latitude, longitude "
-                "FROM detections "
-                "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
-                "ORDER BY id DESC"
-            )
-            for r in cur:
-                aid = r["device_id"]
-                if not aid or aid in seen_ids:
-                    continue
-                seen_ids.add(aid)
-                out[aid] = {
-                    "lat": r["latitude"],
-                    "lon": r["longitude"],
-                    "ts_epoch": r["ts_epoch"] or 0,
-                }
-        except Exception:
-            pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    return out
 
 
 def _row_for_map(r, cal=None):
@@ -410,12 +273,15 @@ def _row_for_map(r, cal=None):
     power_db_cal = None
     cal_applied = False
     if cal is not None and power_db is not None and freq_hz:
-        # WiFi-AP logs device_id=BSSID (emitter), not node; the lookup
-        # silently misses those which is the correct behaviour — the ring
-        # just stays uncalibrated. For every other scanner device_id is
-        # the node identity used by `sdr.py calibrate ingest --node-id`.
+        # Calibration is keyed on the *receiving node*. For forwarded
+        # rows that's `agent_id`; for server-local rows it's `device_id`
+        # (set to the local node id by the calibration ingest CLI).
+        # WiFi-AP rows put the emitter BSSID in device_id — calibration
+        # silently misses those, which is correct behaviour.
+        node_key = r["agent_id"] if "agent_id" in r.keys() and r["agent_id"] \
+            else (r["device_id"] or "")
         corrected, applied = _cal.apply_offset(
-            float(power_db), r["device_id"] or "", float(freq_hz), cal,
+            float(power_db), node_key, float(freq_hz), cal,
         )
         if applied:
             power_db_cal = round(corrected, 1)
@@ -433,173 +299,144 @@ def _row_for_map(r, cal=None):
     }
 
 
+def fetch_agent_last_positions(output_dir):
+    """Return {agent_id: {lat, lon, ts_epoch}} from each agent's most
+    recently *inserted* geo-tagged detection.
+
+    Picks rows by `id DESC` so it's deterministic even when multiple
+    rows share the same ts_epoch (outbox retries on the same original
+    detection).
+    """
+    conn = _open_ro(output_dir)
+    if conn is None:
+        return {}
+    out = {}
+    try:
+        cur = conn.execute(
+            "SELECT agent_id, ts_epoch, latitude, longitude "
+            "FROM detections "
+            "WHERE agent_id IS NOT NULL "
+            "  AND latitude IS NOT NULL AND longitude IS NOT NULL "
+            "ORDER BY id DESC"
+        )
+        for r in cur:
+            aid = r["agent_id"]
+            if not aid or aid in out:
+                continue
+            out[aid] = {
+                "lat": r["latitude"],
+                "lon": r["longitude"],
+                "ts_epoch": r["ts_epoch"] or 0,
+            }
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        _close_quiet(conn)
+    return out
+
+
 def fetch_detections_by_source(output_dir, limit_per_source=200,
                                 window_seconds=None, now=None):
-    """Group recent detections by data source (where the RF was captured).
+    """Group recent detections by data source.
 
-    Two kinds of source:
-      - "server": rows written by server-local captures. Anything in a
-        session DB whose filename doesn't start with "agents_".
+    A source is either:
+      - "server": rows with `agent_id IS NULL` (server-local captures).
       - "<agent_id>": rows forwarded over the Meshtastic C2 mesh from a
-        remote agent. These live exclusively in agents_*.db, where
-        AgentManager sets device_id to the agent_id it received from.
+        remote agent.
 
     `window_seconds`, if set, restricts to rows newer than (now - window).
-    Uses ts_epoch so it follows the user's notion of "when the emitter
-    was heard", which for DET rows is the agent's original detection
-    time (outbox retries carry the original ts_unix).
+    Uses ts_epoch (the agent's original detection time on forwarded
+    rows, the local time on server-local rows).
 
     Returns {source_id: [rows newest-first]}, capped per source.
     """
-    from .sessions import is_session_db_name
-    try:
-        names = sorted(
-            (f for f in os.listdir(output_dir) if is_session_db_name(f)),
-            reverse=True,
-        )
-    except OSError:
-        return {}
     if now is None:
-        import time as _time
-        now = _time.time()
+        now = time.time()
     since = (now - window_seconds) if window_seconds else None
     cal = _get_calibration(output_dir)
-    out: dict = {}
-    for name in names:
-        path = os.path.join(output_dir, name)
-        is_agent_db = name.startswith("agents_")
-        try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
-        try:
-            if since is not None:
-                cur = conn.execute(
-                    "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
-                    "power_db, snr_db, channel, device_id FROM detections "
-                    "WHERE ts_epoch >= ? ORDER BY id DESC LIMIT ?",
-                    (since, limit_per_source * 4),
-                )
-            else:
-                cur = conn.execute(
-                    "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
-                    "power_db, snr_db, channel, device_id FROM detections "
-                    "ORDER BY id DESC LIMIT ?",
-                    (limit_per_source * 4,),
-                )
-            for r in cur:
-                if is_agent_db:
-                    key = r["device_id"] or "server"
-                else:
-                    key = "server"
-                lst = out.setdefault(key, [])
-                if len(lst) >= limit_per_source:
-                    continue
-                lst.append(_row_for_map(r, cal=cal))
-        except Exception:
-            pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+
+    conn = _open_ro(output_dir)
+    if conn is None:
+        return {}
+    out = {}
+    try:
+        if since is not None:
+            cur = conn.execute(
+                "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
+                "power_db, snr_db, channel, device_id, agent_id "
+                "FROM detections "
+                "WHERE ts_epoch >= ? "
+                "ORDER BY id DESC",
+                (since,),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
+                "power_db, snr_db, channel, device_id, agent_id "
+                "FROM detections "
+                "ORDER BY id DESC LIMIT ?",
+                (limit_per_source * 32,),
+            )
+        for r in cur:
+            key = r["agent_id"] or "server"
+            lst = out.setdefault(key, [])
+            if len(lst) >= limit_per_source:
+                continue
+            lst.append(_row_for_map(r, cal=cal))
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        _close_quiet(conn)
     return out
 
 
 def fetch_agent_detections(output_dir, limit=50, offset=0):
     """Return a page of detections forwarded from mesh agents.
 
-    Scopes to `agents_*.db` only so server-local captures don't show up.
-    Sorted by **arrival** (newest session DB first, newest rowid within),
-    not detection timestamp — outbox retries can carry hours-old ts_unix
-    values, which would otherwise hide freshly-ingested rows behind
-    ancient re-forwarded ones.
-
-    Pagination: skip the first `offset` arrival-ordered rows, then
-    return the next `limit`. Also returns the total count across every
-    agents_*.db so the UI can render page controls.
+    Filters on `agent_id IS NOT NULL` so server-local captures don't
+    show up. Sorted by `id DESC` (arrival order).
 
     Returns (rows, total).
     """
-    try:
-        names = sorted(
-            (f for f in os.listdir(output_dir)
-             if f.startswith("agents_") and f.endswith(".db")),
-            reverse=True,
-        )
-    except OSError:
+    conn = _open_ro(output_dir)
+    if conn is None:
         return [], 0
-
-    # Pre-count so the UI knows how many pages exist without a second RTT.
-    total = 0
-    per_db_counts = []
-    for name in names:
-        path = os.path.join(output_dir, name)
+    try:
         try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            per_db_counts.append((path, 0))
-            continue
-        try:
-            n = conn.execute("SELECT COUNT(*) FROM detections").fetchone()[0]
-            per_db_counts.append((path, n))
-            total += n
-        except Exception:
-            per_db_counts.append((path, 0))
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    # Walk DBs newest-first, skipping `offset` rows total, then collecting
-    # up to `limit`. SQLite OFFSET is cheap enough on the indexed id DESC
-    # path; we tell each DB how many to skip and how many to take.
-    rows = []
-    skip = max(0, offset)
-    want = max(0, limit)
-    for path, count in per_db_counts:
-        if want <= 0:
-            break
-        if skip >= count:
-            skip -= count
-            continue
-        take = min(want, count - skip)
-        try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
+            total = conn.execute(
+                "SELECT COUNT(*) FROM detections WHERE agent_id IS NOT NULL"
+            ).fetchone()[0]
+        except sqlite3.OperationalError:
+            return [], 0
         try:
             cur = conn.execute(
                 "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
-                "power_db, snr_db, latitude, longitude, channel, device_id "
-                "FROM detections ORDER BY id DESC LIMIT ? OFFSET ?",
-                (take, skip),
+                "power_db, snr_db, latitude, longitude, channel, agent_id "
+                "FROM detections "
+                "WHERE agent_id IS NOT NULL "
+                "ORDER BY id DESC LIMIT ? OFFSET ?",
+                (int(limit), max(0, int(offset))),
             )
-            for r in cur:
-                freq_hz = r["frequency_hz"] or 0
-                rows.append({
-                    "timestamp": r["timestamp"] or "",
-                    "ts_epoch": r["ts_epoch"] or 0,
-                    "agent_id": r["device_id"] or "",
-                    "signal_type": r["signal_type"] or "",
-                    "freq_mhz": round(freq_hz / 1e6, 4) if freq_hz else 0,
-                    "power_db": r["power_db"],
-                    "snr_db": round(r["snr_db"], 1) if r["snr_db"] is not None else None,
-                    "latitude": r["latitude"],
-                    "longitude": r["longitude"],
-                    "channel": r["channel"] or "",
-                })
-            want -= take
-            skip = 0
-        except Exception:
-            pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    return rows, total
+        except sqlite3.OperationalError:
+            return [], int(total or 0)
+        rows = []
+        for r in cur:
+            freq_hz = r["frequency_hz"] or 0
+            rows.append({
+                "timestamp": r["timestamp"] or "",
+                "ts_epoch": r["ts_epoch"] or 0,
+                "agent_id": r["agent_id"] or "",
+                "signal_type": r["signal_type"] or "",
+                "freq_mhz": round(freq_hz / 1e6, 4) if freq_hz else 0,
+                "power_db": r["power_db"],
+                "snr_db": round(r["snr_db"], 1) if r["snr_db"] is not None else None,
+                "latitude": r["latitude"],
+                "longitude": r["longitude"],
+                "channel": r["channel"] or "",
+            })
+        return rows, int(total or 0)
+    finally:
+        _close_quiet(conn)
 
 
 def fetch_recent_detections(
@@ -609,39 +446,33 @@ def fetch_recent_detections(
     signal_type=None,
     transcripts=None,
 ):
-    """Newest-first detection rows for the Log tab. Unions across all .db
-    files in the output dir, applies optional type filter, overlays the
-    transcripts sidecar on voice rows."""
+    """Newest-first detection rows for the Log tab. Optional type
+    filter; overlays the transcripts sidecar on voice rows."""
     if transcripts is None:
         transcripts = _load_transcripts(output_dir)
 
-    per_file_limit = limit + offset
-    merged = []
-    for path in _iter_db_paths(output_dir):
-        try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
+    conn = _open_ro(output_dir)
+    if conn is None:
+        return []
+    try:
         try:
             if signal_type:
-                sql = ("SELECT * FROM detections WHERE signal_type = ? "
-                       "ORDER BY id DESC LIMIT ?")
-                params = [signal_type, per_file_limit]
+                cur = conn.execute(
+                    "SELECT * FROM detections WHERE signal_type = ? "
+                    "ORDER BY id DESC LIMIT ? OFFSET ?",
+                    (signal_type, int(limit), max(0, int(offset))),
+                )
             else:
-                sql = "SELECT * FROM detections ORDER BY id DESC LIMIT ?"
-                params = [per_file_limit]
-            for row in conn.execute(sql, params):
-                merged.append(_row_to_detection_dict(row, transcripts))
-        except Exception:
-            pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    merged.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
-    return merged[offset:offset + limit]
+                cur = conn.execute(
+                    "SELECT * FROM detections "
+                    "ORDER BY id DESC LIMIT ? OFFSET ?",
+                    (int(limit), max(0, int(offset))),
+                )
+            return [_row_to_detection_dict(r, transcripts) for r in cur]
+        except sqlite3.OperationalError:
+            return []
+    finally:
+        _close_quiet(conn)
 
 
 def fetch_activity_histogram(output_dir, minutes=60, now=None):
@@ -653,31 +484,24 @@ def fetch_activity_histogram(output_dir, minutes=60, now=None):
     since_epoch = now_ts - minutes * 60
 
     counts = {}   # minute_key → Counter()
-    for path in _iter_db_paths(output_dir):
+    conn = _open_ro(output_dir)
+    if conn is not None:
         try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
-        try:
-            rows = conn.execute(
+            for r in conn.execute(
                 "SELECT substr(timestamp, 1, 16) AS minute, signal_type, "
                 "       COUNT(*) AS n "
                 "FROM detections WHERE ts_epoch >= ? "
                 "GROUP BY minute, signal_type",
                 (since_epoch,),
-            ).fetchall()
-        except Exception:
-            rows = []
+            ).fetchall():
+                m = r["minute"] or ""
+                if not m:
+                    continue
+                counts.setdefault(m, Counter())[r["signal_type"] or ""] += int(r["n"] or 0)
+        except sqlite3.OperationalError:
+            pass
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        for r in rows:
-            m = r["minute"] or ""
-            if not m:
-                continue
-            counts.setdefault(m, Counter())[r["signal_type"] or ""] += int(r["n"] or 0)
+            _close_quiet(conn)
 
     # Fill zero minutes so the chart is smooth
     result = []
@@ -695,9 +519,9 @@ def fetch_activity_histogram(output_dir, minutes=60, now=None):
 
 
 # Per-signal-type unique-id extraction, pushed into SQL via json_extract
-# so the Live tab's aggregate query stays fast (~10 ms per DB file) even
-# with tens of thousands of rows. The CASE expression mirrors the
-# _extract_uid Python helper in tailer.py — keep them in sync.
+# so the Live tab's aggregate query stays fast even with tens of
+# thousands of rows. The CASE expression mirrors the _extract_uid
+# Python helper in tailer.py — keep them in sync.
 _UNIQUES_SQL = """
 SELECT DISTINCT signal_type, uid FROM (
     SELECT signal_type,
@@ -742,28 +566,28 @@ def fetch_live_state(output_dir, transcripts=None, recent_events_limit=20):
 
     Computed on demand via SQL on every call. The heavy lifting is:
       - SELECT signal_type, COUNT, MAX(snr), MAX(ts_epoch)  GROUP BY type
-      - SELECT signal_type, metadata  FROM latest row per type  (window fn)
-      - SELECT last N rows across all files for the Recent feed
-
-    On a 10k-row DB this is a few ms total — cheap enough to run on
-    every SSE tick. The work scales linearly with DB count (multi-session
-    dirs). Caller supplies `transcripts` if it already has them loaded.
+      - SELECT signal_type, metadata  FROM latest row per type
+      - SELECT last N rows for the Recent feed
     """
     if transcripts is None:
         transcripts = _load_transcripts(output_dir)
 
-    per_type = {}        # sig → {count, last_ts, last_snr, last_detail_id, last_row}
+    per_type = {}        # sig → {count, last_ts, last_snr, last_detail_row}
     unique_ids = {}      # sig → set of uid strings
-    recent_rows = []     # list of (timestamp, signal_type, line) tuples
-
+    recent_rows = []
     total = 0
-    for path in _iter_db_paths(output_dir):
+
+    conn = _open_ro(output_dir)
+    if conn is None:
+        return {
+            "detection_count": 0,
+            "signals": [],
+            "categories": [],
+            "recent": [],
+        }
+    try:
+        # Per-type aggregates
         try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
-        try:
-            # Per-type aggregates in one query
             for r in conn.execute(
                 "SELECT signal_type, COUNT(*) AS n, "
                 "       MAX(ts_epoch) AS last_epoch, "
@@ -771,22 +595,19 @@ def fetch_live_state(output_dir, transcripts=None, recent_events_limit=20):
                 "FROM detections GROUP BY signal_type"
             ).fetchall():
                 sig = r["signal_type"] or ""
-                agg = per_type.setdefault(sig, {
-                    "count": 0,
-                    "last_epoch": 0.0,
-                    "last_ts": "",
+                per_type[sig] = {
+                    "count": int(r["n"] or 0),
+                    "last_epoch": float(r["last_epoch"] or 0),
+                    "last_ts": r["last_ts"] or "",
                     "last_snr": None,
                     "last_detail_row": None,
-                })
-                agg["count"] += int(r["n"] or 0)
-                le = float(r["last_epoch"] or 0)
-                if le > agg["last_epoch"]:
-                    agg["last_epoch"] = le
-                    agg["last_ts"] = r["last_ts"] or ""
+                }
                 total += int(r["n"] or 0)
+        except sqlite3.OperationalError:
+            pass
 
-            # Fetch the newest row per signal_type for last_detail extraction
-            # and last_snr. Uses a window function, available in SQLite ≥3.25.
+        # Newest row per signal_type for last_detail extraction + last_snr
+        try:
             for r in conn.execute(
                 "SELECT * FROM ("
                 "  SELECT *, ROW_NUMBER() OVER ("
@@ -798,24 +619,25 @@ def fetch_live_state(output_dir, transcripts=None, recent_events_limit=20):
                 agg = per_type.get(sig)
                 if not agg:
                     continue
-                # Keep the row with the highest ts_epoch across files
-                if r["ts_epoch"] and r["ts_epoch"] >= agg["last_epoch"] - 1e-9:
-                    agg["last_detail_row"] = r
-                    if r["snr_db"]:
-                        agg["last_snr"] = float(r["snr_db"])
+                agg["last_detail_row"] = r
+                if r["snr_db"]:
+                    agg["last_snr"] = float(r["snr_db"])
+        except sqlite3.OperationalError:
+            pass
 
-            # Uniques per type — _extract_uid's logic is per-type and
-            # depends on the metadata JSON. Push it into SQL via
-            # json_extract so we avoid the per-row Python round-trip.
-            # Keeps the query O(unique values) instead of O(total rows).
+        # Uniques per type
+        try:
             for r in conn.execute(_UNIQUES_SQL).fetchall():
                 sig = r["signal_type"] or ""
                 uid = r["uid"]
                 if uid is None or uid == "":
                     continue
                 unique_ids.setdefault(sig, set()).add(str(uid))
+        except sqlite3.OperationalError:
+            pass
 
-            # Recent events feed — newest N rows from this file
+        # Recent events feed
+        try:
             for r in conn.execute(
                 "SELECT timestamp, signal_type, channel, frequency_hz, snr_db, metadata "
                 "FROM detections ORDER BY id DESC LIMIT ?",
@@ -836,23 +658,17 @@ def fetch_live_state(output_dir, transcripts=None, recent_events_limit=20):
                     meta = json.loads(r["metadata"]) if r["metadata"] else {}
                 except (json.JSONDecodeError, TypeError):
                     meta = {}
-                # Overlay transcript sidecar for voice rows
-                if meta.get("audio_file") and transcripts:
-                    pass  # audio_file is actually in the row, not meta
                 ts_short = ts.split("T")[1].split(".")[0] if "T" in ts else ""
                 detail = _extract_detail(sig, ch, meta)
                 line = (f"{ts_short}  {sig:12s} {ch:6s}  "
                         f"{freq/1e6:8.3f} MHz  {snr:5.1f} dB  {detail}")
                 recent_rows.append((ts, sig, line))
-        except Exception:
+        except sqlite3.OperationalError:
             pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+    finally:
+        _close_quiet(conn)
 
-    # Assemble signals list in the canonical display order
+    # Assemble signals list in canonical display order
     seen = set(per_type.keys())
     ordered_types = [t for t in _LIVE_TYPE_ORDER if t in seen]
     ordered_types += sorted(seen - set(_LIVE_TYPE_ORDER))
@@ -866,7 +682,6 @@ def fetch_live_state(output_dir, transcripts=None, recent_events_limit=20):
                 meta = json.loads(row["metadata"]) if row["metadata"] else {}
             except (json.JSONDecodeError, TypeError):
                 meta = {}
-            # Overlay transcript sidecar on voice
             audio = row["audio_file"]
             if audio and transcripts and transcripts.get(audio):
                 meta["transcript"] = transcripts[audio]
@@ -912,7 +727,7 @@ def fetch_live_state(output_dir, transcripts=None, recent_events_limit=20):
         for c in CATEGORY_ORDER if cat_counts.get(c, 0) > 0
     ]
 
-    # Recent events: newest 20 across all files
+    # Recent events: newest 20 across all types
     recent_rows.sort(key=lambda x: x[0], reverse=True)
     recent = [
         {"type": sig, "line": line}
@@ -935,11 +750,10 @@ def fetch_active_dev_sigs(output_dir, minutes=5, now=None):
     since_epoch = now_ts - minutes * 60
 
     active = {}
-    for path in _iter_db_paths(output_dir):
-        try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
+    conn = _open_ro(output_dir)
+    if conn is None:
+        return active
+    try:
         try:
             rows = conn.execute(
                 "SELECT power_db, metadata FROM detections "
@@ -947,26 +761,23 @@ def fetch_active_dev_sigs(output_dir, minutes=5, now=None):
                 "ORDER BY id DESC",
                 (since_epoch,),
             ).fetchall()
-        except Exception:
-            rows = []
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        except sqlite3.OperationalError:
+            return active
+    finally:
+        _close_quiet(conn)
 
-        for r in rows:
-            try:
-                meta = json.loads(r["metadata"]) if r["metadata"] else {}
-            except (json.JSONDecodeError, TypeError):
-                meta = {}
-            dev_sig = meta.get("dev_sig")
-            if not dev_sig or dev_sig in active:
-                continue
-            active[dev_sig] = {
-                "rssi": r["power_db"] if r["power_db"] else None,
-                "apple_device": meta.get("apple_device", ""),
-            }
+    for r in rows:
+        try:
+            meta = json.loads(r["metadata"]) if r["metadata"] else {}
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        dev_sig = meta.get("dev_sig")
+        if not dev_sig or dev_sig in active:
+            continue
+        active[dev_sig] = {
+            "rssi": r["power_db"] if r["power_db"] else None,
+            "apple_device": meta.get("apple_device", ""),
+        }
     return active
 
 
@@ -978,11 +789,10 @@ def fetch_active_bssids(output_dir, minutes=5, now=None):
     since_epoch = now_ts - minutes * 60
 
     active = {}
-    for path in _iter_db_paths(output_dir):
-        try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
+    conn = _open_ro(output_dir)
+    if conn is None:
+        return active
+    try:
         try:
             rows = conn.execute(
                 "SELECT power_db, device_id, timestamp, metadata "
@@ -991,26 +801,23 @@ def fetch_active_bssids(output_dir, minutes=5, now=None):
                 "ORDER BY id DESC",
                 (since_epoch,),
             ).fetchall()
-        except Exception:
-            rows = []
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        except sqlite3.OperationalError:
+            return active
+    finally:
+        _close_quiet(conn)
 
-        for r in rows:
-            try:
-                meta = json.loads(r["metadata"]) if r["metadata"] else {}
-            except (json.JSONDecodeError, TypeError):
-                meta = {}
-            bssid = meta.get("bssid") or (r["device_id"] or "")
-            if not bssid or bssid in active:
-                continue
-            active[bssid] = {
-                "rssi": r["power_db"] if r["power_db"] else None,
-                "last_seen": r["timestamp"] or "",
-            }
+    for r in rows:
+        try:
+            meta = json.loads(r["metadata"]) if r["metadata"] else {}
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        bssid = meta.get("bssid") or (r["device_id"] or "")
+        if not bssid or bssid in active:
+            continue
+        active[bssid] = {
+            "rssi": r["power_db"] if r["power_db"] else None,
+            "last_seen": r["timestamp"] or "",
+        }
     return active
 
 
@@ -1022,18 +829,10 @@ _CORR_MAX_PAIRS = 500
 
 
 def fetch_correlations(output_dir, window_s=30.0, threshold=0.5):
-    """Compute device correlations on demand from every session .db in
-    the output directory.
+    """Compute device correlations on demand from the unified DB.
 
-    Replaces the old `correlations.json` sidecar pattern where the server
-    kept a live DeviceCorrelator in memory and wrote a snapshot every
-    30s. That had two problems: state was lost on server restart, and
-    the web UI saw a snapshot up to 30s stale even on refresh. Reading
-    fresh from the detection log gives cross-session correlations for
-    free and makes server restarts stateless.
-
-    Returns the same dict shape the old export_json() produced so the
-    UI renderer doesn't change:
+    Returns the same dict shape the legacy DeviceCorrelator export
+    produced so the UI renderer doesn't change:
         {timestamp, window_s, threshold, total_devices,
          correlated_pairs, clusters}
     """
@@ -1049,16 +848,12 @@ def fetch_correlations(output_dir, window_s=30.0, threshold=0.5):
 
     since_epoch = now - _CORR_LOOKBACK_S
     c = DeviceCorrelator(window_s=window_s, threshold=threshold)
-    for db_path in _iter_db_paths(output_dir):
-        try:
-            if os.path.getmtime(db_path) < since_epoch:
-                continue
-        except OSError:
-            continue
+    db_path = _db.default_db_path(output_dir)
+    if os.path.exists(db_path):
         try:
             c.load_db(db_path, since_epoch=since_epoch)
         except Exception:
-            continue
+            pass
 
     for sig in _CORR_SKIP_SIGNALS:
         prefix = f"{sig}:"

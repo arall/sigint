@@ -23,6 +23,17 @@
     </select>
     <span class="value" id="session-status" style="color:#4caf50;margin-left:4px">LIVE</span>
   </div>
+  <div>
+    <span class="label">Age </span>
+    <select id="global-age-limit" title="Restrict the Map and category tabs to detections newer than the chosen window. Ignored when browsing a historical session.">
+      <option value="0.083">Last 5 min</option>
+      <option value="0.25">Last 15 min</option>
+      <option value="1">Last 1 h</option>
+      <option value="6" selected>Last 6 h</option>
+      <option value="24">Last 24 h</option>
+      <option value="">All time</option>
+    </select>
+  </div>
 </div>
 
 <!-- System stats bar -->
@@ -83,16 +94,6 @@
         <label><input type="checkbox" id="map-show-operators" checked> <span style="color:#ff9800">Operators</span></label>
         <label><input type="checkbox" id="map-show-meshtastic" checked> <span style="color:#ab47bc">Mesh</span></label>
         <label><input type="checkbox" id="map-show-triangulations" checked> <span style="color:#e91e63">Triangulations</span></label>
-        <label>Age:
-          <select id="map-age-limit">
-            <option value="0.083">Last 5 min</option>
-            <option value="0.25">Last 15 min</option>
-            <option value="1">Last 1 h</option>
-            <option value="6" selected>Last 6 h</option>
-            <option value="24">Last 24 h</option>
-            <option value="">All time</option>
-          </select>
-        </label>
         <button onclick="loadMap()">Refresh</button>
         <button onclick="mapFitAll()">Fit All</button>
       </div>
@@ -175,7 +176,7 @@
         <th></th>
       </tr></thead>
       <tbody id="voice-body">
-        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="8" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="voice-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -206,7 +207,7 @@
         <th class="sortable" data-tbl="drones-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="drones-body">
-        <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="9" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="drones-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -254,7 +255,7 @@
         <th class="sortable" data-tbl="aircraft-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="aircraft-body">
-        <tr><td colspan="11" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="11" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="aircraft-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -288,7 +289,7 @@
         <th class="sortable" data-tbl="vessels-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="vessels-body">
-        <tr><td colspan="13" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="13" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="vessels-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -315,7 +316,7 @@
         <th class="sortable" data-tbl="keyfobs-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="keyfobs-body">
-        <tr><td colspan="6" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="6" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="keyfobs-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -343,7 +344,7 @@
         <th class="sortable" data-tbl="tpms-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="tpms-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="tpms-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -372,7 +373,7 @@
         <th class="sortable" data-tbl="cellular-body" data-key="last_seen">Last Seen</th>
       </tr></thead>
       <tbody id="cellular-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="cellular-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -401,7 +402,7 @@
         <th class="sortable" data-tbl="ism-body" data-key="detail">Detail</th>
       </tr></thead>
       <tbody id="ism-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="ism-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -429,7 +430,7 @@
         <th class="sortable" data-tbl="lora-body" data-key="detail">Detail</th>
       </tr></thead>
       <tbody id="lora-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="lora-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -459,7 +460,7 @@
         <th class="sortable" data-tbl="meshtastic-body" data-key="latitude">Position</th>
       </tr></thead>
       <tbody id="meshtastic-body">
-        <tr><td colspan="8" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="8" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="meshtastic-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -487,7 +488,7 @@
         <th class="sortable" data-tbl="pagers-body" data-key="detail">Detail</th>
       </tr></thead>
       <tbody id="pagers-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="pagers-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -517,7 +518,7 @@
         <th class="sortable num" data-tbl="jamming-body" data-key="duration_s">Dur (s)</th>
       </tr></thead>
       <tbody id="jamming-body">
-        <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="9" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="jamming-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -545,7 +546,7 @@
         <th class="sortable num" data-tbl="rogue-body" data-key="snr_db">SNR (dB)</th>
       </tr></thead>
       <tbody id="rogue-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="rogue-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -575,7 +576,7 @@
         <th class="sortable" data-tbl="corr-body" data-key="cross_transport">Cross-Transport</th>
       </tr></thead>
       <tbody id="corr-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="corr-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -615,7 +616,7 @@
         <th>Last</th>
       </tr></thead>
       <tbody id="witness-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -643,7 +644,7 @@
         <th></th>
       </tr></thead>
       <tbody id="det-body">
-        <tr><td colspan="7" class="empty">select tab to load...</td></tr>
+        <tr><td colspan="7" class="empty">Loading...</td></tr>
       </tbody>
     </table>
     <div id="det-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -688,7 +689,7 @@
           <th class="sortable" data-sub="wifi_aps" data-key="last_seen">Last Seen</th>
         </tr></thead>
         <tbody id="ap-body">
-          <tr><td colspan="10" class="empty">select tab to load...</td></tr>
+          <tr><td colspan="10" class="empty">Loading...</td></tr>
         </tbody>
       </table>
     <div id="ap-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -711,7 +712,7 @@
           <th class="sortable" data-sub="wifi_clients" data-key="last_session">Last Seen</th>
         </tr></thead>
         <tbody id="wc-body">
-          <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+          <tr><td colspan="9" class="empty">Loading...</td></tr>
         </tbody>
       </table>
     <div id="wc-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>
@@ -734,7 +735,7 @@
           <th class="sortable" data-sub="ble" data-key="last_session">Last Seen</th>
         </tr></thead>
         <tbody id="ble-body">
-          <tr><td colspan="9" class="empty">select tab to load...</td></tr>
+          <tr><td colspan="9" class="empty">Loading...</td></tr>
         </tbody>
       </table>
     <div id="ble-pager" class="pager" style="display: flex; gap: 4px; align-items: center; padding: 8px 4px; font-size: 12px;"></div>

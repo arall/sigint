@@ -41,7 +41,27 @@ class AgentManager:
         self._outbox.start_ticker(interval_s=3.0)
         self._load_agents_json()
         self._conn = _db.connect(detection_db_path)
+        # Every forwarded detection is tagged with this session id so the
+        # dashboard can group by ingest run, and with `agent_id = "<aid>"`
+        # so it can split by remote node.
+        self._session_id = _db.open_session(
+            self._conn, kind="agent_ingest",
+            label="agent ingest", pid=os.getpid(),
+        )
         link.on_message(self._on_msg)
+
+    def close(self) -> None:
+        """Stamp the ingest session's `ended_at` and close the DB
+        connection. Called on server shutdown."""
+        with self._lock:
+            try:
+                _db.close_session(self._conn, self._session_id)
+            except Exception:
+                pass
+            try:
+                self._conn.close()
+            except Exception:
+                pass
 
     # -- comms log --------------------------------------------------------
 
@@ -267,6 +287,9 @@ class AgentManager:
                 channel=fields.get("summary") or None,
                 latitude=fields.get("lat"),
                 longitude=fields.get("lon"),
+                # device_id stays as the agent_id for backwards-compatible
+                # calibration lookups; the dedicated `agent_id` column on
+                # the row is the canonical attribution for new code.
                 device_id=agent_id,
                 metadata=json.dumps(md),
             )
@@ -281,7 +304,11 @@ class AgentManager:
             except Exception:
                 pass
             with self._lock:
-                _db.insert_detection(self._conn, det)
+                _db.insert_detection(
+                    self._conn, det,
+                    session_id=self._session_id,
+                    agent_id=agent_id,
+                )
                 if agent_id in self._approved:
                     self._approved[agent_id]["last_seen_at"] = time.time()
         except Exception as e:

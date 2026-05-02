@@ -111,28 +111,17 @@ class DBTailer:
     def stop(self):
         self._stop.set()
 
-    def _find_all_dbs(self):
-        """Return all session .db files in output_dir sorted by mtime.
-        Excludes support DBs like devices.db (persona store)."""
-        from .sessions import is_session_db_name
-        try:
-            dbs = [
-                os.path.join(self.output_dir, f)
-                for f in os.listdir(self.output_dir)
-                if is_session_db_name(f)
-            ]
-            return sorted(dbs, key=os.path.getmtime)
-        except OSError:
-            return []
-
     def _update_tailing_db(self):
-        """Pick the newest .db file and expose its basename."""
-        all_dbs = self._find_all_dbs()
-        latest = all_dbs[-1] if all_dbs else None
+        """Expose the unified DB's path/name for the header. Single file
+        now — the legacy "newest .db" picker is gone."""
+        from utils import db as _db
+        path = _db.default_db_path(self.output_dir)
         with self._lock:
-            if latest != self._tailing_db:
-                self._tailing_db = latest
-                self._db_name = os.path.basename(latest) if latest else ""
+            if path != self._tailing_db:
+                self._tailing_db = path
+                self._db_name = (
+                    os.path.basename(path) if os.path.exists(path) else ""
+                )
 
     def _refresh_state(self):
         """Recompute the cached Live-tab state from SQL. Cheap enough at

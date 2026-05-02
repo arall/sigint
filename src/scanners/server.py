@@ -504,18 +504,18 @@ class ServerOrchestrator:
             try:
                 from comms.meshlink import MeshLink
                 from server.agent_manager import AgentManager
+                from utils import db as _db_helper
                 port = meshcfg.get("port")
                 channel_index = int(meshcfg.get("channel_index", 0))
                 self._meshlink = MeshLink.from_serial(port=port, channel_index=channel_index)
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                agents_db = os.path.join(self._output_dir, f"agents_{ts}.db")
+                detections_db = _db_helper.default_db_path(self._output_dir)
                 state_dir = os.path.join(self._output_dir, "agents_state")
                 self._agent_manager = AgentManager(
                     link=self._meshlink,
                     state_dir=state_dir,
-                    detection_db_path=agents_db,
+                    detection_db_path=detections_db,
                 )
-                self._set_status("meshlink", "running", f"port={port} db={os.path.basename(agents_db)}")
+                self._set_status("meshlink", "running", f"port={port}")
             except Exception as e:
                 self._set_status("meshlink", "failed", str(e)[:200])
 
@@ -1267,6 +1267,14 @@ class ServerOrchestrator:
         except Exception:
             pass
 
+        # Stamp the agent ingest session's ended_at so the dashboard
+        # can mark it as inactive after a clean shutdown.
+        if self._agent_manager is not None:
+            try:
+                self._agent_manager.close()
+            except Exception:
+                pass
+
         total = self.logger.stop()
         uptime = timedelta(seconds=int(time.time() - self._start_time))
         print(f"\n[SERVER] Stopped. Uptime: {uptime}. Total detections: {total}.")
@@ -1339,89 +1347,107 @@ class ServerOrchestrator:
         extra_args = entry.get("args", [])
         cmd.extend(extra_args)
 
-        try:
-            proc = sp.Popen(
-                cmd, cwd=src_dir,
-                stdin=sp.DEVNULL,
-                stdout=sp.PIPE, stderr=sp.PIPE,
-                start_new_session=True,
-            )
-            print(f"  [standalone] {name}: pid {proc.pid}, cmd: {' '.join(cmd)}")
-            self._set_status(name, "running", f"pid {proc.pid}")
+        # Auto-restart with backoff, mirroring `_run_capture` for in-proc
+        # captures. Without this, any standalone scanner that crashes (or
+        # is killed) stays dead until the whole server is restarted.
+        backoff = 5
+        attempt = 0
+        while not self._stop_event.is_set():
+            attempt += 1
+            attempt_prefix = "" if attempt == 1 else f"restart #{attempt - 1}, "
+            reason = "exited"
 
-            # Drain stdout/stderr in background threads. If we don't,
-            # the subprocess will block on print() once its 64KB pipe
-            # buffer fills, freezing the SDR pipeline.
-            stderr_tail = []   # rolling buffer of last few stderr lines
-            log_dir = self._output_dir or "."
             try:
-                stdout_log = open(
-                    os.path.join(str(log_dir), f"standalone_{name}.log"),
-                    "ab", buffering=0)
-            except Exception:
-                stdout_log = None
+                proc = sp.Popen(
+                    cmd, cwd=src_dir,
+                    stdin=sp.DEVNULL,
+                    stdout=sp.PIPE, stderr=sp.PIPE,
+                    start_new_session=True,
+                )
+                print(f"  [standalone] {name}: pid {proc.pid}, cmd: {' '.join(cmd)}")
+                self._set_status(name, "running", f"{attempt_prefix}pid {proc.pid}")
 
-            def _drain(stream, tail=None):
+                # Drain stdout/stderr in background threads. If we don't,
+                # the subprocess will block on print() once its 64KB pipe
+                # buffer fills, freezing the SDR pipeline.
+                stderr_tail = []   # rolling buffer of last few stderr lines
+                log_dir = self._output_dir or "."
                 try:
-                    for chunk in iter(lambda: stream.read(4096), b""):
-                        if not chunk:
-                            break
-                        if stdout_log is not None:
-                            try:
-                                stdout_log.write(chunk)
-                            except Exception:
-                                pass
-                        if tail is not None:
-                            try:
-                                text = chunk.decode("utf-8", errors="replace")
-                                for line in text.splitlines():
-                                    line = line.strip()
-                                    if line:
-                                        tail.append(line)
-                                if len(tail) > 20:
-                                    del tail[:-20]
-                            except Exception:
-                                pass
+                    stdout_log = open(
+                        os.path.join(str(log_dir), f"standalone_{name}.log"),
+                        "ab", buffering=0)
                 except Exception:
-                    pass
+                    stdout_log = None
 
-            threading.Thread(
-                target=_drain, args=(proc.stdout,), daemon=True,
-                name=f"drain-{name}-out").start()
-            threading.Thread(
-                target=_drain, args=(proc.stderr, stderr_tail), daemon=True,
-                name=f"drain-{name}-err").start()
+                def _drain(stream, tail=None, log=stdout_log):
+                    try:
+                        for chunk in iter(lambda: stream.read(4096), b""):
+                            if not chunk:
+                                break
+                            if log is not None:
+                                try:
+                                    log.write(chunk)
+                                except Exception:
+                                    pass
+                            if tail is not None:
+                                try:
+                                    text = chunk.decode("utf-8", errors="replace")
+                                    for line in text.splitlines():
+                                        line = line.strip()
+                                        if line:
+                                            tail.append(line)
+                                    if len(tail) > 20:
+                                        del tail[:-20]
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
 
-            while not self._stop_event.is_set():
-                if proc.poll() is not None:
-                    # Process exited — drain threads will catch any final output
-                    err = "\n".join(stderr_tail).strip()
-                    if proc.returncode != 0:
-                        last = stderr_tail[-1] if stderr_tail else f"exit {proc.returncode}"
-                        print(f"\n  [ERROR] standalone {name} exited ({proc.returncode}): {err[:200]}")
-                        self._set_status(name, "failed", last[:200])
-                    else:
-                        self._set_status(name, "failed", "exited cleanly")
-                    break
-                self._stop_event.wait(1.0)
+                threading.Thread(
+                    target=_drain, args=(proc.stdout,), daemon=True,
+                    name=f"drain-{name}-out").start()
+                threading.Thread(
+                    target=_drain, args=(proc.stderr, stderr_tail), daemon=True,
+                    name=f"drain-{name}-err").start()
 
-            if stdout_log is not None:
-                try:
-                    stdout_log.close()
-                except Exception:
-                    pass
+                while not self._stop_event.is_set():
+                    if proc.poll() is not None:
+                        # Process exited — drain threads will catch any final output
+                        err = "\n".join(stderr_tail).strip()
+                        if proc.returncode != 0:
+                            last = stderr_tail[-1] if stderr_tail else f"exit {proc.returncode}"
+                            print(f"\n  [ERROR] standalone {name} exited ({proc.returncode}): {err[:200]}")
+                            reason = last[:160]
+                        else:
+                            reason = "exited cleanly"
+                        break
+                    self._stop_event.wait(1.0)
 
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except sp.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-        except Exception as e:
-            if not self._stop_event.is_set():
+                if stdout_log is not None:
+                    try:
+                        stdout_log.close()
+                    except Exception:
+                        pass
+
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except sp.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+            except Exception as e:
+                if self._stop_event.is_set():
+                    return
                 print(f"\n  [ERROR] standalone {name}: {e}")
-                self._set_status(name, "failed", str(e)[:200])
+                reason = str(e)[:160]
+
+            if self._stop_event.is_set():
+                return
+            self._set_status(name, "failed", f"{reason} — retrying in {backoff}s")
+            if self._stop_event.wait(backoff):
+                return
+            backoff = min(backoff * 2, 60)
 
     def _write_line(self, text=""):
         """Write a line directly to the real stdout, bypassing print override.

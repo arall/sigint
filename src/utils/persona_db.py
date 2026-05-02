@@ -4,8 +4,8 @@ Stores and retrieves device persona fingerprints across scanning sessions.
 
 Each persona is identified by its device signature (from 802.11 IEs) combined
 with its accumulated SSID set. Stored as a table in a SQLite devices.db
-that lives alongside the per-session detection .db files but is not
-itself treated as a session (see web/sessions.py is_session_db_name).
+that lives alongside the unified detections.db but is a separate file —
+it isn't tied to any single scanner session.
 
 Public API is unchanged from the old JSON-backed version — callers still
 do `PersonaDB(path, table=...)`, `update_persona(...)`, `find(...)`,

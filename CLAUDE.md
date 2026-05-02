@@ -87,20 +87,23 @@ python3 sdr.py correlate output/*.db         # Device co-occurrence analysis
 
 ### SQLite Storage
 
-Per-session file (`<type>_YYYYMMDD_HHMMSS.db`). WAL mode, `synchronous=NORMAL`. Indexes on `(signal_type, ts_epoch)`, `ts_epoch`, `device_id`, `(signal_type, device_id)`.
+Single unified file at `output/detections.db` shared across the server, all scanner subprocesses, and the agent ingest path. WAL mode, `synchronous=NORMAL`, `busy_timeout=10000` so concurrent writers serialise on the file lock instead of erroring out.
 
-- **Threading**: `sqlite3.connect()` MUST use `check_same_thread=False` — logger opened on main thread, parsers call from worker threads. Without this: silent `ProgrammingError`, detections print to stdout but zero rows on disk.
+- **Schema**: `sessions(id, started_at, ended_at, label, kind, pid)` + `detections(id, session_id, agent_id, ts, signal_type, freq, power, ...)`. Each scanner run / server run / agent ingest opens a `sessions` row at start (via `_db.open_session`) and stamps `ended_at` at stop.
+- **Indexes**: `(session_id)`, `(agent_id, ts_epoch)`, `(signal_type, ts_epoch)`, `ts_epoch`, `device_id`, `(signal_type, device_id)`.
+- **Forwarded rows** (Meshtastic agent ingest) are tagged with `agent_id = "<aid>"`; server-local rows have `agent_id IS NULL`. Use this column (not `device_id`) to attribute observations to a physical node.
+- **Threading**: `sqlite3.connect()` MUST use `check_same_thread=False` — logger opened on main thread, parsers call from worker threads.
 - **Root-owned output**: server runs as sudo, web UI as normal user. `db.connect(readonly=True)` falls back to `?mode=ro&immutable=1` on `OperationalError`.
-- **No CSV**: shell out to `sqlite3 out.db -csv -header "SELECT * FROM detections"` if needed.
+- `calibration.db` and `devices.db` are **separate** files in the same output dir — they aren't session-scoped detection logs and shouldn't be mixed into the unified store.
 
 ### SQL-first Dashboard
 
-Every dashboard endpoint queries `.db` files via `web/fetch.py` — no in-memory state. DBTailer (`web/tailer.py`) is just a watcher + 2s cache refresher. Restart-safe.
+Every dashboard endpoint runs one query against `output/detections.db` via `web/fetch.py` — no in-memory state, no multi-file fan-out. DBTailer (`web/tailer.py`) is just a watcher + 2s cache refresher for the Live tab.
 
-- `web/fetch.py` unions across **every** `.db` in output dir (standalone subprocesses included)
-- `_UNIQUES_SQL` in `fetch.py` must stay in sync with `tailer._extract_uid`
-- Category "Other" uses negation predicate; "Cellular" uses wildcard LIKE for LTE subtypes
-- Session switcher: `resolve_session_path` guards against path traversal
+- `_UNIQUES_SQL` in `fetch.py` must stay in sync with `tailer._extract_uid`.
+- Category "Other" uses negation predicate; "Cellular" uses wildcard LIKE for LTE subtypes.
+- Session switcher: `?session=<id>` is an integer row id from the `sessions` table (`web/sessions.session_exists` validates).
+- Global age filter (`#global-age-limit` in the header): the dashboard sends `&window=<hours>` to category + map endpoints, server clauses `ts_epoch >= now - window`. Suppressed when a historical session is selected (the wall-clock window doesn't make sense against frozen data).
 
 ### Web Dashboard
 
@@ -114,14 +117,16 @@ Map: Leaflet 1.9.4 vendored (no CDN). `L.circleMarker` (no PNG images). Lazy-ini
 
 Three audio paths (PMRScanner, FMScanner, FMVoiceParser) share thresholds: `DETECTION_SNR_DB = 15.0`, `MIN_TX_DURATION = 0.5s` (signal-present samples, not wall-clock), holdover 2.0s. FMVoiceParser adds `MAX_TX_DURATION = 30.0s`.
 
-Async transcription: detection logged to SQLite immediately; transcript arrives 1-10s later in `output/transcripts.json`. Hallucination filter in `utils/transcriber.py`.
+Async transcription: detection logged to SQLite immediately; transcript arrives 1-10s later in the `transcripts` table of the unified DB (legacy `output/transcripts.json` is still read on startup for backwards compatibility). Hallucination filter in `utils/transcriber.py`.
 
 ### Server
 
 - Standalone scanners run as child `sdr.py` processes; stdout/stderr drained in background threads (else 64KB pipe buffer blocks the SDR pipeline)
+- Each subprocess opens its own connection to `output/detections.db` and registers a `sessions` row — multi-writer concurrency is handled by SQLite WAL + busy_timeout, no app-level coordination needed.
 - Per-capture status: `pending`/`running`/`degraded`/`failed` in `output/server_info.json`
 - HackRF: 4-block queue with drop-oldest (latency ~130ms). Drops mark capture `degraded`.
 - Persona/AP DB flushed every 30s. Correlations computed on demand from SQL (no sidecar).
+- AgentManager opens an `agent_ingest` session and tags every forwarded detection with `agent_id = <aid>`. `close()` stamps `ended_at` on shutdown.
 
 ### Agent GPS
 

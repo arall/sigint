@@ -801,9 +801,9 @@ document.getElementById('dev-active-only').addEventListener('change', () => {
 });
 
 // --- Session switcher (header dropdown) ---
-// "" = LIVE (tailed current session). Non-empty = basename of a historical
-// .db file. Only category tabs honor this; Live/Log/Timeline always show
-// the active session.
+// "" = LIVE (no session filter; queries the unified DB). Non-empty =
+// integer session id from the `sessions` table. Only category tabs and
+// the map honor this; Live/Log/Timeline always show all sessions.
 let _selectedSession = "";
 
 async function loadSessions() {
@@ -817,11 +817,13 @@ async function loadSessions() {
     sel.innerHTML = '<option value="">LIVE</option>';
     (data.sessions || []).forEach(s => {
       const opt = document.createElement('option');
-      opt.value = s.name;
-      const when = s.mtime_iso ? s.mtime_iso.replace('T', ' ') : '';
+      opt.value = String(s.id);
+      const when = (s.started_at_iso || '').replace('T', ' ');
       const n = s.detection_count || 0;
       const live = s.live ? ' (live)' : '';
-      opt.textContent = s.name + live + ' — ' + n + ' dets — ' + when;
+      const labelPart = s.label ? s.label : (s.kind || '');
+      opt.textContent = '#' + s.id + ' ' + labelPart + live
+        + ' — ' + n + ' dets — ' + when;
       sel.appendChild(opt);
     });
     // Restore prior selection if it still exists
@@ -924,6 +926,8 @@ async function loadCategory(name) {
     params.set('offset', String(offset));
     params.set('limit', String(_CATEGORY_PAGE_SIZE));
     if (_selectedSession) params.set('session', _selectedSession);
+    const ageHours = _globalAgeWindowHours();
+    if (ageHours != null) params.set('window', String(ageHours));
     const f = _readCategoryFilters(name);
     if (f.type) params.set('type', f.type);
     if (f.channel) params.set('channel', f.channel);
@@ -1752,9 +1756,8 @@ function initMap() {
       else _map.removeLayer(_mapLayers[k]);
     });
   }
-  // Age filter: refetch on change.
-  const ageSel = document.getElementById('map-age-limit');
-  if (ageSel) ageSel.addEventListener('change', () => loadMap());
+  // Age filter is owned by the header (#global-age-limit); the map just
+  // reads it via _globalAgeWindowHours() on each loadMap() call.
   // Force Leaflet to recompute its size once the container is visible
   setTimeout(() => { if (_map) _map.invalidateSize(); }, 100);
   _attachMapDelegates();
@@ -1833,8 +1836,12 @@ function _planeMarker(lat, lon, color, heading, popup) {
   }).bindPopup(popup);
 }
 
-function _mapAgeWindowHours() {
-  const sel = document.getElementById('map-age-limit');
+function _globalAgeWindowHours() {
+  // Header-level age selector. Returns null for "All time" or when a
+  // historical session is selected (the wall-clock window doesn't make
+  // sense against frozen historical data — see onSessionChange).
+  if (_selectedSession) return null;
+  const sel = document.getElementById('global-age-limit');
   if (!sel || sel.value === '') return null;
   const h = parseFloat(sel.value);
   return Number.isFinite(h) && h > 0 ? h : null;
@@ -1842,7 +1849,7 @@ function _mapAgeWindowHours() {
 
 async function loadMap() {
   if (!_map) return;
-  const windowHours = _mapAgeWindowHours();
+  const windowHours = _globalAgeWindowHours();
   const params = [];
   if (_selectedSession) params.push('session=' + encodeURIComponent(_selectedSession));
   if (windowHours != null) params.push('window=' + windowHours);
@@ -2401,6 +2408,20 @@ setInterval(() => {
 loadSessions();
 setInterval(loadSessions, 15000);
 document.getElementById('session-select').addEventListener('change', onSessionChange);
+
+// Global age filter: refresh whichever data view is currently active.
+// Map and category tabs honour it; Live/Log/Timeline ignore it (they
+// always show the active session's most-recent slice).
+document.getElementById('global-age-limit').addEventListener('change', () => {
+  const activeBtn = document.querySelector('.tab-btn.active');
+  const tab = activeBtn ? activeBtn.dataset.tab : null;
+  if (tab === 'map') {
+    loadMap();
+  } else if (tab === 'signals') {
+    _categoryOffset[_sigSubtab] = 0;
+    loadCategory(_sigSubtab);
+  }
+});
 
 if (location.hash) {
   goToTab(location.hash.slice(1));

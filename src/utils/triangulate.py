@@ -99,12 +99,28 @@ def _apply_calibration_to_rows(rows, node_id: str) -> None:
             _CAL_STATS["applied"] += 1
 
 
-def load_detections(db_path, node_id=None):
-    """Load and parse a .db detection log. Returns list of dicts."""
+def load_detections(db_path, node_id=None, agent_id=None):
+    """Load and parse a .db detection log. Returns list of dicts.
+
+    `agent_id`, if set, restricts to rows tagged with that agent
+    (None → no filter; pass "" to mean "server-local rows only" via the
+    `agent_id IS NULL` path).
+    """
     detections = []
     conn = _db.connect(db_path, readonly=True)
     try:
-        rows = [_db.row_to_dict(r) for r in _db.iter_detections(conn)]
+        if agent_id == "":
+            # Sentinel for server-local rows (agent_id IS NULL).
+            rows = [
+                _db.row_to_dict(r) for r in conn.execute(
+                    "SELECT * FROM detections WHERE agent_id IS NULL ORDER BY id"
+                )
+            ]
+        elif agent_id is not None:
+            rows = [_db.row_to_dict(r) for r in
+                    _db.iter_detections(conn, agent_id=agent_id)]
+        else:
+            rows = [_db.row_to_dict(r) for r in _db.iter_detections(conn)]
     finally:
         conn.close()
     for row in rows:
@@ -145,6 +161,42 @@ def load_detections(db_path, node_id=None):
     if node_id is not None:
         _apply_calibration_to_rows(detections, node_id)
     return detections
+
+
+def load_detections_by_node(db_path):
+    """Split a unified-DB load into [(rows, node_id), ...] groups.
+
+    Useful when one detections.db carries observations from multiple
+    physical nodes — server-local rows become "server", forwarded rows
+    are grouped by their `agent_id` column.
+
+    Returns a list of (detections, node_id) tuples, one per node, with
+    calibration already applied per node.
+    """
+    conn = _db.connect(db_path, readonly=True)
+    try:
+        node_ids = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT agent_id FROM detections "
+                "WHERE agent_id IS NOT NULL"
+            )
+        ]
+        has_server = conn.execute(
+            "SELECT 1 FROM detections WHERE agent_id IS NULL LIMIT 1"
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+    out = []
+    if has_server:
+        rows = load_detections(db_path, node_id="server", agent_id="")
+        if rows:
+            out.append((rows, "server"))
+    for aid in sorted(node_ids):
+        rows = load_detections(db_path, node_id=aid, agent_id=aid)
+        if rows:
+            out.append((rows, aid))
+    return out
 
 
 def _get_match_key(det, strategy):
@@ -491,12 +543,18 @@ def result_to_cot(group, position):
 
 
 def run_triangulation(args, tak_client=None):
-    """Entry point called from sdr.py dispatch."""
+    """Entry point called from sdr.py dispatch.
+
+    Two invocation modes:
+      - Single DB (e.g. the unified `output/detections.db` carrying
+        forwarded rows from multiple agents): split internally by
+        `agent_id`, with server-local rows treated as the "server"
+        node.
+      - Multiple DBs (cross-machine): each file = one node, identified
+        by the first detection's device_id (legacy behaviour).
+    """
     global _RUN_CAL
     files = args.files
-    if len(files) < 2:
-        print("Error: need at least 2 .db files from different nodes")
-        return
 
     # Load calibration view once for the whole run.
     if getattr(args, "no_calibration", False):
@@ -505,7 +563,6 @@ def run_triangulation(args, tak_client=None):
     else:
         cal_path = getattr(args, "calibration_file", None)
         if cal_path is None:
-            import os as _os
             cal_path = _cal._cdb.default_path(getattr(args, "output", "output"))
         _RUN_CAL = _cal.load_calibration(cal_path)
         if _RUN_CAL.offsets:
@@ -516,29 +573,35 @@ def run_triangulation(args, tak_client=None):
     _CAL_STATS["applied"] = 0
     _CAL_STATS["total"] = 0
 
-    # Load all files
-    print(f"Loading {len(files)} detection DBs...")
     file_data = []
-    for path in files:
-        dets = load_detections(path)
-        if not dets:
-            print(f"  {path}: no valid detections (missing GPS?)")
-            continue
-
-        # Determine node ID from the first detection's device_id
-        node_id = dets[0].get("device_id", path)
-        sig_type = dets[0].get("signal_type", "unknown")
-
-        # Warn about self-locating signal types
-        if sig_type in SELF_LOCATING:
-            print(f"  Warning: {path} contains {sig_type} data — these targets"
-                  " self-report position, triangulation not needed")
-
-        # Apply calibration now that we know the node identity for this file.
-        _apply_calibration_to_rows(dets, node_id)
-
-        print(f"  {path}: {len(dets)} detections, node={node_id}, type={sig_type}")
-        file_data.append((dets, node_id))
+    if len(files) == 1:
+        path = files[0]
+        print(f"Loading {path} (splitting by node)...")
+        groups = load_detections_by_node(path)
+        for dets, node_id in groups:
+            sig_type = dets[0].get("signal_type", "unknown") if dets else "?"
+            if sig_type in SELF_LOCATING:
+                print(f"  Warning: node {node_id} reports {sig_type} — these targets"
+                      " self-report position, triangulation not needed")
+            print(f"  node={node_id}: {len(dets)} detections, "
+                  f"first-type={sig_type}")
+            file_data.append((dets, node_id))
+    else:
+        print(f"Loading {len(files)} detection DBs...")
+        for path in files:
+            dets = load_detections(path)
+            if not dets:
+                print(f"  {path}: no valid detections (missing GPS?)")
+                continue
+            # Determine node ID from the first detection's device_id
+            node_id = dets[0].get("device_id", path)
+            sig_type = dets[0].get("signal_type", "unknown")
+            if sig_type in SELF_LOCATING:
+                print(f"  Warning: {path} contains {sig_type} data — these targets"
+                      " self-report position, triangulation not needed")
+            _apply_calibration_to_rows(dets, node_id)
+            print(f"  {path}: {len(dets)} detections, node={node_id}, type={sig_type}")
+            file_data.append((dets, node_id))
 
     if len(file_data) < 2:
         print("Error: need valid detections from at least 2 nodes")

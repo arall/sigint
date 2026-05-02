@@ -38,7 +38,6 @@ from .fetch import (
     fetch_correlations,
     fetch_detections_by_source,
     fetch_detections_for_category,
-    fetch_detections_for_category_all,
     fetch_recent_detections,
 )
 from .loaders import (
@@ -47,7 +46,7 @@ from .loaders import (
     _load_wifi_aps,
     _load_wifi_clients,
 )
-from .sessions import list_sessions, resolve_session_path
+from .sessions import list_sessions, session_exists
 from .tailer import DBTailer
 
 
@@ -259,36 +258,31 @@ class WebHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 window_seconds = None
 
-        # Session override: ?session=<filename> picks a single historical
-        # .db. Default is LIVE mode, which unions every .db in the output
-        # directory — because standalone scanners (sdr.py pmr, adsb, ais,
-        # ...) write to their own files separate from the server .db, so
-        # a single-file scope would miss them.
-        session_name = qs.get("session", [None])[0]
+        # Session override: ?session=<id> filters detections by
+        # `session_id`. Default is LIVE mode (no filter — every session
+        # in the unified DB is queried).
+        raw_session = qs.get("session", [None])[0]
+        session_id = None
         session_resolved = None
-        detections = None
-
-        if session_name:
-            db_path = resolve_session_path(self.server.output_dir, session_name)
-            if db_path is None:
-                self.send_error(400, f"Unknown session: {session_name}")
+        if raw_session:
+            try:
+                session_id = int(raw_session)
+            except (ValueError, TypeError):
+                self.send_error(400, f"Invalid session id: {raw_session}")
                 return
-            session_resolved = session_name
-            try:
-                detections = fetch_detections_for_category(
-                    db_path, name,
-                    window_seconds=window_seconds,
-                )
-            except Exception:
-                detections = []
-        else:
-            try:
-                detections = fetch_detections_for_category_all(
-                    self.server.output_dir, name,
-                    window_seconds=window_seconds,
-                )
-            except Exception:
-                detections = []
+            if not session_exists(self.server.output_dir, session_id):
+                self.send_error(400, f"Unknown session: {raw_session}")
+                return
+            session_resolved = session_id
+
+        try:
+            detections = fetch_detections_for_category(
+                self.server.output_dir, name,
+                session_id=session_id,
+                window_seconds=window_seconds,
+            )
+        except Exception:
+            detections = []
 
         # Full loader output — pre-pagination. Kept in memory for the
         # filter-value enumeration below, which needs the complete set
@@ -551,9 +545,10 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         approved = mgr.approved()
         info = {aid: mgr.agent_info(aid) for aid in approved}
-        # Overlay each approved agent's last known position from agents_*.db
-        # so the map can place a marker even before we wire agent-side GPS
-        # into STAT messages.
+        # Overlay each approved agent's last known position from the
+        # main detections DB (rows tagged with the agent's id) so the map
+        # can place a marker even before we wire agent-side GPS into
+        # STAT messages.
         try:
             positions = fetch_agent_last_positions(self.server.output_dir)
             for aid, pos in positions.items():

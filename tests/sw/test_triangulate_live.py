@@ -3,18 +3,12 @@ Tests for web/triangulate_live.py — live multi-node triangulation feed
 consumed by /api/map/triangulations on the Map tab.
 
 Covers:
-  - Happy path: a server DB + an agent DB see the same keyfob within the
+  - Happy path: server-local + agent rows see the same keyfob within the
     correlation window → one triangulation result, lat/lon plausible.
   - Single-node groups yield nothing (can't multilaterate alone).
   - Self-locating types (ADS-B) are skipped even with multiple observers.
-  - Deduplication: multiple clusters for the same (type, key) yield one
-    result (the newest).
   - Window filtering: older-than-window rows don't produce fixes.
-  - Agent DBs split by device_id: two agents in the same agents_*.db
-    count as two nodes.
-
-Run:
-    python3 tests/sw/test_triangulate_live.py
+  - Two agents tagged in the same DB count as two nodes.
 """
 
 import json
@@ -26,33 +20,40 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 
-def _make_session_db(output_dir, filename, rows):
-    """Write a list of (signal_type, channel, lat, lon, power_db, ts_offset_s,
-    device_id, metadata) rows into a session .db at the given path.
+def _seed_dets(output_dir, rows):
+    """Write detection rows into the unified `output/detections.db`.
 
-    `ts_offset_s` is seconds in the past from now (0 = now, 120 = 2 min ago).
+    Each input row is (signal_type, channel, lat, lon, power_db,
+    ts_offset_s, node_id, metadata). `node_id == "server"` writes a
+    server-local row (agent_id IS NULL); any other id is set as
+    `agent_id` on the row.
     """
     from utils import db as _db
     from utils.logger import SignalDetection
     from datetime import datetime
 
-    path = os.path.join(output_dir, filename)
-    conn = _db.connect(path)
+    conn = _db.connect(_db.default_db_path(output_dir))
+    sid = _db.open_session(conn, kind="test", label="seed", pid=os.getpid())
     now = time.time()
-    for sig, ch, lat, lon, power, age, device_id, meta in rows:
+    for sig, ch, lat, lon, power, age, node, meta in rows:
         det = SignalDetection.create(
             signal_type=sig,
-            frequency_hz=433.92e6 if sig == "keyfob" else 1090e6 if sig == "ADS-B" else 446e6,
+            frequency_hz=(433.92e6 if sig == "keyfob"
+                          else 1090e6 if sig == "ADS-B"
+                          else 446e6),
             power_db=power, noise_floor_db=-95,
             channel=ch,
             latitude=lat, longitude=lon,
-            device_id=device_id,
+            # device_id mirrors the legacy convention so calibration
+            # lookups still resolve to the right node identity.
+            device_id=node,
             metadata=json.dumps(meta) if meta else "",
         )
         det.timestamp = datetime.fromtimestamp(now - age).isoformat()
-        _db.insert_detection(conn, det)
+        agent_id = None if node == "server" else node
+        _db.insert_detection(conn, det, session_id=sid, agent_id=agent_id)
+    _db.close_session(conn, sid)
     conn.close()
-    return path
 
 
 def test_happy_path_two_nodes_triangulate():
@@ -60,13 +61,9 @@ def test_happy_path_two_nodes_triangulate():
     from web.triangulate_live import fetch_triangulations
 
     tmp = tempfile.mkdtemp()
-    # Server sees keyfob at channel 1, measured from lat/lon (42.510, 1.535)
-    _make_session_db(tmp, "keyfob_20260419_120000.db", [
+    _seed_dets(tmp, [
         ("keyfob", "CH1", 42.510, 1.535, -60.0, 3, "server", None),
         ("keyfob", "CH1", 42.510, 1.535, -58.0, 2, "server", None),
-    ])
-    # Agent N01 sees the same keyfob from a different location
-    _make_session_db(tmp, "agents_20260419.db", [
         ("keyfob", "CH1", 42.515, 1.540, -65.0, 3, "N01", None),
         ("keyfob", "CH1", 42.515, 1.540, -63.0, 2, "N01", None),
     ])
@@ -78,7 +75,6 @@ def test_happy_path_two_nodes_triangulate():
     assert r["key"] == "CH1"
     assert r["num_nodes"] == 2
     assert "server" in r["nodes"] and "N01" in r["nodes"]
-    # Estimated position somewhere between the two observers.
     assert 42.505 < r["lat"] < 42.520
     assert 1.532 < r["lon"] < 1.545
     assert r["error_m"] >= 0
@@ -89,7 +85,7 @@ def test_single_node_produces_no_triangulation():
     from web.triangulate_live import fetch_triangulations
 
     tmp = tempfile.mkdtemp()
-    _make_session_db(tmp, "keyfob_20260419_120000.db", [
+    _seed_dets(tmp, [
         ("keyfob", "CH1", 42.510, 1.535, -60, 1, "server", None),
         ("keyfob", "CH1", 42.510, 1.535, -58, 2, "server", None),
     ])
@@ -102,11 +98,9 @@ def test_adsb_is_skipped_even_with_multiple_sources():
     from web.triangulate_live import fetch_triangulations
 
     tmp = tempfile.mkdtemp()
-    _make_session_db(tmp, "adsb_20260419_120000.db", [
+    _seed_dets(tmp, [
         ("ADS-B", "ABC123", 42.6, 1.55, -20, 2, "server",
          {"icao": "ABC123", "altitude": 30000}),
-    ])
-    _make_session_db(tmp, "agents_20260419.db", [
         ("ADS-B", "ABC123", 42.6, 1.55, -25, 2, "N01",
          {"icao": "ABC123", "altitude": 30000}),
     ])
@@ -120,10 +114,8 @@ def test_window_filters_out_stale_rows():
 
     tmp = tempfile.mkdtemp()
     # Everything is 10 minutes old. Window = 1 minute → zero results.
-    _make_session_db(tmp, "keyfob_20260419_120000.db", [
+    _seed_dets(tmp, [
         ("keyfob", "CH1", 42.510, 1.535, -60, 600, "server", None),
-    ])
-    _make_session_db(tmp, "agents_20260419.db", [
         ("keyfob", "CH1", 42.515, 1.540, -65, 600, "N01", None),
     ])
     assert fetch_triangulations(tmp, window_seconds=60) == []
@@ -132,11 +124,11 @@ def test_window_filters_out_stale_rows():
 
 
 def test_two_agents_in_same_db_count_as_two_nodes():
-    """agents_*.db holds rows from every agent — split by device_id."""
+    """agent_id column splits forwarded rows by source node."""
     from web.triangulate_live import fetch_triangulations
 
     tmp = tempfile.mkdtemp()
-    _make_session_db(tmp, "agents_20260419.db", [
+    _seed_dets(tmp, [
         ("keyfob", "CH1", 42.510, 1.535, -60, 2, "N01", None),
         ("keyfob", "CH1", 42.515, 1.540, -65, 2, "N02", None),
     ])
@@ -150,10 +142,8 @@ def test_result_carries_observation_detail():
     from web.triangulate_live import fetch_triangulations
 
     tmp = tempfile.mkdtemp()
-    _make_session_db(tmp, "keyfob_20260419_120000.db", [
+    _seed_dets(tmp, [
         ("keyfob", "CH1", 42.510, 1.535, -60, 2, "server", None),
-    ])
-    _make_session_db(tmp, "agents_20260419.db", [
         ("keyfob", "CH1", 42.515, 1.540, -65, 2, "N01", None),
     ])
     [r] = fetch_triangulations(tmp, window_seconds=3600)
@@ -189,10 +179,8 @@ def test_calibration_applied_when_present():
     _f._CAL_CACHE["mtime"] = None
     _f._CAL_CACHE["cal"] = None
 
-    _make_session_db(tmp, "keyfob_20260419_120000.db", [
+    _seed_dets(tmp, [
         ("keyfob", "CH1", 42.510, 1.535, -60, 2, "server", None),
-    ])
-    _make_session_db(tmp, "agents_20260419.db", [
         ("keyfob", "CH1", 42.515, 1.540, -65, 2, "N01", None),
     ])
     [r] = fetch_triangulations(tmp, window_seconds=3600)

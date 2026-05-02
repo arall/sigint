@@ -31,12 +31,9 @@ from datetime import datetime
 from utils import db as _db
 from utils.triangulate import MATCH_STRATEGIES, _get_match_key
 
-from .sessions import is_session_db_name
-
 
 DEFAULT_WINDOW_SECONDS = 30.0
 DEFAULT_MAX_RESULTS = 100
-_PER_FILE_LIMIT = 10000
 
 # Signal types without a registered match strategy fall back to frequency,
 # matching `triangulate.correlate`'s behaviour.
@@ -59,77 +56,72 @@ def fetch_cross_node_witnesses(
         now = time.time()
     since = now - max(1, window_seconds)
 
+    db_path = _db.default_db_path(output_dir)
+    if not os.path.exists(db_path):
+        return []
     try:
-        names = sorted(
-            (f for f in os.listdir(output_dir) if is_session_db_name(f)),
-            reverse=True,
-        )
-    except OSError:
+        conn = _db.connect(db_path, readonly=True)
+    except Exception:
         return []
 
     # { (signal_type, key) -> {nodes: {node_id: count}, first, last, freq, obs} }
     witnesses: dict[tuple[str, str], dict] = {}
 
-    for name in names:
-        path = os.path.join(output_dir, name)
-        is_agent_db = name.startswith("agents_")
-        try:
-            conn = _db.connect(path, readonly=True)
-        except Exception:
-            continue
-        try:
-            cur = conn.execute(
-                "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
-                "channel, device_id, metadata FROM detections "
-                "WHERE ts_epoch >= ? ORDER BY id",
-                (since,),
-            )
-            for r in cur:
-                sig = r["signal_type"] or ""
-                if not sig:
-                    continue
-                # Match strategy mirrors `utils.triangulate`: channel for
-                # PMR/keyfob, metadata_id for WiFi/BLE, frequency for
-                # everything else (incl. ADS-B / AIS).
-                strategy = MATCH_STRATEGIES.get(sig, _FALLBACK_STRATEGY)
-                row_dict = _row_to_match_dict(r)
-                key = _get_match_key(row_dict, strategy)
-                if not key:
-                    continue
-                node_id = (r["device_id"] or "server") if is_agent_db else "server"
+    try:
+        cur = conn.execute(
+            "SELECT timestamp, ts_epoch, signal_type, frequency_hz, "
+            "channel, device_id, agent_id, metadata FROM detections "
+            "WHERE ts_epoch >= ? ORDER BY id",
+            (since,),
+        )
+        for r in cur:
+            sig = r["signal_type"] or ""
+            if not sig:
+                continue
+            # Match strategy mirrors `utils.triangulate`: channel for
+            # PMR/keyfob, metadata_id for WiFi/BLE, frequency for
+            # everything else (incl. ADS-B / AIS).
+            strategy = MATCH_STRATEGIES.get(sig, _FALLBACK_STRATEGY)
+            row_dict = _row_to_match_dict(r)
+            key = _get_match_key(row_dict, strategy)
+            if not key:
+                continue
+            # node_id comes from the `agent_id` column on forwarded rows;
+            # server-local rows are NULL and grouped under "server".
+            node_id = r["agent_id"] or "server"
 
-                wid = (sig, key)
-                entry = witnesses.setdefault(wid, {
-                    "signal_type": sig,
-                    "key": key,
-                    "freq_mhz": round(float(r["frequency_hz"] or 0) / 1e6, 4),
-                    "nodes": defaultdict(int),
-                    "first_seen": r["timestamp"] or "",
-                    "last_seen": r["timestamp"] or "",
-                    "ts_first": float(r["ts_epoch"] or 0.0),
-                    "ts_last": float(r["ts_epoch"] or 0.0),
-                    "observations": 0,
-                })
-                entry["nodes"][node_id] += 1
-                entry["observations"] += 1
-                ts = float(r["ts_epoch"] or 0.0)
-                if ts and ts < entry["ts_first"]:
-                    entry["ts_first"] = ts
-                    entry["first_seen"] = r["timestamp"] or entry["first_seen"]
-                if ts and ts > entry["ts_last"]:
-                    entry["ts_last"] = ts
-                    entry["last_seen"] = r["timestamp"] or entry["last_seen"]
-                # Whichever frequency we see last wins — most signals stay
-                # on one freq; hopping ones (e.g. RTL-SDR scan) get the
-                # latest, which is the most operationally meaningful.
-                entry["freq_mhz"] = round(float(r["frequency_hz"] or 0) / 1e6, 4)
+            wid = (sig, key)
+            entry = witnesses.setdefault(wid, {
+                "signal_type": sig,
+                "key": key,
+                "freq_mhz": round(float(r["frequency_hz"] or 0) / 1e6, 4),
+                "nodes": defaultdict(int),
+                "first_seen": r["timestamp"] or "",
+                "last_seen": r["timestamp"] or "",
+                "ts_first": float(r["ts_epoch"] or 0.0),
+                "ts_last": float(r["ts_epoch"] or 0.0),
+                "observations": 0,
+            })
+            entry["nodes"][node_id] += 1
+            entry["observations"] += 1
+            ts = float(r["ts_epoch"] or 0.0)
+            if ts and ts < entry["ts_first"]:
+                entry["ts_first"] = ts
+                entry["first_seen"] = r["timestamp"] or entry["first_seen"]
+            if ts and ts > entry["ts_last"]:
+                entry["ts_last"] = ts
+                entry["last_seen"] = r["timestamp"] or entry["last_seen"]
+            # Whichever frequency we see last wins — most signals stay
+            # on one freq; hopping ones (e.g. RTL-SDR scan) get the
+            # latest, which is the most operationally meaningful.
+            entry["freq_mhz"] = round(float(r["frequency_hz"] or 0) / 1e6, 4)
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
         except Exception:
             pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
     # Keep only emitters seen by 2+ distinct nodes.
     out: list[dict] = []

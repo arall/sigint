@@ -29,14 +29,18 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 
-def _write_db(output_dir, filename, rows):
-    """rows: (signal_type, channel, freq_hz, power_db, device_id, meta_dict, age_s)"""
+def _write_dets(output_dir, rows, agent_id=None):
+    """rows: (signal_type, channel, freq_hz, power_db, device_id, meta_dict, age_s)
+
+    `agent_id`, if set, tags every row written by this call as
+    forwarded from that node. None → server-local rows.
+    """
     from utils import db as _db
     from utils.logger import SignalDetection
     from datetime import datetime
 
-    path = os.path.join(output_dir, filename)
-    conn = _db.connect(path)
+    conn = _db.connect(_db.default_db_path(output_dir))
+    sid = _db.open_session(conn, kind="test", label="seed", pid=os.getpid())
     now = time.time()
     for sig, ch, freq, power, dev, meta, age in rows:
         det = SignalDetection.create(
@@ -49,7 +53,8 @@ def _write_db(output_dir, filename, rows):
             metadata=json.dumps(meta) if meta else "",
         )
         det.timestamp = datetime.fromtimestamp(now - age).isoformat()
-        _db.insert_detection(conn, det)
+        _db.insert_detection(conn, det, session_id=sid, agent_id=agent_id)
+    _db.close_session(conn, sid)
     conn.close()
 
 
@@ -57,14 +62,14 @@ def test_two_nodes_witness_same_keyfob():
     from web.cross_node_witnesses import fetch_cross_node_witnesses
     tmp = tempfile.mkdtemp()
 
-    # Server sees CH1 twice, N01 once — all within window.
-    _write_db(tmp, "keyfob_20260419_120000.db", [
+    # Server-local sees CH1 twice, agent N01 forwards one.
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -60, "server", None, 5),
         ("keyfob", "CH1", 433.92e6, -58, "server", None, 3),
     ])
-    _write_db(tmp, "agents_20260419.db", [
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -65, "N01", None, 4),
-    ])
+    ], agent_id="N01")
 
     rows = fetch_cross_node_witnesses(tmp, window_seconds=60)
     assert len(rows) == 1
@@ -79,7 +84,7 @@ def test_two_nodes_witness_same_keyfob():
 def test_single_node_does_not_surface():
     from web.cross_node_witnesses import fetch_cross_node_witnesses
     tmp = tempfile.mkdtemp()
-    _write_db(tmp, "keyfob_20260419_120000.db", [
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -60, "server", None, 5),
         ("keyfob", "CH1", 433.92e6, -58, "server", None, 3),
     ])
@@ -92,12 +97,12 @@ def test_adsb_is_included():
     readout even though the plane self-reports position."""
     from web.cross_node_witnesses import fetch_cross_node_witnesses
     tmp = tempfile.mkdtemp()
-    _write_db(tmp, "adsb_20260419_120000.db", [
+    _write_dets(tmp, [
         ("ADS-B", "ABC123", 1090e6, -20, "server", {"icao": "ABC123"}, 2),
     ])
-    _write_db(tmp, "agents_20260419.db", [
+    _write_dets(tmp, [
         ("ADS-B", "ABC123", 1090e6, -25, "N01", {"icao": "ABC123"}, 2),
-    ])
+    ], agent_id="N01")
     rows = fetch_cross_node_witnesses(tmp, window_seconds=60)
     assert len(rows) == 1
     assert rows[0]["signal_type"] == "ADS-B"
@@ -106,25 +111,21 @@ def test_adsb_is_included():
 
 def test_wifi_uses_metadata_id_not_device_id():
     """In server-local captures, WiFi-AP sets device_id = BSSID, which
-    would wrongly bucket every AP as a different 'node'. Strategy
-    metadata_id pulls mac/bssid from metadata — same BSSID across nodes
-    becomes the correlation key, nodes stay as server/N01."""
+    would wrongly bucket every AP as a different 'node'. The witness
+    view groups by `agent_id` (or 'server' on NULL), so the BSSID never
+    leaks into the node split."""
     from web.cross_node_witnesses import fetch_cross_node_witnesses
     tmp = tempfile.mkdtemp()
     bssid = "aa:bb:cc:11:22:33"
-    _write_db(tmp, "wifi_20260419_120000.db", [
+    _write_dets(tmp, [
         ("WiFi-AP", "CH6", 2.437e9, -55, bssid,
          {"bssid": bssid, "mac": bssid}, 2),
     ])
-    _write_db(tmp, "agents_20260419.db", [
+    _write_dets(tmp, [
         ("WiFi-AP", "CH6", 2.437e9, -65, "N01",
          {"bssid": bssid, "mac": bssid}, 2),
-    ])
+    ], agent_id="N01")
     rows = fetch_cross_node_witnesses(tmp, window_seconds=60)
-    # MATCH_STRATEGIES uses "metadata_id" for "wifi" (lower-case). WiFi-AP
-    # (camel-case) isn't in the strategies table so it falls through to
-    # frequency — both rows share 2.437 GHz, key is "2437000" (kHz).
-    # Either way a single witness row with both nodes should surface.
     assert len(rows) == 1
     assert set(rows[0]["nodes"]) == {"server", "N01"}
 
@@ -133,12 +134,12 @@ def test_window_filter_drops_stale_rows():
     from web.cross_node_witnesses import fetch_cross_node_witnesses
     tmp = tempfile.mkdtemp()
     # 10 min old.
-    _write_db(tmp, "keyfob_20260419_120000.db", [
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -60, "server", None, 600),
     ])
-    _write_db(tmp, "agents_20260419.db", [
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -65, "N01", None, 600),
-    ])
+    ], agent_id="N01")
     assert fetch_cross_node_witnesses(tmp, window_seconds=60) == []
     # Widen to 15 min → surfaces.
     rows = fetch_cross_node_witnesses(tmp, window_seconds=900)
@@ -146,15 +147,16 @@ def test_window_filter_drops_stale_rows():
 
 
 def test_two_agents_in_same_db():
-    """agents_*.db holds rows from every agent — device_id column is the
-    node for those rows. Two agents hearing the same key counts as two
+    """Two distinct agent_ids on rows in the same DB count as two
     witnesses."""
     from web.cross_node_witnesses import fetch_cross_node_witnesses
     tmp = tempfile.mkdtemp()
-    _write_db(tmp, "agents_20260419.db", [
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -60, "N01", None, 3),
+    ], agent_id="N01")
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -65, "N02", None, 3),
-    ])
+    ], agent_id="N02")
     rows = fetch_cross_node_witnesses(tmp, window_seconds=60)
     assert len(rows) == 1
     assert set(rows[0]["nodes"]) == {"N01", "N02"}
@@ -171,13 +173,13 @@ def test_first_and_last_seen_track_chronology():
     regardless of which file / node they came from."""
     from web.cross_node_witnesses import fetch_cross_node_witnesses
     tmp = tempfile.mkdtemp()
-    _write_db(tmp, "keyfob_20260419_120000.db", [
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -60, "server", None, 60),  # older
         ("keyfob", "CH1", 433.92e6, -55, "server", None, 5),   # newer
     ])
-    _write_db(tmp, "agents_20260419.db", [
+    _write_dets(tmp, [
         ("keyfob", "CH1", 433.92e6, -65, "N01", None, 30),
-    ])
+    ], agent_id="N01")
     rows = fetch_cross_node_witnesses(tmp, window_seconds=600)
     assert len(rows) == 1
     w = rows[0]

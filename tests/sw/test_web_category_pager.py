@@ -39,8 +39,10 @@ def _seed_voice_session(output_dir, count=200):
     hits."""
     from utils import db as _db
     from utils.logger import SignalDetection
-    path = os.path.join(output_dir, "pmr_20260419_120000.db")
+    path = _db.default_db_path(output_dir)
     conn = _db.connect(path)
+    sid = _db.open_session(conn, kind="scanner:pmr",
+                           label="seed", pid=os.getpid())
     for i in range(count):
         audio = f"pmr_ch{(i % 2) + 1}_{i}.wav" if (i % 3 == 0) else None
         det = SignalDetection.create(
@@ -50,11 +52,12 @@ def _seed_voice_session(output_dir, count=200):
             channel=f"CH{(i % 2) + 1}",
             audio_file=audio,
         )
-        rowid = _db.insert_detection(conn, det)
+        _db.insert_detection(conn, det, session_id=sid)
         # Whisper transcripts join by audio_file basename; seed a few so
         # ?transcript=1 has something to return.
         if audio and (i % 9 == 0):
             _db.insert_transcript(conn, audio, f"hello {i}", "en")
+    _db.close_session(conn, sid)
     conn.close()
     return path
 

@@ -66,8 +66,14 @@ class SignalDetection:
 
 class SignalLogger:
     """
-    Logs signal detections to a session SQLite database.
+    Logs signal detections to the unified `output/detections.db`.
     Thread-safe for concurrent signal capture.
+
+    Each logger instance opens a `sessions` row on `start()` and tags
+    every detection it writes with that session id, then stamps the
+    session's `ended_at` on `stop()`. Multiple loggers can share the
+    same DB file — SQLite's WAL mode + a per-connection busy_timeout
+    serialise concurrent writers.
     """
 
     def __init__(
@@ -77,43 +83,55 @@ class SignalLogger:
         device_id: Optional[str] = None,
         min_snr_db: float = 5.0,  # Minimum SNR to log (filter noise)
         gps=None,  # Optional GPSReader instance for auto lat/lon
-        db_path: Optional[str] = None,  # Reuse an existing .db (e.g. server-wide)
+        db_path: Optional[str] = None,
+        session_kind: Optional[str] = None,
+        session_label: Optional[str] = None,
     ):
         """
         Initialize the signal logger.
 
         Args:
             output_dir: Directory to store the DB file
-            signal_type: Type of signals being captured (used in filename)
+            signal_type: Free-form name for this run (becomes the
+                default session label when `session_label` is omitted).
+                No longer affects file naming — there's only ever one
+                file per output dir.
             device_id: Identifier for this SDR device
             min_snr_db: Minimum SNR threshold to log a detection
-            db_path: Optional explicit path — if set, new session file is
-                not created and the logger appends to the given DB.
+            db_path: Optional explicit path. Defaults to
+                `<output_dir>/detections.db`.
+            session_kind: Override the `sessions.kind` value. Defaults
+                to `"scanner:<signal_type>"`.
+            session_label: Override the `sessions.label` value. Defaults
+                to `signal_type`.
         """
         self.output_dir = Path(output_dir)
         self.signal_type = signal_type
         self.device_id = device_id
         self.min_snr_db = min_snr_db
         self.gps = gps
+        self._session_kind = session_kind or f"scanner:{signal_type}"
+        self._session_label = session_label or signal_type
 
         self._lock = threading.Lock()
         self._running = False
         self._db_path = Path(db_path) if db_path else None
         self._conn = None
+        self._session_id: Optional[int] = None
         self._detection_count = 0
         self.on_detection = None  # Optional callback: fn(SignalDetection) -> None
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _build_db_path(self) -> Path:
-        """Generate DB filename with timestamp (one file per session)."""
-        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return self.output_dir / f"{self.signal_type}_{date_str}.db"
-
     @property
     def db_path(self) -> Optional[Path]:
         return self._db_path
+
+    @property
+    def session_id(self) -> Optional[int]:
+        """The sessions.id row this logger writes to. None until start()."""
+        return self._session_id
 
     def start(self) -> str:
         """Start the logger and return the output file path."""
@@ -121,9 +139,16 @@ class SignalLogger:
             return str(self._db_path)
 
         if self._db_path is None:
-            self._db_path = self._build_db_path()
+            self._db_path = Path(_db.default_db_path(str(self.output_dir)))
 
         self._conn = _db.connect(str(self._db_path))
+        import os as _os
+        self._session_id = _db.open_session(
+            self._conn,
+            kind=self._session_kind,
+            label=self._session_label,
+            pid=_os.getpid(),
+        )
         self._running = True
         return str(self._db_path)
 
@@ -131,6 +156,11 @@ class SignalLogger:
         """Stop the logger and return total detections logged."""
         self._running = False
         if self._conn is not None:
+            try:
+                if self._session_id is not None:
+                    _db.close_session(self._conn, self._session_id)
+            except Exception:
+                pass
             try:
                 self._conn.close()
             except Exception:
@@ -203,7 +233,10 @@ class SignalLogger:
         """Write a single detection to SQLite. Caller must hold self._lock."""
         if self._conn is None:
             return
-        _db.insert_detection(self._conn, detection)
+        _db.insert_detection(
+            self._conn, detection,
+            session_id=self._session_id,
+        )
         self._detection_count += 1
 
     def log_transcript(self, audio_file: str, text: str,
