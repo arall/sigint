@@ -56,6 +56,7 @@ DISPLAY_NAMES = {
     "lte":              "LTE uplink",
     # Standalone scanner types (sdr.py subcommand names)
     "pmr":              "PMR446",
+    "dmr":              "DMR voice",
     "adsb":             "ADS-B",
     "ais":              "AIS",
     "ism":              "ISM (rtl_433)",
@@ -87,6 +88,7 @@ def _display_list(names):
 # Maps scanner_type -> (human-readable range, mode).
 _STANDALONE_COVERAGE = {
     "pmr":        ("446.00625\u2013446.09375 MHz (PMR446 ch 1\u20138)", "continuous"),
+    "dmr":        ("single freq (default 145.525 MHz, configurable via --frequency)", "continuous"),
     "fm":         ("depends on --band profile",                        "hopping"),
     "adsb":       ("1090 MHz (Mode S)",                                 "continuous"),
     "ais":        ("161.975 / 162.025 MHz (marine ch 87B/88B)",         "continuous"),
@@ -530,6 +532,10 @@ class ServerOrchestrator:
         for entry in captures_cfg:
             cap_type = entry["type"]
             cap_name = entry.get("name", cap_type)
+
+            if entry.get("disabled"):
+                print(f"  [-] Skipping disabled capture '{cap_name}'")
+                continue
 
             self._set_status(cap_name, "pending", "setting up")
             try:

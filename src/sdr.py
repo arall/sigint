@@ -160,6 +160,60 @@ Examples:
         "loses upper digital channels (446.1-446.2) but keeps all 8 analog.",
     )
 
+    # DMR scanner (direct-mode simplex, dsd-fme backend)
+    dmr_parser = subparsers.add_parser(
+        "dmr",
+        help="Decode direct-mode DMR voice at a single frequency (dsd-fme)",
+    )
+    dmr_parser.add_argument(
+        "--frequency", "-f",
+        type=float,
+        default=145.525,
+        help="Frequency in MHz (default: 145.525)",
+    )
+    dmr_parser.add_argument(
+        "--gain", "-g",
+        type=int,
+        default=25,
+        help="RF gain (default: 25 — sweet spot for close-range strong signals; "
+        "drop towards 0 for distant signals, raise towards 40 only if "
+        "the signal is barely above noise)",
+    )
+    dmr_parser.add_argument(
+        "--ppm",
+        type=int,
+        default=0,
+        help="RTL-SDR frequency correction in ppm (default: 0)",
+    )
+    dmr_parser.add_argument(
+        "--bandwidth-khz",
+        type=int,
+        default=12,
+        help="RTL-SDR tuner bandwidth in kHz (default: 12)",
+    )
+    dmr_parser.add_argument(
+        "--squelch",
+        type=int,
+        default=100,
+        help="dsd-fme RMS squelch (default: 100). Set 0 to disable.",
+    )
+    dmr_parser.add_argument(
+        "--transcribe",
+        action="store_true",
+        help="Transcribe decoded voice via Whisper",
+    )
+    dmr_parser.add_argument(
+        "--whisper-model",
+        default="base",
+        choices=["tiny", "base", "small", "medium", "large"],
+        help="Whisper model size (default: base)",
+    )
+    dmr_parser.add_argument(
+        "--language",
+        default=None,
+        help="Language code for transcription (e.g. en, es). Auto-detect if omitted",
+    )
+
     # Keyfob scanner
     keyfob_parser = subparsers.add_parser(
         "keyfob",
@@ -1344,6 +1398,27 @@ def _dispatch_scanner(args):
             digital=args.digital,
             ppm=args.ppm,
             sample_rate=args.sample_rate_mhz * 1e6,
+        )
+        if gps:
+            scanner.logger.gps = gps
+        _attach_tak(scanner, tak_client)
+        scanner.run()
+
+    elif args.command == "dmr":
+        from scanners.dmr import DMRScanner
+
+        scanner = DMRScanner(
+            output_dir=args.output,
+            device_id=args.device_id,
+            device_index=args.device_index,
+            frequency=args.frequency * 1e6,
+            gain=args.gain,
+            ppm=args.ppm,
+            bandwidth_khz=args.bandwidth_khz,
+            squelch=args.squelch,
+            transcribe_audio=args.transcribe,
+            whisper_model=args.whisper_model,
+            language=args.language,
         )
         if gps:
             scanner.logger.gps = gps

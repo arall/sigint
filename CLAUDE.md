@@ -34,6 +34,7 @@ python3 sdr.py pmr                           # PMR446 (analog)
 python3 sdr.py pmr --digital                 # PMR446 analog + dPMR/DMR digital
 python3 sdr.py pmr --transcribe              # PMR446 with speech-to-text
 python3 sdr.py pmr --transcribe --language es # Force Spanish transcription
+python3 sdr.py dmr [-f 145.525] [--transcribe]  # Direct-mode DMR voice (dsd-fme)
 python3 sdr.py fm frs|marine|murs|2m|70cm|cb|tetra|p25|landmobile  # FM band profiles
 python3 sdr.py fm --list                     # List all band profiles
 python3 sdr.py keyfob [-f 315]               # Keyfobs (433.92 MHz default, 315 MHz US)
@@ -64,7 +65,7 @@ python3 sdr.py correlate output/*.db         # Device co-occurrence analysis
 - System (Raspberry Pi): librtlsdr from source (keenerd fork), cmake, libusb-1.0-0-dev, ffmpeg
 - System (macOS): `brew install librtlsdr`
 - BLE: bluez, bluez-hcidump; WiFi: scapy, iw, monitor-mode adapter
-- Optional: openai-whisper, gTTS, dump1090, rtl_ais, multimon-ng, rtl_433
+- Optional: openai-whisper, gTTS, dump1090, rtl_ais, multimon-ng, rtl_433, dsd-fme (DMR voice — build from lwvmobile/dsd-fme + lwvmobile/mbelib `ambe_tones` branch)
 - Config: `.env` for `OPENAI_API_KEY`, `WHISPER_LANGUAGES`, `TAK_HOST`/`TAK_PORT`
 
 ## Architecture
@@ -118,6 +119,17 @@ Map: Leaflet 1.9.4 vendored (no CDN). `L.circleMarker` (no PNG images). Lazy-ini
 Three audio paths (PMRScanner, FMScanner, FMVoiceParser) share thresholds: `DETECTION_SNR_DB = 15.0`, `MIN_TX_DURATION = 0.5s` (signal-present samples, not wall-clock), holdover 2.0s. FMVoiceParser adds `MAX_TX_DURATION = 30.0s`.
 
 Async transcription: detection logged to SQLite immediately; transcript arrives 1-10s later in the `transcripts` table of the unified DB (legacy `output/transcripts.json` is still read on startup for backwards compatibility). Hallucination filter in `utils/transcriber.py`.
+
+### DMR Scanner
+
+Direct-mode (simplex) DMR voice via `dsd-fme` subprocess (lwvmobile fork — `dsdccx` chokes on direct-mode FEC even with good sync, see `memory/project_dmr_capture.md`). `scanners/dmr.py` spawns `dsd-fme -fs -P -7 <wav_dir> -i rtl:<dev>:<freq>M:<gain>:<ppm>:<bw>[:<sq>] -o null` (the `-o null` is mandatory — without it dsd-fme tries PulseAudio and fails under sudo). Default freq is 145.525 MHz, gain 25 (sweet spot — g40 saturates the R828D, g10 is dominated by 8-bit ADC quantization noise).
+
+- WAVs are written **directly under `output/audio/`** (not a `dmr/` subdir) so the flat web `/audio/<basename>.wav` handler and the basename-keyed `transcripts` table both work without remapping.
+- A poll-based watcher (1s interval) picks up newly-finalised per-call WAVs and ignores `TEMP_*.wav` files (those are still being written). The watcher must require a regex match on the dsd-fme filename pattern — PMR/FM scanners write to the same dir.
+- The dsd-fme per-call filename has a variable middle: older docs say `..._{sys}_{gi}_TGT_<tgt>_SRC_<src>.wav`, current builds emit `..._DMR_CC_<n>_GROUP_TGT_<tgt>_SRC_<src>.wav`. The regex (`_FINAL_RE`) only anchors on date/time/random head and TGT/SRC tail; everything between is captured as `info`.
+- No SNR gating — dsd-fme only writes a WAV if it actually decoded voice frames, so the existence of the file is the detection. Placeholder `power_db = -30, noise_db = -90` keeps the SignalLogger happy.
+- `LD_LIBRARY_PATH=/usr/local/lib` must be set on the **parent Python**, not just the dsd-fme subprocess — `scanners/__init__.py` imports `pmr` which imports `pyrtlsdr` at import time, and pyrtlsdr needs the V4 fork's `librtlsdr`.
+- Server config: a `dmr` capture conflicts with `pmr` on the same RTL-SDR. The example `dmr_2m` entry in `configs/server.json` ships with `disabled: true`; toggle the `disabled` flag on `pmr` and `dmr_2m` to swap which one owns device 0 (server.py honours the flag and skips the entry entirely).
 
 ### Server
 
