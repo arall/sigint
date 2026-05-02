@@ -170,7 +170,6 @@ DEFAULT_SAMPLE_RATE = 2.4e6  # 2.4 MHz sample rate
 DEFAULT_CENTER_FREQ = 446.05e6  # Center of PMR band
 DEFAULT_GAIN = 40  # RF gain
 DEFAULT_NUM_SAMPLES = 256 * 1024  # Number of samples per read
-NOISE_THRESHOLD_DB = -50  # Threshold above noise floor to detect signal
 
 
 def calculate_power_spectrum(samples, sample_rate):
@@ -690,13 +689,18 @@ class PMRScanner:
 
     def display_channels(self, channel_powers, noise_floor, recording_channels=None, dpmr_powers=None):
         """Display channel activity with a visual indicator."""
+        # When stdout isn't a terminal (e.g. server captures the scanner's
+        # stdout to standalone_pmr.log), the screen-clear redraw bloats the
+        # log to hundreds of MB without adding any signal. Skip drawing.
+        if not sys.stdout.isatty():
+            return
         print("\033[H\033[J", end="")  # Clear screen
         print("=" * 60)
         print("        PMR446 Channel Monitor - RTL-SDR")
         print("=" * 60)
         print(f"\nNoise Floor: {noise_floor:.1f} dB")
         print(
-            f"Detection Threshold: {noise_floor + abs(NOISE_THRESHOLD_DB):.1f} dB")
+            f"Detection Threshold: {noise_floor + self.DETECTION_SNR_DB:.1f} dB (SNR ≥ {self.DETECTION_SNR_DB:.0f} dB)")
         print(f"Detections logged: {self.logger.detection_count}")
         print("-" * 60)
 
