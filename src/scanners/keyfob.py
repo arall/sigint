@@ -21,7 +21,7 @@ from utils.logger import SignalLogger  # noqa: E402
 from dsp.ook import (  # noqa: E402,F401
     detect_ook_signal, detect_fsk_signal, fingerprint_protocol,
     fingerprint_fsk_car, classify_device, TransmitterTracker,
-    CAR_FSK_PROFILES, bits_to_hex,
+    bits_to_hex,
 )
 
 # Common keyfob frequencies
