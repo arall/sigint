@@ -29,12 +29,45 @@ Also hosts two stateless helpers used by `web/fetch.py`:
 """
 
 import os
+import subprocess
 import threading
 import time
 from datetime import datetime, timedelta
 
 
 STATE_REFRESH_INTERVAL_S = 2.0   # matches SSE cadence
+
+# vcgencmd get_throttled bit -> (currently-active vs since-boot, short code).
+# https://www.raspberrypi.com/documentation/computers/os.html#get_throttled
+_THROTTLE_BITS = (
+    (0x1,     "now",  "undervolt"),
+    (0x2,     "now",  "freqcap"),
+    (0x4,     "now",  "throttle"),
+    (0x8,     "now",  "softtemp"),
+    (0x10000, "past", "undervolt"),
+    (0x20000, "past", "freqcap"),
+    (0x40000, "past", "throttle"),
+    (0x80000, "past", "softtemp"),
+)
+
+
+def _get_throttled():
+    """Pi power/throttle flags via vcgencmd. None if unavailable (non-Pi host)."""
+    try:
+        out = subprocess.run(
+            ["vcgencmd", "get_throttled"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode != 0:
+            return None
+        raw = int(out.stdout.strip().split("=", 1)[1], 16)   # "throttled=0x50005"
+    except (FileNotFoundError, ValueError, IndexError, OSError, subprocess.SubprocessError):
+        return None
+    now, past = [], []
+    for bit, when, code in _THROTTLE_BITS:
+        if raw & bit:
+            (now if when == "now" else past).append(code)
+    return {"raw": raw, "now": now, "past": past}
 
 
 def _get_system_stats():
@@ -72,6 +105,10 @@ def _get_system_stats():
         stats["disk_total_gb"] = round(disk_total / (1024**3), 1)
         stats["disk_used_gb"] = round(disk_used / (1024**3), 1)
         stats["disk_pct"] = round(disk_used / disk_total * 100, 1) if disk_total else 0
+
+        thr = _get_throttled()
+        if thr is not None:
+            stats["throttled"] = thr
     except Exception:
         pass
     return stats

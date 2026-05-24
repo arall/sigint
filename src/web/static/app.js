@@ -348,6 +348,21 @@ function updateOverview(state) {
     diskEl.textContent = sys.disk_used_gb + ' / ' + sys.disk_total_gb + ' GB (' + sys.disk_pct + '%)';
     diskEl.style.color = sys.disk_pct > 90 ? '#f44336' : sys.disk_pct > 75 ? '#ffeb3b' : '#e0e0e0';
   }
+  const pwrEl = document.getElementById('s-power');
+  if (sys.throttled) {
+    const t = sys.throttled;
+    const names = { undervolt: 'Undervoltage', freqcap: 'Freq capped', throttle: 'Throttled', softtemp: 'Temp limit' };
+    if (t.now && t.now.length) {
+      pwrEl.textContent = t.now.map(c => names[c] || c).join(', ');
+      pwrEl.style.color = '#f44336';
+    } else if (t.past && t.past.length) {
+      pwrEl.textContent = t.past.map(c => names[c] || c).join(', ') + ' (since boot)';
+      pwrEl.style.color = '#ffeb3b';
+    } else {
+      pwrEl.textContent = 'OK';
+      pwrEl.style.color = '#4caf50';
+    }
+  }
 
   // (Config is in its own tab)
 
