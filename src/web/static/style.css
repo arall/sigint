@@ -375,3 +375,11 @@ tr:last-child td {
     font-size: 11px;
   }
 }
+
+/* Kiosk display (cage/Wayland on the Pi has no cursor-hide knob, and
+   unclutter is X11-only). Scoped to ?kiosk=1 so remote dashboard
+   viewers keep their cursor; only the local kiosk Chromium sets it. */
+html.kiosk,
+html.kiosk * {
+  cursor: none !important;
+}
