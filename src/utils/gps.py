@@ -239,6 +239,68 @@ class MeshtasticGpsReader:
             self._stop.wait(self._poll_interval)
 
 
+class GpsSidecarReader:
+    """GPS reader that pulls (lat, lon, sats) from a JSON sidecar file
+    written by another process.
+
+    Same surface as GPSReader (start/stop/.position/.satellites). Used in
+    the field when the central server feeds children via `output/gps.json`
+    (driven by meshtastic) instead of each child opening its own NMEA
+    serial. Triggered from sdr.py when `--gps-port sidecar` is passed.
+    """
+
+    def __init__(self, path: str, poll_interval: float = 2.0):
+        self._path = path
+        self._poll_interval = poll_interval
+        self._lat: Optional[float] = None
+        self._lon: Optional[float] = None
+        self._sats: int = 0
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+
+    def start(self):
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True,
+                                        name="gps-sidecar-reader")
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+            self._thread = None
+
+    @property
+    def position(self) -> Tuple[Optional[float], Optional[float]]:
+        with self._lock:
+            return (self._lat, self._lon)
+
+    @property
+    def satellites(self) -> int:
+        with self._lock:
+            return self._sats
+
+    def _loop(self):
+        while not self._stop.is_set():
+            lat, lon, sats = None, None, 0
+            try:
+                with open(self._path) as f:
+                    d = json.load(f)
+                lat = d.get("lat")
+                lon = d.get("lon")
+                sats = int(d.get("sats") or 0)
+            except (OSError, ValueError):
+                pass
+            with self._lock:
+                self._lat = lat
+                self._lon = lon
+                self._sats = sats
+            self._stop.wait(self._poll_interval)
+
+
 def write_gps_sidecar(reader, path: str, interval: float = 30.0,
                       stop_event: Optional[threading.Event] = None) -> threading.Thread:
     """Periodically write `reader.position` + `reader.satellites` to `path`.

@@ -379,6 +379,7 @@ class ServerOrchestrator:
         # Optional Meshtastic C2 link
         self._agent_manager = None
         self._meshlink = None
+        self._mesh_gps = None
 
         # Global flags to pass to standalone subprocesses
         self._output_dir = output_dir
@@ -518,6 +519,18 @@ class ServerOrchestrator:
                     detection_db_path=detections_db,
                 )
                 self._set_status("meshlink", "running", f"port={port}")
+                # Field GPS: feed the standalone-scanner sidecar (output/gps.json)
+                # from the meshtastic node's internal GPS. Children with
+                # `--gps-port sidecar` then tag detections with live coords
+                # without an NMEA serial plugged in.
+                try:
+                    from utils.gps import MeshtasticGpsReader, write_gps_sidecar
+                    self._mesh_gps = MeshtasticGpsReader(self._meshlink.get_local_position)
+                    self._mesh_gps.start()
+                    sidecar_path = os.path.join(self._output_dir, "gps.json")
+                    write_gps_sidecar(self._mesh_gps, sidecar_path, interval=5.0)
+                except Exception as e:
+                    print(f"[meshlink] GPS sidecar setup failed: {e}")
             except Exception as e:
                 self._set_status("meshlink", "failed", str(e)[:200])
 
@@ -791,18 +804,34 @@ class ServerOrchestrator:
             "captures": captures,
         }
 
-        # Optional fixed server position. Meant for installations where
-        # the central server is stationary (pelican case, desk, tower).
-        # Consumed by the web UI to draw a server marker on the Map tab.
-        pos = self.config.get("server_position")
-        if isinstance(pos, dict) and pos.get("lat") is not None and pos.get("lon") is not None:
+        # Server position: prefer live meshtastic GPS (field deployment)
+        # over the static `server_position` from JSON (fixed install).
+        # Both populate the Map tab's server marker.
+        live_lat = live_lon = None
+        mesh_gps = getattr(self, "_mesh_gps", None)
+        if mesh_gps is not None:
             try:
-                info["server_position"] = {
-                    "lat": float(pos["lat"]),
-                    "lon": float(pos["lon"]),
-                }
-            except (TypeError, ValueError):
-                pass
+                live_lat, live_lon = mesh_gps.position
+            except Exception:
+                live_lat = live_lon = None
+        if live_lat is not None and live_lon is not None:
+            info["server_position"] = {
+                "lat": float(live_lat),
+                "lon": float(live_lon),
+                "source": "meshtastic",
+                "sats": getattr(mesh_gps, "satellites", 0),
+            }
+        else:
+            pos = self.config.get("server_position")
+            if isinstance(pos, dict) and pos.get("lat") is not None and pos.get("lon") is not None:
+                try:
+                    info["server_position"] = {
+                        "lat": float(pos["lat"]),
+                        "lon": float(pos["lon"]),
+                        "source": "static",
+                    }
+                except (TypeError, ValueError):
+                    pass
 
         if self._agent_manager is not None:
             info["agents"] = {
@@ -1157,22 +1186,41 @@ class ServerOrchestrator:
                     self._original_print(*args, **kwargs)
                     self._log_file.flush()
 
+        # Stagger SDR-touching captures by ~3s so concurrent USB device opens
+        # don't race. With multiple RTL-SDRs on one hub, launching all the
+        # rtl_sdr / dsd-fme / readsb / rtl_433 CLI subprocesses back-to-back
+        # makes one a race victim — the librtlsdr open succeeds but the first
+        # read produces 0 bytes silently, then the auto-restart wedges the
+        # dongle via repeated USB resets. wifi/ble/non-SDR captures don't
+        # interfere and get no delay.
+        last_sdr_launch = 0.0
         for name, capture in self._captures:
-            if isinstance(capture, tuple) and capture[0] == "standalone":
+            is_standalone = isinstance(capture, tuple) and capture[0] == "standalone"
+            if is_standalone:
+                entry = capture[1]
+                touches_sdr = entry.get("device_index") is not None
                 # Launch standalone scanner as subprocess
                 t = threading.Thread(
                     target=self._run_standalone,
-                    args=(name, capture[1]),
+                    args=(name, entry),
                     daemon=True,
                     name=f"server-{name}",
                 )
             else:
+                # Hackrf/rtlsdr captures open USB devices in-process
+                touches_sdr = getattr(capture, "device_index", None) is not None or \
+                              getattr(capture, "serial", None) is not None
                 t = threading.Thread(
                     target=self._run_capture,
                     args=(name, capture),
                     daemon=True,
                     name=f"server-{name}",
                 )
+            if touches_sdr:
+                wait = 3.0 - (time.time() - last_sdr_launch)
+                if wait > 0:
+                    time.sleep(wait)
+                last_sdr_launch = time.time()
             self._threads.append(t)
             t.start()
             print(f"  Started: {name} (thread {t.name})")

@@ -64,6 +64,7 @@ class DMRScanner:
         output_dir: str = None,
         device_id: str = "rtlsdr-001",
         device_index: int = 0,
+        device_serial: str = None,
         frequency: float = 145.525e6,
         gain: int = 25,
         ppm: int = 0,
@@ -79,6 +80,7 @@ class DMRScanner:
         self.output_dir = output_dir
         self.device_id = device_id
         self.device_index = device_index
+        self.device_serial = device_serial or None
         self.frequency = float(frequency)
         self.gain = int(gain)
         self.ppm = int(ppm)
@@ -115,8 +117,13 @@ class DMRScanner:
     def _build_cmd(self):
         # rtl:dev:freq:gain:ppm:bw[:sq[:vol]]
         # freq is "145.525M" form; bw is integer kHz.
+        # dsd-fme resolves `dev` as a serial first (exact match), then as an
+        # index. With multiple dongles sharing serial 00000001, an index can
+        # collide; pass a uniquely-flashed serial via device_serial to pin the
+        # exact dongle. Falls back to the index when no serial is configured.
+        dev = self.device_serial if self.device_serial else self.device_index
         rtl_arg = (
-            f"rtl:{self.device_index}:{self.frequency / 1e6}M:"
+            f"rtl:{dev}:{self.frequency / 1e6}M:"
             f"{self.gain}:{self.ppm}:{self.bandwidth_khz}"
         )
         if self.squelch:

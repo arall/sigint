@@ -104,7 +104,9 @@ class WiFiCaptureSource(BaseCaptureSource):
         print(f"[*] Channels: {' | '.join(parts)}  Hop interval: {self.hop_interval}s")
         print(f"[*] Sniffing on {self.mon_interface}... (Ctrl+C to stop)\n")
 
-        hopper = threading.Thread(target=self._hop_channels, daemon=True)
+        hop_stop = threading.Event()
+        hopper = threading.Thread(
+            target=self._hop_channels, args=(hop_stop,), daemon=True)
         hopper.start()
 
         try:
@@ -115,6 +117,8 @@ class WiFiCaptureSource(BaseCaptureSource):
                 stop_filter=lambda _: self._stop_event.is_set(),
             )
         finally:
+            hop_stop.set()
+            hopper.join(timeout=2.0)
             self._disable_monitor_mode()
 
     def stop(self):
@@ -152,14 +156,14 @@ class WiFiCaptureSource(BaseCaptureSource):
         _run_cmd(["sudo", "ip", "link", "set", self.mon_interface, "up"], check=False)
         print(f"[+] {self.mon_interface} restored to managed mode")
 
-    def _hop_channels(self):
+    def _hop_channels(self, hop_stop=None):
         """Hop across WiFi channels in a background thread.
 
         Uses 'iw dev ... set freq <MHz>' instead of 'set channel' because
         channel numbers overlap between 2.4/5/6 GHz bands.
         """
         idx = 0
-        while not self._stop_event.is_set():
+        while not self._stop_event.is_set() and not (hop_stop and hop_stop.is_set()):
             ch = self.channels[idx % len(self.channels)]
             freq = channel_to_freq(ch)
             try:
@@ -179,4 +183,7 @@ class WiFiCaptureSource(BaseCaptureSource):
             except Exception:
                 pass
             idx += 1
-            self._stop_event.wait(self.hop_interval)
+            if hop_stop:
+                hop_stop.wait(self.hop_interval)
+            else:
+                self._stop_event.wait(self.hop_interval)

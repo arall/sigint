@@ -213,6 +213,14 @@ Examples:
         default=None,
         help="Language code for transcription (e.g. en, es). Auto-detect if omitted",
     )
+    dmr_parser.add_argument(
+        "--device-serial",
+        default=None,
+        help="RTL-SDR serial number to pass to dsd-fme (e.g. 00000003). "
+        "Use this instead of --device-index when several dongles share a "
+        "serial: dsd-fme matches by serial and picks the first collision, "
+        "so target a uniquely-flashed dongle here. Overrides --device-index.",
+    )
 
     # Keyfob scanner
     keyfob_parser = subparsers.add_parser(
@@ -1176,6 +1184,18 @@ def _start_gps(args):
     """Start GPS reader if --gps flag is set."""
     if not args.gps:
         return None
+    # Sidecar mode: read GPS from a JSON file written by another process
+    # (typically the central server, fed by meshtastic). Used when no
+    # NMEA serial is available, e.g. field deployment with only a
+    # meshtastic node providing GPS.
+    if args.gps_port == "sidecar":
+        import os as _os
+        from utils.gps import GpsSidecarReader
+        path = _os.path.join(args.output, "gps.json")
+        gps = GpsSidecarReader(path=path)
+        gps.start()
+        print(f"[GPS] Reading sidecar: {path}")
+        return gps
     from utils.gps import GPSReader
     port = args.gps_port
     gps = GPSReader(port=port)
@@ -1323,6 +1343,15 @@ def _dispatch_scanner(args):
     sdr_scanners = {"pmr", "fm", "keyfob", "tpms", "gsm", "lte", "adsb",
                     "ais", "pocsag", "scan", "ism", "record", "replay", "lora",
                     "jammer"}
+    # PMR streams IQ through the rtl_sdr CLI (V4 librtlsdr from /usr/local/lib)
+    # when PMR_USE_RTL_SDR_CLI=1 (default). _check_sdr uses pyrtlsdr (Debian
+    # librtlsdr 2.0.x). Back-to-back open+close on the same dongle from two
+    # different libusb client instances races on USB interface release and
+    # leaves the CLI subprocess hitting usb_claim_interface -6; the auto-retry
+    # then wedges the dongle via repeated kernel resets. Skip the pre-flight
+    # in that path — the rtl_sdr CLI surfaces the same errors itself.
+    if args.command == "pmr" and os.environ.get("PMR_USE_RTL_SDR_CLI", "1") not in ("0", ""):
+        sdr_scanners.discard("pmr")
     if args.command in sdr_scanners:
         if not _check_sdr(args.device_index):
             sys.exit(1)
@@ -1411,6 +1440,7 @@ def _dispatch_scanner(args):
             output_dir=args.output,
             device_id=args.device_id,
             device_index=args.device_index,
+            device_serial=args.device_serial,
             frequency=args.frequency * 1e6,
             gain=args.gain,
             ppm=args.ppm,
