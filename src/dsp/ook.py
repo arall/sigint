@@ -415,8 +415,6 @@ def fingerprint_protocol(bursts):
         sync_indices = _find_sync_gaps(bursts)
 
         if 2.2 <= p_ratio <= 4.0 and (gap_clusters or len(pulses) >= 20):
-            _, _, g_ratio = gap_clusters
-
             decoded = _decode_bits_pt2262(frame_bursts, T * 2)
 
             valid_bits = [b for b in decoded if b in (0, 1, 'F')]
