@@ -299,7 +299,20 @@ def _extract_detail(sig, channel, meta):
     elif sig == "lora":
         bw = meta.get("bandwidth_khz", "")
         return f"BW:{bw}kHz" if bw else ""
-    elif sig in ("PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS", "FM_voice"):
+    elif sig in ("PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS", "FM_voice",
+                 "FRS/GMRS",
+                 "GMRS Repeater",
+                 "GMRS/FRS 462 MHz",
+                 "Marine VHF",
+                 "MURS",
+                 "2m Amateur",
+                 "70cm Amateur",
+                 "Land Mobile",
+                 "TETRA Emergency",
+                 "TETRA Private",
+                 "P25",
+                 "CB Radio (EU FM)",
+                 ):  # voice detail
         t = meta.get("transcript", "")
         if t:
             return f'"{t[:60]}"'
@@ -336,6 +349,19 @@ def _extract_uid(sig, row, meta):
             return f'{float(row.get("frequency_hz", 0)):.0f}'
         except (ValueError, TypeError):
             return None
-    elif sig in ("PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS"):
+    elif sig in ("PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS", "FM_voice",
+                 "FRS/GMRS",
+                 "GMRS Repeater",
+                 "GMRS/FRS 462 MHz",
+                 "Marine VHF",
+                 "MURS",
+                 "2m Amateur",
+                 "70cm Amateur",
+                 "Land Mobile",
+                 "TETRA Emergency",
+                 "TETRA Private",
+                 "P25",
+                 "CB Radio (EU FM)",
+                 ):  # voice uid
         return row.get("channel", "")
     return None

@@ -10,6 +10,19 @@ CATEGORIES = {
     "voice": [
         "PMR446", "dPMR", "dPMR446", "70cm", "MarineVHF", "2m", "FRS", "FM_voice",
         "TETRA",
+        # Names the fm scanner writes as signal_type (profile["name"]).
+        "FRS/GMRS",
+        "GMRS Repeater",
+        "GMRS/FRS 462 MHz",
+        "Marine VHF",
+        "MURS",
+        "2m Amateur",
+        "70cm Amateur",
+        "Land Mobile",
+        "TETRA Emergency",
+        "TETRA Private",
+        "P25",
+        "CB Radio (EU FM)",
     ],
     "drones": [
         "RemoteID", "RemoteID-operator", "DroneCtrl", "DroneVideo",
