@@ -93,7 +93,7 @@ BAND_PROFILES = {
     },
     "gmrs": {
         "name": "GMRS Repeater",
-        "description": "GMRS repeater outputs (467 MHz, 8 channels, 25 kHz)",
+        "description": "GMRS repeater outputs (462 MHz, 8 channels, 25 kHz)",
         "channels": {
             "RPT1": 462.5500e6, "RPT2": 462.5750e6,
             "RPT3": 462.6000e6, "RPT4": 462.6250e6,
