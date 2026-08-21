@@ -539,6 +539,18 @@ SELECT DISTINCT signal_type, uid FROM (
             WHEN 'MarineVHF'  THEN channel
             WHEN '2m'         THEN channel
             WHEN 'FRS'        THEN channel
+            WHEN 'FRS/GMRS' THEN channel
+            WHEN 'GMRS Repeater' THEN channel
+            WHEN 'GMRS/FRS 462 MHz' THEN channel
+            WHEN 'Marine VHF' THEN channel
+            WHEN 'MURS' THEN channel
+            WHEN '2m Amateur' THEN channel
+            WHEN '70cm Amateur' THEN channel
+            WHEN 'Land Mobile' THEN channel
+            WHEN 'TETRA Emergency' THEN channel
+            WHEN 'TETRA Private' THEN channel
+            WHEN 'P25' THEN channel
+            WHEN 'CB Radio (EU FM)' THEN channel
             ELSE NULL
         END AS uid
     FROM detections
@@ -550,6 +562,18 @@ WHERE uid IS NOT NULL AND uid != ''
 # Signal type display order for the Live tab (matches the old tailer).
 _LIVE_TYPE_ORDER = [
     "PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS",
+    "FRS/GMRS",
+    "GMRS Repeater",
+    "GMRS/FRS 462 MHz",
+    "Marine VHF",
+    "MURS",
+    "2m Amateur",
+    "70cm Amateur",
+    "Land Mobile",
+    "TETRA Emergency",
+    "TETRA Private",
+    "P25",
+    "CB Radio (EU FM)",
     "RemoteID", "DroneCtrl",
     "keyfob", "tpms", "lora", "ISM",
     "ADS-B",
