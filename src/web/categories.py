@@ -9,20 +9,7 @@ handled by prefix so new subtypes don't fall through.
 CATEGORIES = {
     "voice": [
         "PMR446", "dPMR", "dPMR446", "70cm", "MarineVHF", "2m", "FRS", "FM_voice",
-        "TETRA",
-        # Names the fm scanner writes as signal_type (profile["name"]).
-        "FRS/GMRS",
-        "GMRS Repeater",
-        "GMRS/FRS 462 MHz",
-        "Marine VHF",
-        "MURS",
-        "2m Amateur",
-        "70cm Amateur",
-        "Land Mobile",
-        "TETRA Emergency",
-        "TETRA Private",
-        "P25",
-        "CB Radio (EU FM)",
+        "TETRA", "GMRS", "MURS", "CB", "LandMobile", "P25",
     ],
     "drones": [
         "RemoteID", "RemoteID-operator", "DroneCtrl", "DroneVideo",
@@ -72,6 +59,10 @@ CATEGORY_ORDER = [
 ]
 
 TYPE_TO_CATEGORY = {sig: cat for cat, sigs in CATEGORIES.items() for sig in sigs}
+
+# Voice types key their unique id on `channel` and share the transcript
+# detail formatter. Shared by tailer.py, fetch.py and scanners/server.py.
+VOICE_TYPES = tuple(CATEGORIES["voice"])
 
 
 # ISM signal types that are keyfobs (rolling code chips, FSK car remotes)

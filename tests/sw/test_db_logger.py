@@ -222,6 +222,26 @@ def test_concurrent_reader_while_writer():
     log.stop()
 
 
+def test_legacy_fm_signal_types_renamed():
+    """Rows logged with fm.py's old display-name signal_types are renamed
+    to the short keys on the next writer open; others are untouched."""
+    from utils import db as _db
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "legacy.db")
+    conn = _db.connect(path)
+    for st in ("Marine VHF", "FRS/GMRS", "TETRA Private", "MURS", "PMR446"):
+        conn.execute(
+            "INSERT INTO detections (timestamp, ts_epoch, signal_type, "
+            "frequency_hz, power_db, noise_floor_db, snr_db) "
+            "VALUES ('', 0, ?, 0, 0, 0, 0)", (st,))
+    conn.close()
+
+    conn = _db.connect(path)
+    got = sorted(r[0] for r in conn.execute("SELECT signal_type FROM detections"))
+    assert got == ["FRS", "MURS", "MarineVHF", "PMR446", "TETRA"], got
+    conn.close()
+
+
 def run_tests():
     tests = [
         ("Schema + indexes + WAL",       test_connect_creates_schema),
@@ -230,6 +250,7 @@ def run_tests():
         ("Logger respects min_snr_db",   test_logger_respects_min_snr),
         ("Autofill device_id + GPS",     test_logger_autofill_device_id_and_gps),
         ("WAL reader while writer",      test_concurrent_reader_while_writer),
+        ("Legacy fm signal_type rename", test_legacy_fm_signal_types_renamed),
     ]
 
     print("=" * 60)

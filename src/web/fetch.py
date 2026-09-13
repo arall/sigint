@@ -21,7 +21,7 @@ from utils import db as _db
 from utils import calibration as _cal
 from utils import calibration_db as _cdb
 
-from .categories import CATEGORIES, CATEGORY_LABELS, CATEGORY_ORDER, category_of
+from .categories import CATEGORIES, CATEGORY_LABELS, CATEGORY_ORDER, VOICE_TYPES, category_of
 from .tailer import _extract_detail
 
 
@@ -533,47 +533,20 @@ SELECT DISTINCT signal_type, uid FROM (
             WHEN 'keyfob'     THEN json_extract(metadata, '$.data_hex')
             WHEN 'tpms'       THEN json_extract(metadata, '$.sensor_id')
             WHEN 'lora'       THEN CAST(frequency_hz AS INTEGER)
-            WHEN 'PMR446'     THEN channel
-            WHEN 'dPMR'       THEN channel
-            WHEN '70cm'       THEN channel
-            WHEN 'MarineVHF'  THEN channel
-            WHEN '2m'         THEN channel
-            WHEN 'FRS'        THEN channel
-            WHEN 'FRS/GMRS' THEN channel
-            WHEN 'GMRS Repeater' THEN channel
-            WHEN 'GMRS/FRS 462 MHz' THEN channel
-            WHEN 'Marine VHF' THEN channel
-            WHEN 'MURS' THEN channel
-            WHEN '2m Amateur' THEN channel
-            WHEN '70cm Amateur' THEN channel
-            WHEN 'Land Mobile' THEN channel
-            WHEN 'TETRA Emergency' THEN channel
-            WHEN 'TETRA Private' THEN channel
-            WHEN 'P25' THEN channel
-            WHEN 'CB Radio (EU FM)' THEN channel
+{voice_whens}
             ELSE NULL
         END AS uid
     FROM detections
 )
 WHERE uid IS NOT NULL AND uid != ''
-"""
+""".replace("{voice_whens}", "\n".join(
+    f"            WHEN '{t}' THEN channel" for t in VOICE_TYPES))
 
 
 # Signal type display order for the Live tab (matches the old tailer).
 _LIVE_TYPE_ORDER = [
     "PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS",
-    "FRS/GMRS",
-    "GMRS Repeater",
-    "GMRS/FRS 462 MHz",
-    "Marine VHF",
-    "MURS",
-    "2m Amateur",
-    "70cm Amateur",
-    "Land Mobile",
-    "TETRA Emergency",
-    "TETRA Private",
-    "P25",
-    "CB Radio (EU FM)",
+    "GMRS", "MURS", "CB", "LandMobile", "P25", "TETRA",
     "RemoteID", "DroneCtrl",
     "keyfob", "tpms", "lora", "ISM",
     "ADS-B",

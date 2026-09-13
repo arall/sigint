@@ -54,6 +54,7 @@ from utils.transcriber import transcribe  # noqa: E402
 BAND_PROFILES = {
     "pmr446": {
         "name": "PMR446",
+        "signal_type": "PMR446",
         "description": "EU license-free UHF (446 MHz, 16 channels, 12.5 kHz)",
         "channels": {
             "CH1": 446.00625e6, "CH2": 446.01875e6,
@@ -70,6 +71,7 @@ BAND_PROFILES = {
     },
     "frs": {
         "name": "FRS/GMRS",
+        "signal_type": "FRS",
         "description": "US license-free UHF (462/467 MHz, 22 channels)",
         "channels": {
             # FRS/GMRS 1-7 (12.5 kHz, shared FRS/GMRS)
@@ -93,6 +95,7 @@ BAND_PROFILES = {
     },
     "gmrs": {
         "name": "GMRS Repeater",
+        "signal_type": "GMRS",
         "description": "GMRS repeater outputs (467 MHz, 8 channels, 25 kHz)",
         "channels": {
             "RPT1": 462.5500e6, "RPT2": 462.5750e6,
@@ -105,6 +108,7 @@ BAND_PROFILES = {
     },
     "marine": {
         "name": "Marine VHF",
+        "signal_type": "MarineVHF",
         "description": "Maritime channels (156-162 MHz, 25 kHz)",
         "channels": {
             # International marine VHF channels (simplex, most used)
@@ -142,6 +146,7 @@ BAND_PROFILES = {
     },
     "murs": {
         "name": "MURS",
+        "signal_type": "MURS",
         "description": "US Multi-Use Radio Service (151/154 MHz, 5 channels)",
         "channels": {
             "CH1": 151.820e6,  # 11.25 kHz
@@ -155,6 +160,7 @@ BAND_PROFILES = {
     },
     "2m": {
         "name": "2m Amateur",
+        "signal_type": "2m",
         "description": "VHF amateur FM simplex (144-148 MHz)",
         "channels": {
             # Common FM simplex frequencies
@@ -178,6 +184,7 @@ BAND_PROFILES = {
     },
     "70cm": {
         "name": "70cm Amateur",
+        "signal_type": "70cm",
         "description": "UHF amateur FM simplex (430-440 MHz)",
         "channels": {
             # EU simplex
@@ -201,6 +208,7 @@ BAND_PROFILES = {
     },
     "cb": {
         "name": "CB Radio (EU FM)",
+        "signal_type": "CB",
         "description": "EU CB radio FM mode (27 MHz, 40 channels, 10 kHz)",
         "channels": {
             "CH1": 26.965e6, "CH2": 26.975e6, "CH3": 26.985e6,
@@ -223,6 +231,7 @@ BAND_PROFILES = {
     },
     "landmobile": {
         "name": "Land Mobile",
+        "signal_type": "LandMobile",
         "description": "VHF land mobile (157-163 MHz, utilities/rail/security/industry)",
         "channels": {
             # Land mobile band between marine VHF segments (157.5-160.6 MHz)
@@ -257,6 +266,7 @@ BAND_PROFILES = {
     },
     "tetra": {
         "name": "TETRA Emergency",
+        "signal_type": "TETRA",
         "description": "EU police/fire/EMS TETRA (380-400 MHz, encrypted, energy detection only)",
         "channels": {
             # TETRA emergency services band, 25 kHz carriers
@@ -276,6 +286,7 @@ BAND_PROFILES = {
     },
     "tetra-priv": {
         "name": "TETRA Private",
+        "signal_type": "TETRA",
         "description": "TETRA utilities/private security (410-430 MHz, encrypted, energy detection only)",
         "channels": {
             "410.0": 410.000e6, "411.8": 411.800e6,
@@ -291,6 +302,7 @@ BAND_PROFILES = {
     },
     "p25": {
         "name": "P25",
+        "signal_type": "P25",
         "description": "US public safety P25 (VHF/UHF, often encrypted, energy detection only)",
         "channels": {
             # Common P25 public safety VHF frequencies
@@ -517,7 +529,7 @@ class FMScanner:
         metadata = json.dumps(meta) if meta else ""
 
         self.logger.log_signal(
-            signal_type=self.profile["name"],
+            signal_type=self.profile["signal_type"],
             frequency_hz=ch_freq,
             power_db=self._tx_peak_power[channel],
             noise_floor_db=noise_floor,
@@ -809,7 +821,7 @@ class FMScanner:
                             print(f"Audio save error: {e}", file=sys.stderr)
 
                     self.logger.log_signal(
-                        signal_type=self.profile["name"],
+                        signal_type=self.profile["signal_type"],
                         frequency_hz=ch_freq,
                         power_db=self._tx_peak_power[ch],
                         noise_floor_db=noise_floor,

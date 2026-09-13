@@ -397,10 +397,22 @@ def test_load_wifi_aps_physical_ap_grouping():
     assert big["client_count"] == 2
 
 
+def test_fm_profiles_categorised_as_voice():
+    """Every scanners/fm.py band profile logs a signal_type the dashboard
+    files under Voice (regression: display names fell through to Other)."""
+    from scanners.fm import BAND_PROFILES
+    from web.categories import category_of
+    for key, profile in BAND_PROFILES.items():
+        st = profile.get("signal_type")
+        assert st, f"fm profile {key!r} has no signal_type"
+        assert category_of(st) == "voice", f"fm profile {key!r}: {st!r} not voice"
+
+
 def run_tests():
     tests = [
         ("category_of direct match",        test_category_of_direct_match),
         ("category_of wildcards",           test_category_of_wildcards),
+        ("fm profiles categorised as voice", test_fm_profiles_categorised_as_voice),
         ("All category loaders empty",      test_all_category_loaders_handle_empty),
         ("Voice loader",                    test_load_voice),
         ("Drones grouped by serial",        test_load_drones_by_serial),
