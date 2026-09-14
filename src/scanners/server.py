@@ -641,6 +641,8 @@ class ServerOrchestrator:
                     self._setup_rtlsdr_sweep(entry, cap_name)
                 elif cap_type == "ble":
                     self._setup_ble(entry, cap_name)
+                elif cap_type == "ubertooth":
+                    self._setup_ubertooth(entry, cap_name)
                 elif cap_type == "wifi":
                     self._setup_wifi(entry, cap_name)
                 elif cap_type == "standalone":
@@ -706,6 +708,11 @@ class ServerOrchestrator:
                 self._capture_lines.append(
                     f"  {_col('bold', cap_name):<20s} {_col('dim', adapter):<26s} "
                     f"2.4 GHz  {_col('dim', parsers)}")
+            elif cap_type == "ubertooth":
+                parsers = ", ".join(entry.get("parsers", []))
+                self._capture_lines.append(
+                    f"  {_col('bold', cap_name):<20s} {_col('dim', 'Ubertooth One'):<26s} "
+                    f"BLE ch {entry.get('channel', 37)}  {_col('dim', parsers)}")
             elif cap_type == "wifi":
                 iface = entry.get("interface", "wlan1")
                 chs = entry.get("channels", [])
@@ -814,6 +821,13 @@ class ServerOrchestrator:
                 cap["parsers"] = _display_list(entry.get("parsers", []))
                 # BLE adv listens on all 3 primary advertising channels simultaneously
                 cap["coverage"] = "2402 / 2426 / 2480 MHz (adv ch 37/38/39)"
+                cap["mode"] = "passive"
+            elif cap_type == "ubertooth":
+                channel = int(entry.get("channel", 37))
+                cap["device"] = f"Ubertooth One #{entry.get('device_index', 0)}"
+                cap["parsers"] = _display_list(entry.get("parsers", []))
+                cap["channel"] = channel
+                cap["coverage"] = {37: "2402", 38: "2426", 39: "2480"}[channel] + " MHz (BLE adv)"
                 cap["mode"] = "passive"
             elif cap_type == "wifi":
                 cap["device"] = entry.get("interface", "wlan1")
@@ -1083,6 +1097,24 @@ class ServerOrchestrator:
 
         self._captures.append((name, capture))
         print(f"  [+] BLE '{name}': adapter {entry.get('adapter', 'hci1')}")
+
+    def _setup_ubertooth(self, entry, name):
+        """Setup passive Ubertooth BLE advertisement capture + parsers."""
+        from capture.ubertooth import UbertoothCaptureSource
+
+        capture = UbertoothCaptureSource(
+            device_index=entry.get("device_index", 0),
+            channel=entry.get("channel", 37),
+        )
+        for parser_name in entry.get("parsers", []):
+            parser = _create_parser(parser_name, self.logger, entry, entry)
+            if parser:
+                capture.add_parser(parser.handle_frame)
+                self._parsers[f"{name}.{parser_name}"] = parser
+
+        self._captures.append((name, capture))
+        print(f"  [+] Ubertooth '{name}': device #{entry.get('device_index', 0)}, "
+              f"channel {entry.get('channel', 37)}")
 
     def _setup_wifi(self, entry, name):
         """Setup WiFi capture + parsers."""
