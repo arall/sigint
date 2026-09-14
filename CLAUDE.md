@@ -136,6 +136,7 @@ Direct-mode (simplex) DMR voice via `dsd-fme` subprocess (lwvmobile fork — `ds
 - Standalone scanners run as child `sdr.py` processes; stdout/stderr drained in background threads (else 64KB pipe buffer blocks the SDR pipeline)
 - Each subprocess opens its own connection to `output/detections.db` and registers a `sessions` row — multi-writer concurrency is handled by SQLite WAL + busy_timeout, no app-level coordination needed.
 - Per-capture status: `pending`/`running`/`degraded`/`failed` in `output/server_info.json`
+- HackRF captures run in a `sdr.py hackrf-worker` child per device by default (`scanners/hackrf_worker.py`) so each channelizer + parser set gets its own core/GIL. The worker logs to the DB itself and relays detections (`@@hackrf-det`) and drop counts (`@@hackrf-drops`) over stdout so the terminal dashboard, heatmap and trails still see them. It exits if reparented (server died). `"subprocess": false` on the entry keeps the old in-process pipeline. Both paths share `build_hackrf_pipeline()`.
 - HackRF: 4-block queue with drop-oldest (latency ~130ms). Drops mark capture `degraded`.
 - Persona/AP DB flushed every 30s. Correlations computed on demand from SQL (no sidecar).
 - AgentManager opens an `agent_ingest` session and tags every forwarded detection with `agent_id = <aid>`. `close()` stamps `ended_at` on shutdown.

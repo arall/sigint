@@ -799,6 +799,17 @@ Examples:
         help="Web dashboard port (default: 8080, implies --web)",
     )
 
+    # Internal: one HackRF capture pipeline, spawned per HackRF by `server`
+    hw_parser = subparsers.add_parser(
+        "hackrf-worker",
+        help="(internal) Run one server HackRF capture in its own process",
+    )
+    hw_parser.add_argument("--name", required=True, help="Capture name")
+    hw_parser.add_argument(
+        "--entry", required=True,
+        help="Server config capture entry as JSON",
+    )
+
     # Multi-SDR orchestrator
     multi_parser = subparsers.add_parser(
         "multi",
@@ -1833,6 +1844,12 @@ def _dispatch_scanner(args):
 
     elif args.command == "server":
         _run_server(args, gps, tak_client)
+
+    elif args.command == "hackrf-worker":
+        import json as json_mod
+        from scanners.hackrf_worker import run_worker
+        sys.exit(run_worker(json_mod.loads(args.entry), args.name,
+                            args.output, gps=gps))
 
     elif args.command == "web":
         from web import run_web_server

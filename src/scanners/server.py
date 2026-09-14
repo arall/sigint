@@ -349,6 +349,87 @@ def _create_parser(name, logger, channel_cfg=None, capture_cfg=None):
         return None
 
 
+def build_hackrf_pipeline(entry, name, logger):
+    """Create HackRF capture + channelizer + parsers for one capture entry.
+
+    Shared by the in-process server path and the hackrf-worker
+    subprocess. Mutates `entry["channels"]` to the effective list
+    (auto-discovered voice bands included).
+
+    Returns (capture, channelizer, parsers) where parsers maps
+    "<capture>.<channel>.<parser>" to the parser instance.
+    """
+    from capture.hackrf_iq import HackRFCaptureSource
+    from capture.channelizer import Channelizer
+
+    center = entry["center_freq_mhz"] * 1e6
+    sr = entry.get("sample_rate_mhz", 20) * 1e6
+
+    capture = HackRFCaptureSource(
+        center_freq=center,
+        sample_rate=sr,
+        lna_gain=entry.get("lna_gain", 32),
+        vga_gain=entry.get("vga_gain", 40),
+        amp_enable=entry.get("amp_enable", False),
+        serial=entry.get("serial"),
+        ppm=entry.get("ppm", 0),
+    )
+
+    # Use actual_center_freq (PPM-corrected) so channelizer frequency
+    # shifts align with real signal positions, not commanded frequency
+    channelizer = Channelizer(
+        center_freq=capture.actual_center_freq, sample_rate=sr)
+
+    channels = list(entry.get("channels", []))
+
+    # Auto-discover voice bands that fit within this HackRF's bandwidth
+    channels = ServerOrchestrator._auto_discover_voice_bands(
+        entry, channels, center, sr)
+    # Store effective channels so the dashboard can display them
+    entry["channels"] = channels
+
+    parsers = {}
+    for ch in channels:
+        ch_freq = ch["freq_mhz"] * 1e6
+        ch_bw = ch.get("bandwidth_mhz", 2.0) * 1e6
+        # Actual output rate after integer decimation (may differ from ch_bw)
+        decimation = max(1, int(sr / ch_bw))
+        ch_sr = sr / decimation
+
+        # Store actual decimated rate so parser factories use it
+        ch["_actual_sample_rate_hz"] = ch_sr
+
+        # Create parsers for this channel
+        ch_parsers = []
+        for parser_name in ch.get("parsers", []):
+            parser = _create_parser(parser_name, logger, ch, entry)
+            if parser:
+                ch_parsers.append(parser)
+                parsers[f"{name}.{ch['name']}.{parser_name}"] = parser
+
+        if ch_parsers:
+            # All parsers on this channel get the same narrowband IQ
+            def make_callback(targets):
+                def cb(samples):
+                    for p in targets:
+                        try:
+                            p.handle_frame(samples)
+                        except Exception:
+                            pass
+                return cb
+
+            channelizer.add_channel(
+                name=ch.get("name", str(ch_freq)),
+                freq_hz=ch_freq,
+                bandwidth_hz=ch_bw,
+                output_sample_rate=ch_sr,
+                callback=make_callback(ch_parsers),
+            )
+
+    capture.add_parser(channelizer.handle_frame)
+    return capture, channelizer, parsers
+
+
 class ServerOrchestrator:
     """
     Central server — runs all capture sources and parsers simultaneously.
@@ -849,77 +930,33 @@ class ServerOrchestrator:
             pass
 
     def _setup_hackrf(self, entry, name):
-        """Setup HackRF + channelizer + parsers."""
-        from capture.hackrf_iq import HackRFCaptureSource
-        from capture.channelizer import Channelizer
+        """Setup HackRF + channelizer + parsers.
 
+        By default the pipeline runs in a `sdr.py hackrf-worker` child
+        process (see scanners/hackrf_worker.py) so it gets its own core.
+        `"subprocess": false` keeps it in the server process.
+        """
         center = entry["center_freq_mhz"] * 1e6
         sr = entry.get("sample_rate_mhz", 20) * 1e6
 
-        capture = HackRFCaptureSource(
-            center_freq=center,
-            sample_rate=sr,
-            lna_gain=entry.get("lna_gain", 32),
-            vga_gain=entry.get("vga_gain", 40),
-            amp_enable=entry.get("amp_enable", False),
-            serial=entry.get("serial"),
-            ppm=entry.get("ppm", 0),
-        )
+        if entry.get("subprocess", True):
+            # Resolve auto-discovered voice bands here so the dashboard
+            # lists them; the worker's own discovery pass then no-ops.
+            entry["channels"] = self._auto_discover_voice_bands(
+                entry, list(entry.get("channels", [])), center, sr)
+            self._captures.append((name, ("hackrf", entry)))
+            print(f"  [+] HackRF '{name}': {center/1e6:.1f} MHz, "
+                  f"{sr/1e6:.0f} MS/s, {len(entry['channels'])} channels "
+                  f"(subprocess)")
+            return
 
-        # Use actual_center_freq (PPM-corrected) so channelizer frequency
-        # shifts align with real signal positions, not commanded frequency
-        channelizer = Channelizer(
-            center_freq=capture.actual_center_freq, sample_rate=sr)
-
-        channels = list(entry.get("channels", []))
-
-        # Auto-discover voice bands that fit within this HackRF's bandwidth
-        channels = self._auto_discover_voice_bands(entry, channels, center, sr)
-        # Store effective channels so the dashboard can display them
-        entry["channels"] = channels
-
-        for ch in channels:
-            ch_freq = ch["freq_mhz"] * 1e6
-            ch_bw = ch.get("bandwidth_mhz", 2.0) * 1e6
-            # Actual output rate after integer decimation (may differ from ch_bw)
-            decimation = max(1, int(sr / ch_bw))
-            ch_sr = sr / decimation
-
-            # Store actual decimated rate so parser factories use it
-            ch["_actual_sample_rate_hz"] = ch_sr
-
-            # Create parsers for this channel
-            ch_parsers = []
-            for parser_name in ch.get("parsers", []):
-                parser = _create_parser(parser_name, self.logger, ch, entry)
-                if parser:
-                    ch_parsers.append(parser)
-                    self._parsers[f"{name}.{ch['name']}.{parser_name}"] = parser
-
-            if ch_parsers:
-                # All parsers on this channel get the same narrowband IQ
-                def make_callback(parsers):
-                    def cb(samples):
-                        for p in parsers:
-                            try:
-                                p.handle_frame(samples)
-                            except Exception:
-                                pass
-                    return cb
-
-                channelizer.add_channel(
-                    name=ch.get("name", str(ch_freq)),
-                    freq_hz=ch_freq,
-                    bandwidth_hz=ch_bw,
-                    output_sample_rate=ch_sr,
-                    callback=make_callback(ch_parsers),
-                )
-
-        capture.add_parser(channelizer.handle_frame)
+        capture, channelizer, parsers = build_hackrf_pipeline(
+            entry, name, self.logger)
+        self._parsers.update(parsers)
         self._captures.append((name, capture))
         self._channelizers.append(channelizer)
         print(f"  [+] HackRF '{name}': {center/1e6:.1f} MHz, "
-              f"{sr/1e6:.0f} MS/s, {len(channels)} channels")
+              f"{sr/1e6:.0f} MS/s, {len(entry['channels'])} channels")
 
     @staticmethod
     def _auto_discover_voice_bands(entry, channels, center, sr):
@@ -1195,13 +1232,17 @@ class ServerOrchestrator:
         # interfere and get no delay.
         last_sdr_launch = 0.0
         for name, capture in self._captures:
-            is_standalone = isinstance(capture, tuple) and capture[0] == "standalone"
-            if is_standalone:
-                entry = capture[1]
-                touches_sdr = entry.get("device_index") is not None
-                # Launch standalone scanner as subprocess
+            if isinstance(capture, tuple):
+                kind, entry = capture
+                if kind == "hackrf":
+                    touches_sdr = True
+                    target = self._run_hackrf_worker
+                else:
+                    touches_sdr = entry.get("device_index") is not None
+                    target = self._run_standalone
+                # Launch as subprocess, supervised from this thread
                 t = threading.Thread(
-                    target=self._run_standalone,
+                    target=target,
                     args=(name, entry),
                     daemon=True,
                     name=f"server-{name}",
@@ -1271,7 +1312,7 @@ class ServerOrchestrator:
         """Check capture sources for degraded state (e.g. HackRF queue drops)."""
         for name, capture in self._captures:
             if isinstance(capture, tuple):
-                continue  # standalone — status tracked by _run_standalone
+                continue  # subprocess — status tracked by its supervisor thread
             # HackRF queue drops → degraded
             drops = getattr(capture, "_drop_count", 0)
             if drops:
@@ -1366,8 +1407,6 @@ class ServerOrchestrator:
 
     def _run_standalone(self, name, entry):
         """Run a standalone scanner in a subprocess."""
-        import subprocess as sp
-
         scanner_type = entry.get("scanner_type", "")
         # sdr.py lives in src/, one level up from scanners/
         src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1401,9 +1440,52 @@ class ServerOrchestrator:
         extra_args = entry.get("args", [])
         cmd.extend(extra_args)
 
+        self._supervise_subprocess(name, cmd, f"standalone_{name}.log")
+
+    def _run_hackrf_worker(self, name, entry):
+        """Run a HackRF capture in a `sdr.py hackrf-worker` subprocess."""
+        from scanners import hackrf_worker
+
+        src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cmd = [sys.executable, os.path.join(src_dir, "sdr.py")]
+        if self._output_dir:
+            cmd.extend(["--output", str(self._output_dir)])
+        if self._use_gps:
+            # The server already owns the GPS serial port and mirrors the
+            # fix to output/gps.json — read that instead of reopening it.
+            cmd.extend(["--gps", "--gps-port", "sidecar"])
+        cmd.extend(["hackrf-worker", "--name", name,
+                    "--entry", json.dumps(entry)])
+
+        def on_line(line):
+            msg = hackrf_worker.parse_line(line)
+            if msg is None:
+                return False
+            kind, value = msg
+            if kind == "det":
+                self._on_detection(value)
+            elif value:
+                self._set_status(
+                    name, "degraded",
+                    f"dropped {value} blocks (sample rate too high?)")
+            return True
+
+        self._supervise_subprocess(name, cmd, f"hackrf_{name}.log", on_line)
+
+    def _supervise_subprocess(self, name, cmd, log_name, on_stdout_line=None):
+        """Run `cmd` as a child process with auto-restart until stop.
+
+        stdout/stderr go to `<output>/<log_name>`. When `on_stdout_line`
+        is given, stdout is read line by line and lines for which it
+        returns True are consumed instead of logged.
+        """
+        import subprocess as sp
+
+        src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
         # Auto-restart with backoff, mirroring `_run_capture` for in-proc
-        # captures. Without this, any standalone scanner that crashes (or
-        # is killed) stays dead until the whole server is restarted.
+        # captures. Without this, any subprocess that crashes (or is
+        # killed) stays dead until the whole server is restarted.
         backoff = 5
         attempt = 0
         while not self._stop_event.is_set():
@@ -1418,7 +1500,7 @@ class ServerOrchestrator:
                     stdout=sp.PIPE, stderr=sp.PIPE,
                     start_new_session=True,
                 )
-                print(f"  [standalone] {name}: pid {proc.pid}, cmd: {' '.join(cmd)}")
+                print(f"  [subprocess] {name}: pid {proc.pid}, cmd: {' '.join(cmd)}")
                 self._set_status(name, "running", f"{attempt_prefix}pid {proc.pid}")
 
                 # Drain stdout/stderr in background threads. If we don't,
@@ -1428,10 +1510,27 @@ class ServerOrchestrator:
                 log_dir = self._output_dir or "."
                 try:
                     stdout_log = open(
-                        os.path.join(str(log_dir), f"standalone_{name}.log"),
+                        os.path.join(str(log_dir), log_name),
                         "ab", buffering=0)
                 except Exception:
                     stdout_log = None
+
+                def _drain_lines(stream, log=stdout_log):
+                    try:
+                        for raw in iter(stream.readline, b""):
+                            line = raw.decode("utf-8", errors="replace")
+                            try:
+                                if on_stdout_line(line):
+                                    continue
+                            except Exception:
+                                pass
+                            if log is not None:
+                                try:
+                                    log.write(raw)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
 
                 def _drain(stream, tail=None, log=stdout_log):
                     try:
@@ -1458,7 +1557,8 @@ class ServerOrchestrator:
                         pass
 
                 threading.Thread(
-                    target=_drain, args=(proc.stdout,), daemon=True,
+                    target=_drain_lines if on_stdout_line else _drain,
+                    args=(proc.stdout,), daemon=True,
                     name=f"drain-{name}-out").start()
                 threading.Thread(
                     target=_drain, args=(proc.stderr, stderr_tail), daemon=True,
@@ -1470,7 +1570,7 @@ class ServerOrchestrator:
                         err = "\n".join(stderr_tail).strip()
                         if proc.returncode != 0:
                             last = stderr_tail[-1] if stderr_tail else f"exit {proc.returncode}"
-                            print(f"\n  [ERROR] standalone {name} exited ({proc.returncode}): {err[:200]}")
+                            print(f"\n  [ERROR] subprocess {name} exited ({proc.returncode}): {err[:200]}")
                             reason = last[:160]
                         else:
                             reason = "exited cleanly"
@@ -1493,7 +1593,7 @@ class ServerOrchestrator:
             except Exception as e:
                 if self._stop_event.is_set():
                     return
-                print(f"\n  [ERROR] standalone {name}: {e}")
+                print(f"\n  [ERROR] subprocess {name}: {e}")
                 reason = str(e)[:160]
 
             if self._stop_event.is_set():
