@@ -55,6 +55,14 @@
       "parsers": ["apple_continuity", "remoteid_ble"]
     },
     {
+      "name": "ubertooth",
+      "type": "ubertooth",
+      "device_index": 0,
+      "channel": 37,
+      "parsers": ["apple_continuity", "remoteid_ble"],
+      "_comment": "Use instead of the HCI BLE capture when validating passive RF capture. One Ubertooth channel at a time."
+    },
+    {
       "name": "wifi",
       "type": "wifi",
       "interface": "wlan1",
