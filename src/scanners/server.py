@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.logger import SignalLogger  # noqa: E402
+from web.categories import VOICE_TYPES  # noqa: E402
 
 # Signal types that don't self-report position — candidates for node tasking
 TASKABLE_SIGNALS = {
@@ -143,6 +144,12 @@ _TYPE_COLOR = {
     "2m": "red",
     "FRS": "red",
     "FM_voice": "red",
+    "GMRS": "red",
+    "MURS": "red",
+    "CB": "red",
+    "LandMobile": "red",
+    "P25": "red",
+    "TETRA": "red",
     "RemoteID": "red",
     "DroneCtrl": "red",
     "GSM-UPLINK-GSM-900": "white",
@@ -228,7 +235,7 @@ def _extract_details(detection):
     elif sig == "lora":
         bw = meta.get("bandwidth_khz", "")
         return f"BW:{bw}kHz" if bw else ""
-    elif sig in ("PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS", "FM_voice"):
+    elif sig in VOICE_TYPES:
         t = meta.get("transcript", "")
         if t:
             return f'"{t[:60]}"'
@@ -542,7 +549,7 @@ class ServerOrchestrator:
             uid = meta.get("sensor_id")
         elif sig == "lora":
             uid = f'{detection.frequency_hz:.0f}'
-        elif sig in ("PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS"):
+        elif sig in VOICE_TYPES:
             uid = detection.channel
 
         if uid:
@@ -1629,6 +1636,7 @@ class ServerOrchestrator:
         # Order: voice first (red), then rf (yellow/magenta/green), then wireless (cyan/blue)
         type_order = [
             "PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS",
+            "GMRS", "MURS", "CB", "LandMobile", "P25", "TETRA",
             "RemoteID", "DroneCtrl",
             "keyfob", "tpms", "lora", "ISM",
             "ADS-B",

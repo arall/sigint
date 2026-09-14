@@ -76,6 +76,42 @@ CREATE TABLE IF NOT EXISTS transcripts (
 """
 
 
+# scanners/fm.py used to log the band profile's display name as the
+# signal_type. Rows written before it grew an explicit `signal_type` field
+# are renamed to the short keys the dashboard matches on. MURS, P25 and
+# PMR446 already matched and need no rename.
+_LEGACY_SIGNAL_TYPES = {
+    "FRS/GMRS": "FRS",
+    "GMRS Repeater": "GMRS",
+    "Marine VHF": "MarineVHF",
+    "2m Amateur": "2m",
+    "70cm Amateur": "70cm",
+    "CB Radio (EU FM)": "CB",
+    "Land Mobile": "LandMobile",
+    "TETRA Emergency": "TETRA",
+    "TETRA Private": "TETRA",
+}
+
+
+def _migrate_legacy_signal_types(conn: sqlite3.Connection) -> None:
+    """Rename legacy fm.py signal types. Probes with a read first so the
+    common no-op case doesn't take the write lock on every writer open."""
+    legacy = list(_LEGACY_SIGNAL_TYPES)
+    marks = ",".join("?" * len(legacy))
+    if not conn.execute(
+        f"SELECT 1 FROM detections WHERE signal_type IN ({marks}) LIMIT 1",
+        legacy,
+    ).fetchone():
+        return
+    whens = " ".join("WHEN ? THEN ?" for _ in legacy)
+    params = [v for kv in _LEGACY_SIGNAL_TYPES.items() for v in kv]
+    conn.execute(
+        f"UPDATE detections SET signal_type = CASE signal_type {whens} END "
+        f"WHERE signal_type IN ({marks})",
+        params + legacy,
+    )
+
+
 def default_db_path(output_dir: str = "output") -> str:
     """Canonical path to the unified detection DB."""
     return os.path.join(output_dir, DEFAULT_DB_FILENAME)
@@ -142,6 +178,7 @@ def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
             "PRAGMA busy_timeout=10000;"
         )
         conn.executescript(SCHEMA)
+        _migrate_legacy_signal_types(conn)
     conn.row_factory = sqlite3.Row
     return conn
 

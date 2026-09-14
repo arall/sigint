@@ -34,6 +34,8 @@ import threading
 import time
 from datetime import datetime, timedelta
 
+from .categories import VOICE_TYPES
+
 
 STATE_REFRESH_INTERVAL_S = 2.0   # matches SSE cadence
 
@@ -299,7 +301,7 @@ def _extract_detail(sig, channel, meta):
     elif sig == "lora":
         bw = meta.get("bandwidth_khz", "")
         return f"BW:{bw}kHz" if bw else ""
-    elif sig in ("PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS", "FM_voice"):
+    elif sig in VOICE_TYPES:
         t = meta.get("transcript", "")
         if t:
             return f'"{t[:60]}"'
@@ -336,6 +338,6 @@ def _extract_uid(sig, row, meta):
             return f'{float(row.get("frequency_hz", 0)):.0f}'
         except (ValueError, TypeError):
             return None
-    elif sig in ("PMR446", "dPMR", "70cm", "MarineVHF", "2m", "FRS"):
+    elif sig in VOICE_TYPES:
         return row.get("channel", "")
     return None
