@@ -10,6 +10,9 @@ pyserial>=3.5
 # WiFi probe scanner (sdr.py wifi)
 scapy>=2.5.0
 
+# RemoteID spoofing checks in the WiFi scanner (optional)
+remoteid>=0.3.2,<0.4
+
 # Speech-to-text transcription (--transcribe flag)
 openai-whisper>=20231117
 
