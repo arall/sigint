@@ -70,6 +70,7 @@ SW_TESTS = [
     ("Jammer inference (post-hoc)",    "tests/sw/test_jammer_detect.py"),
     ("WiFi rogue-AP (deauth + evil-twin)", "tests/sw/test_wifi_rogue.py"),
     ("HackRF worker subprocess",       "tests/sw/test_hackrf_worker.py"),
+    ("WiFi RemoteID (beacon + NaN)",   "tests/sw/test_remote_id_wifi.py"),
 ]
 
 WHISPER_TEST = ("Transcription pipeline", "tests/sw/test_transcribe.py")

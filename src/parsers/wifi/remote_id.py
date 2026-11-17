@@ -33,6 +33,11 @@ from utils.logger import SignalDetection
 # FA:0B:BC is the ASTM International CID used for RemoteID
 ODID_OUI = b"\xfa\x0b\xbc"
 
+# WiFi NaN: public action, vendor specific, Wi-Fi Alliance OUI 50:6F:9A, NAN type 0x13
+NAN_SDF_HEADER = b"\x04\x09\x50\x6f\x9a\x13"
+# NAN service ID of Open Drone ID: first 6 bytes of SHA-256("org.opendroneid.remoteid")
+ODID_NAN_SERVICE_ID = bytes.fromhex("8869199d9209")
+
 # WiFi channels (center frequencies)
 WIFI_CHANNELS = {
     1: 2412e6, 2: 2417e6, 3: 2422e6, 4: 2427e6, 5: 2432e6,
@@ -190,24 +195,48 @@ class WiFiRemoteIDParser(BaseParser):
         return None
 
     def _find_odid_in_action(self, packet):
-        """Extract ODID payload from a WiFi NaN action frame."""
-        # NaN action frames carry ODID data in vendor-specific attributes
-        # The raw payload after the Dot11 header contains:
-        # - Category (1 byte): 0x04 (Public Action) or 0x7F (Vendor-specific)
-        # - Action (1 byte)
-        # - OUI (3 bytes)
-        # - Vendor type (1 byte): 0x0D for ODID
-        # - ... ODID message payload
-        raw = bytes(packet.payload) if hasattr(packet, 'payload') else b""
+        """Extract ODID payload from a WiFi NaN Service Discovery Frame.
 
-        # Search for ODID OUI in the raw action frame payload
-        idx = raw.find(ODID_OUI)
-        if idx >= 0 and idx + 4 < len(raw):
-            # Validate vendor type byte (0x0D)
-            if raw[idx + 3] != ODID_APP_CODE:
+        Frame body after the 802.11 header::
+
+            [0x04 public action] [0x09 vendor specific] [50:6F:9A Wi-Fi Alliance] [0x13 NAN]
+            NAN attributes: [id] [length, 2 bytes LE] [body] ...
+
+        Remote ID is in the Service Descriptor Attribute (id 0x03) whose
+        service ID is ODID_NAN_SERVICE_ID. Its service info holds
+        [counter] [message pack], the same layout as the beacon payload.
+        """
+        from scapy.layers.dot11 import Dot11
+
+        body = bytes(packet[Dot11].payload)
+        if body[:6] != NAN_SDF_HEADER:
+            return None
+
+        rest = body[6:]
+        while len(rest) >= 3:
+            attr_id = rest[0]
+            length = int.from_bytes(rest[1:3], "little")
+            attr = rest[3:3 + length]
+            rest = rest[3 + length:]
+            if len(attr) < length:
+                break
+            if attr_id != 0x03 or len(attr) < 9 or attr[:6] != ODID_NAN_SERVICE_ID:
+                continue
+            # attr: service ID (6), instance ID, requestor instance ID,
+            # service control, then optional fields in this order
+            control = attr[8]
+            at = 9
+            if control & 0x40:  # binding bitmap
+                at += 2
+            for bit in (0x04, 0x08):  # matching filter, service response filter
+                if control & bit:
+                    if at >= len(attr):
+                        return None
+                    at += 1 + attr[at]
+            if not control & 0x10 or at >= len(attr):  # no service info
                 return None
-            # Payload follows after OUI (3 bytes) + type byte (1 byte)
-            return raw[idx + 4:]
+            info = attr[at + 1:at + 1 + attr[at]]
+            return info if len(info) >= 2 else None
 
         return None
 
