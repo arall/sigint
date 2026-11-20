@@ -29,6 +29,13 @@ from parsers.ble.remote_id import (
 )
 from utils.logger import SignalDetection
 
+# Optional: spoofing checks (pip install remoteid). Without it, detections
+# carry no "trust" fields and everything else works as before.
+try:
+    import remoteid
+except ImportError:
+    remoteid = None
+
 # ASTM F3411 / Open Drone ID WiFi OUI
 # FA:0B:BC is the ASTM International CID used for RemoteID
 ODID_OUI = b"\xfa\x0b\xbc"
@@ -56,6 +63,10 @@ class WiFiRemoteIDParser(BaseParser):
         super().__init__(logger)
         self.min_rssi = min_rssi
         self._registry = drone_registry or get_drone_registry()
+        # Per-MAC spoofing checks across frames (kinematics, counters,
+        # clocks, known spoofer formats); see _check_trust.
+        self._trust = remoteid.Tracker() if remoteid else None
+        self._trust_alerted = set()
 
     def handle_frame(self, frame):
         """Process a WiFi frame: (packet, channel)."""
@@ -77,6 +88,9 @@ class WiFiRemoteIDParser(BaseParser):
         # Build detection
         drone_info = self._merge_messages(messages, mac, rssi, channel)
         drone_id = drone_info.get("drone_id", mac or "unknown")
+
+        # Every frame goes to the spoofing checks, before dedup
+        self._check_trust(packet, rssi, drone_id, drone_info)
 
         # Dedup via shared registry (cross-transport)
         is_new, should_log = self._registry.update(drone_id, rssi, "WiFi")
@@ -279,6 +293,30 @@ class WiFiRemoteIDParser(BaseParser):
                 messages.append(parsed)
 
         return messages
+
+    def _check_trust(self, packet, rssi, drone_id, drone_info):
+        """Run the frame through remoteid's spoofing checks (if installed).
+
+        Adds to drone_info: "trust" ("plausible", "suspicious" or
+        "spoofed"), "trust_reasons" (e.g. ["teleport", "counter_conflict"])
+        and "spoofer" when a known spoofing tool's frame format matched.
+        The frame's capture time is used, so pcap replays keep their timing.
+        """
+        if self._trust is None:
+            return
+        try:
+            verdict = self._trust.ingest(
+                bytes(packet), now_ms=int(float(packet.time) * 1000), rssi=rssi)
+        except ValueError:
+            return  # frame remoteid cannot read; no evidence either way
+        drone_info["trust"] = verdict.verdict
+        drone_info["trust_reasons"] = list(verdict.reasons)
+        if verdict.spoofer:
+            drone_info["spoofer"] = verdict.spoofer
+        if verdict.is_alert and (drone_id, verdict.verdict) not in self._trust_alerted:
+            self._trust_alerted.add((drone_id, verdict.verdict))
+            print(f"  [DRONE-WiFi] {drone_id}  {verdict.verdict.upper()}:"
+                  f" {', '.join(verdict.reasons)}")
 
     def _merge_messages(self, messages, mac, rssi, channel):
         """Merge ODID messages into a single drone info dict."""
